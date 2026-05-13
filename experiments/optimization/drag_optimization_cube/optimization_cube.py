@@ -294,7 +294,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default=str(experiment_path / "config_cube_with_holes.json"),
+        default=str(experiment_path / "config_cube.json"),
         help="Path to an experiment JSON config.",
     )
     args = parser.parse_args()
