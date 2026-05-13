@@ -1,5 +1,5 @@
 {
-  "results_name": "results_ffd_cube_with_cylinders_7x7x7_new",
+  "results_name": "results_ffd_cube_with_cylinders_7x7x7",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
     "n_control_points": [7, 7, 7],

@@ -1,5 +1,5 @@
 {
-  "results_name": "results_cube_new",
+  "results_name": "results_cube",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
