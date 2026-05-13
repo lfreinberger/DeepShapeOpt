@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "DeepShapeOpt"
+version: "1.0.0-paper"
+type: software
+message: "If you use this software, please cite the archived release and the accompanying paper."
+abstract: "Research software for neural implicit geometry representation and shape optimization."
+authors:
+  - given-names: Lukas
+    family-names: Freinberger
+    affiliation: "TU Wien"
+license: MIT
+repository-code: "https://github.com/lfreinberger/DeepShapeOpt"
+keywords:
+  - shape optimization
+  - signed distance functions
+  - neural implicit representation
+  - OpenFOAM
+  - reproducibility
+references:
+  - type: software
+    title: "DeepSDFStruct"
+    authors:
+      - given-names: Michael
+        family-names: Kofler
+        affiliation: "TU Wien"
+    repository-code: "https://github.com/lfreinberger/DeepSDFStruct"
+    version: "1.0.0-paper"

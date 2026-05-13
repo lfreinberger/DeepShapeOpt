@@ -1,0 +1,67 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Specific folders
+archive/
+data/
+!data/
+data/*
+!data/shapes/
+data/shapes/*
+!data/shapes/cube_l1.stl
+!data/shapes/cube_l3.stl
+!data/shapes/cube_with_cylinders.stl
+!data/shapes/cube_with_holes.stl
+!data/shapes/flow_channel.stl
+!data/shapes/rim.stl
+!data/shapes/shiba.stl
+!data/shapes/ship_propeller.stl
+*results/
+results*/
+docs/
+sandbox/
+*tiling*/
+tiling_results/
+results_tiling/
+flowRate/
+
+# OpenFOAM cases: ignore everything in any foam_case, except these specific items
+**/foam_case/**
+!**/foam_case/0.orig/
+!**/foam_case/0.orig/**
+!**/foam_case/constant/
+!**/foam_case/constant/**
+!**/foam_case/system/
+!**/foam_case/system/**
+!**/foam_case/Allclean
+!**/foam_case/Allrun
+
+# Within constant: ignore these subfolders
+**/foam_case/constant/extendedFeatureEdgeMesh/
+**/foam_case/constant/extendedFeatureEdgeMesh/**
+**/foam_case/constant/polyMesh/
+**/foam_case/constant/polyMesh/**
+**/foam_case/constant/triSurface/
+**/foam_case/constant/triSurface/**
+
+# OpenFOAM runtime copies (created by prepare_foam_runtime)
+**/foam_run_*/
+
+# MLflow
+mlruns/
+
+# Specific files
+slurm-*.out
+PUBLICATION_AUDIT.md
+
+m_cube
+
+run_optimization.slrm

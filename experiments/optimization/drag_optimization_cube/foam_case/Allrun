@@ -1,0 +1,75 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+# Helper function to time each step
+timeStep() {
+    step_name="$1"
+    shift
+
+    start=$(date +%s)
+
+    "$@"
+    status=$?
+
+    end=$(date +%s)
+    elapsed=$((end - start))
+    mins=$((elapsed / 60))
+    secs=$((elapsed % 60))
+
+    if [ $status -eq 0 ]; then
+        echo "Finished: $step_name in ${mins} min ${secs} s"
+    else
+        echo "Failed: $step_name after ${mins} min ${secs} s"
+        exit $status
+    fi
+    echo "=================================================="
+}
+
+# Alternative decomposeParDict name:
+decompDict="-decomposeParDict system/decomposeParDict.20"
+## Standard decomposeParDict name:
+# unset decompDict
+
+# touch open.foam
+
+timeStep "surfaceFeatureExtract" runApplication surfaceFeatureExtract
+
+timeStep "blockMesh" runApplication blockMesh
+
+timeStep "decomposePar" runApplication $decompDict decomposePar
+
+# Using distributedTriSurfaceMesh?
+if foamDictionary -entry geometry -value system/snappyHexMeshDict | \
+   grep -q distributedTriSurfaceMesh
+then
+    echo "surfaceRedistributePar does not need to be run anymore"
+    echo " - distributedTriSurfaceMesh will do on-the-fly redistribution"
+fi
+
+timeStep "snappyHexMesh" runParallel $decompDict snappyHexMesh -overwrite
+
+#- For non-parallel running: - set the initial fields
+# restore0Dir
+
+#- For parallel running: set the initial fields
+timeStep "restore0Dir" restore0Dir -processor
+
+timeStep "patchSummary" runParallel $decompDict patchSummary
+
+timeStep "potentialFoam" runParallel $decompDict potentialFoam -writephi
+
+timeStep "checkMesh" runParallel $decompDict checkMesh -writeFields '(nonOrthoAngle)' -constant
+
+timeStep "main solver ($(getApplication))" runParallel $decompDict $(getApplication)
+
+timeStep "reconstructParMesh" runApplication reconstructParMesh -constant
+
+timeStep "reconstructPar" runApplication reconstructPar -latestTime
+
+timeStep "postProcess" runApplication postProcess -func sampleDict -latestTime
+
+
+
+#------------------------------------------------------------------------------

@@ -1,0 +1,39 @@
+{
+  "results_name": "results_cube_new",
+  "reconstruction": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
+    "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
+    "model_checkpoint": "latest",
+    "tiling": [2, 2, 2],
+    "spline_degree": [1, 1, 1],
+    "design_domain": [[-1.5, -0.8, -0.8], [1.5, 0.8, 0.8]],
+    "n_uniform_samples": 100000,
+    "n_surface_samples": 500000,
+    "lr": 5e-3,
+    "num_iterations": 35,
+    "batch_size": 4096,
+    "code_reg_lambda": 0.0,
+    "code_bound": 1.0,
+    "grad_clip": 1.0,
+    "eikonal_lambda": 0.0,
+    "device": "cuda",
+    "reuse_parameter": false
+  },
+  "optimization": {
+    "num_iter": 60,
+    "mesh_resolution": 48,
+    "max_step": 0.02,
+    "bounds": [-2.0, 2.0],
+    "use_center_constraint": true,
+    "center_tol": 0.05,
+    "convergence_obj_tol": 0.0002,
+    "convergence_window": 3,
+    "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "sensitivity": {
+      "loading_method": "conservative",
+      "field_name": "pointSensVecadjS1ESI",
+      "objective_path": "optimisation/objective/0/dragadjS1",
+      "invert_normals": true
+    }
+  }
+}

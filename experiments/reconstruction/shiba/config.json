@@ -1,0 +1,24 @@
+{
+  "reconstruction": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/shiba.stl",
+    "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
+    "model_checkpoint": "latest",
+    "tiling": [4,6,6],
+    "spline_degree": [1, 1, 1],
+    "n_uniform_samples": 100000,
+    "n_surface_samples": 500000,
+    "samples_surface_stds": [0.005, 0.0001],
+    "lr": 0.005,
+    "num_iterations": 15,
+    "batch_size": 4096,
+    "create_mesh_N": 48,
+    "code_reg_lambda": 0.0,
+    "code_bound": 1.0,
+    "grad_clip": 1.0,
+    "eikonal_lambda": 0.0,
+    "device": "cuda",
+    "mesh_device": "cuda",
+    "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}"
+  },
+  "results_name": "results"
+}
