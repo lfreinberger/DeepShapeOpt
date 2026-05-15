@@ -10,18 +10,35 @@ authors:
     affiliation: "TU Wien"
 license: MIT
 repository-code: "https://github.com/lfreinberger/DeepShapeOpt"
+doi: 10.5281/zenodo.20210464
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20210464
+    description: "Archived release of the source code"
 keywords:
   - shape optimization
   - signed distance functions
   - neural implicit representation
   - OpenFOAM
   - reproducibility
+# TODO: add `preferred-citation:` pointing at the companion paper once published.
 references:
   - type: software
-    title: "DeepSDFStruct"
+    title: "DeepSDFStruct (archived fork — required dependency)"
     authors:
+      - given-names: Lukas
+        family-names: Freinberger
+        affiliation: "TU Wien"
       - given-names: Michael
         family-names: Kofler
         affiliation: "TU Wien"
     repository-code: "https://github.com/lfreinberger/DeepSDFStruct"
+    doi: 10.5281/zenodo.20205817
     version: "0.1.0"
+  - type: data
+    title: "Training data for DeepSDFStruct neural decoder"
+    authors:
+      - given-names: Lukas
+        family-names: Freinberger
+        affiliation: "TU Wien"
+    doi: 10.48436/12y18-j6236

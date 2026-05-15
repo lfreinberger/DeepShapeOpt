@@ -1,6 +1,21 @@
 # DeepShapeOpt
 
+[![DOI](https://zenodo.org/badge/1237823553.svg)](https://doi.org/10.5281/zenodo.20210464)
+
 DeepShapeOpt is a research codebase for shape optimization with neural implicit geometry representations and OpenFOAM-based adjoint sensitivities. The public repository focuses on drag optimization of cube-like benchmark geometries.
+
+## Reproducing the paper
+
+<!-- Replace this paragraph with the full paper citation once it is published. -->
+The results reported in the companion paper (citation TBA) were produced with the following archived artefacts:
+
+| Artefact | DOI |
+| --- | --- |
+| DeepShapeOpt source (this repository) | [10.5281/zenodo.20210464](https://doi.org/10.5281/zenodo.20210464) |
+| DeepSDFStruct (editable dependency, fork) | [10.5281/zenodo.20205817](https://doi.org/10.5281/zenodo.20205817) |
+| Training data for the neural decoder | [10.48436/12y18-j6236](https://doi.org/10.48436/12y18-j6236) |
+
+To reproduce the optimization results, the training data is **not required** — the pretrained decoder checkpoints are shipped inside the archived DeepSDFStruct release under `trained_models/`. The training data is only needed to retrain the decoder from scratch.
 
 ## Installation
 
@@ -123,7 +138,13 @@ When `heavy_data_output_path` is set, debug exports are mirrored under `DEEPSHAP
 
 ## Citation
 
-If this code supports a publication, cite the project using `CITATION.cff`.
+If you use this code in academic work, please cite the archived release:
+
+- DeepShapeOpt v0.1.0, Zenodo, <https://doi.org/10.5281/zenodo.20210464>
+
+<!-- Add the paper citation here once it is published. -->
+
+A machine-readable citation is provided in `CITATION.cff`.
 
 ## Data sources
 
