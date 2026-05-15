@@ -125,6 +125,14 @@ When `heavy_data_output_path` is set, debug exports are mirrored under `DEEPSHAP
 
 If this code supports a publication, cite the project using `CITATION.cff`.
 
+## Data sources
+
+The reconstruction test cases use the following geometries from Thingiverse:
+
+- *My little shiba* by layerone, <https://www.thingiverse.com/thing:1308678>.
+- *Parametric Ship Propeller / Rc propeller / Marine Propeller* by Fysik_klubben, <https://www.thingiverse.com/thing:6906448>.
+- *RC Rim* by Attila_d, <https://www.thingiverse.com/thing:1328760>.
+
 ## License
 
 See `LICENSE`.
