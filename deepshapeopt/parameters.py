@@ -3,36 +3,26 @@ import torch
 
 
 def make_locked_masks(param: torch.Tensor, locked_idx: torch.Tensor):
-    """
-    param: (n_ctrl, latent_dim)
-    locked_idx: Indizes der Control Points (rows), die fix bleiben sollen
-    Returns:
-      mask_locked_cp: (n_ctrl,) bool
-      mask_locked_flat: (n_ctrl*latent_dim,) bool
-      locked_values: (n_locked, latent_dim) tensor (detached clone)
-    """
+    """Return masks and fixed values for locked control points."""
     n_ctrl, latent_dim = param.shape
 
     mask_locked_cp = torch.zeros(n_ctrl, dtype=torch.bool, device=param.device)
-    mask_locked_cp[locked_idx] = True
+    if locked_idx.numel() > 0:
+        mask_locked_cp[locked_idx] = True
 
-    # Expand to match flattened param (row-major)
     mask_locked_flat = mask_locked_cp[:, None].expand(n_ctrl, latent_dim).reshape(-1)
-
     locked_values = param[mask_locked_cp].detach().clone()
     return mask_locked_cp, mask_locked_flat, locked_values
 
 
 def mask_grads_for_mma(dJ: torch.Tensor, dV: torch.Tensor, mask_locked_flat: torch.Tensor):
-    """
-    dJ, dV: (n_ctrl, latent_dim) tensors
-    returns masked flat vectors (n_ctrl*latent_dim, 1)
-    """
+    """Flatten two gradients for MMA and zero locked entries."""
     dJ_flat = dJ.reshape(-1, 1).clone()
     dV_flat = dV.reshape(-1, 1).clone()
-
-    dJ_flat[mask_locked_flat] = 0.0
-    dV_flat[mask_locked_flat] = 0.0
+    mask_flat = mask_locked_flat.reshape(-1)
+    if mask_flat.any():
+        dJ_flat[mask_flat] = 0.0
+        dV_flat[mask_flat] = 0.0
     return dJ_flat, dV_flat
 
 
@@ -48,7 +38,8 @@ def mask_single_grad_for_mma(grad: torch.Tensor, mask_locked_flat: torch.Tensor)
             f"mask has {mask_flat.shape[0]} entries."
         )
 
-    grad_flat[mask_flat] = 0.0
+    if mask_flat.any():
+        grad_flat[mask_flat] = 0.0
     return grad_flat
 
 
@@ -71,7 +62,6 @@ def greville_points_3d(spline, order):
     g2 = _greville_1d(kvs[2], degrees[2])
 
     n0, n1, n2 = len(g0), len(g1), len(g2)
-    # C-order IDs: k fastest, dann j, dann i
     ids = np.arange(n0 * n1 * n2)
     I, J, K = np.unravel_index(ids, (n0, n1, n2), order=order)
 
@@ -81,6 +71,8 @@ def greville_points_3d(spline, order):
 
 def locked_indices_from_bboxes(spline, bboxes, device="cuda", order="F"):
     pts, _ = greville_points_3d(spline, order=order)
+    if not bboxes:
+        return torch.empty(0, dtype=torch.long, device=device)
 
     bboxes = np.array([
         [

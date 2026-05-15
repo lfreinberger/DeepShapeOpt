@@ -35,7 +35,7 @@ def _plot_obj_con_axes(
     history_con,
     limit_con,
     obj_label="Objective",
-    con_label="Volume",
+    con_label="Constraint",
 ):
     """Plot objective on left axis and constraint/volume on right axis."""
     l1, = ax1.plot(
@@ -65,7 +65,11 @@ def _plot_obj_con_axes(
 
         ax2.set_ylabel(con_label, color="tab:orange")
         ax2.tick_params(axis="y", labelcolor="tab:orange")
-        ax2.set_ylim(bottom=0)
+        finite_con = history_con[np.isfinite(history_con)]
+        finite_limit = np.asarray([limit_con], dtype=float) if limit_con is not None else np.asarray([])
+        finite_values = np.concatenate([finite_con, finite_limit[np.isfinite(finite_limit)]])
+        if finite_values.size and np.nanmin(finite_values) >= 0:
+            ax2.set_ylim(bottom=0)
 
         if limit_con is not None:
             ax2.axhline(
@@ -87,8 +91,8 @@ def plot_optimization_history(
     history_con=None,
     limit_con=None,
     result_dir=None,
-    normalize_objective=False,
-    normalize_constraint=False,
+    obj_label="Objective",
+    con_label="Constraint",
 ):
     plt = _get_pyplot()
 
@@ -100,9 +104,8 @@ def plot_optimization_history(
     if limit_con is not None:
         limit_con = float(to_numpy(limit_con))
 
-    iterations = np.arange(1, len(history_obj) + 1)
+    iterations = np.arange(len(history_obj))
 
-    # Compute normalized copies
     has_con = history_con is not None and not np.all(np.isnan(history_con))
 
     obj_abs = history_obj.copy()
@@ -120,27 +123,19 @@ def plot_optimization_history(
         if limit_con is not None:
             limit_norm = limit_con / con0
 
-    # Apply legacy normalization flags (for callers that already normalize)
-    if normalize_objective:
-        obj_abs = obj_norm
-    if normalize_constraint and has_con:
-        con_abs = con_norm
-        limit_abs = limit_norm
-
-    # Two subplots: absolute (top) and normalized (bottom)
     fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
 
     _plot_obj_con_axes(
         ax_top, iterations, obj_abs, con_abs, limit_abs,
-        obj_label="Objective (normalized)" if normalize_objective else "Objective",
-        con_label="Volume (normalized)" if normalize_constraint else "Volume",
+        obj_label=obj_label,
+        con_label=con_label,
     )
     ax_top.set_title("Absolute values")
 
     _plot_obj_con_axes(
         ax_bot, iterations, obj_norm, con_norm, limit_norm,
         obj_label="Objective (J/J\u2080)",
-        con_label="Volume (V/V\u2080)",
+        con_label=f"{con_label} / initial",
     )
     ax_bot.set_xlabel("Iteration")
     ax_bot.set_title("Normalized values")

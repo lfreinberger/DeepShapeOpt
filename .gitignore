@@ -26,6 +26,7 @@ data/shapes/*
 !data/shapes/ship_propeller.stl
 *results/
 results*/
+**/results*/
 docs/
 sandbox/
 *tiling*/
@@ -34,6 +35,10 @@ results_tiling/
 flowRate/
 .vscode/*
 confidential/*
+tests/*
+**/analysis/*
+**/analysis/**
+experiments/reconstruction/analysis/*
 
 # OpenFOAM cases: ignore everything in any foam_case, except these specific items
 **/foam_case/**
@@ -56,14 +61,44 @@ confidential/*
 
 # OpenFOAM runtime copies (created by prepare_foam_runtime)
 **/foam_run_*/
+**/foam_run_*/**
+
+# Optimization debug/heavy exports
+**/vtk_series/
+**/vtk_series/**
+**/stl_series/
+**/stl_series/**
+**/snapshots/
+**/snapshots/**
+**/control_lattice_series/
+**/control_lattice_series/**
+**/check_*sens*.vtp
+**/check_*Sens*.vtp
+**/boxcut_*boundary_edges.stl
+**/boxcut_outer_uncapped.stl
+**/debug_outlet_interior/
+**/debug_outlet_interior/**
+
+# OpenFOAM generated logs and views
+**/log.*
+**/open.foam
+**/postProcessing/
+**/postProcessing/**
+**/VTK/
+**/VTK/**
 
 # MLflow
 mlruns/
 
 # Specific files
 slurm-*.out
-PUBLICATION_AUDIT.md
+CLAUDE.md
+
+# Machine-specific test env (contains absolute paths)
+tests/env.csh
+tests/env.sh
 
 m_cube
 
 run_optimization.slrm
+run_optimization_ffd.slrm

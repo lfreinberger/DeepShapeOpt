@@ -1,9 +1,13 @@
-from dataclasses import dataclass
-import os
-from pathlib import Path
-from typing import Any, Dict, Union
 import copy
 import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Union
+
+
+_UNRESOLVED_ENV_RE = re.compile(r"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
 
 
 class ExperimentSpecifications(dict):
@@ -71,15 +75,15 @@ def make_experiment_paths(
     base_dir: Union[str, Path],
     results_name: str = "results",
     heavy_data_output_path: Union[str, Path, None] = None,
+    run_subdir: Union[str, Path, None] = None,
 ) -> ExperimentPaths:
     base = Path(base_dir).resolve()
     results = base / results_name
+    if run_subdir is not None:
+        results = results / Path(run_subdir)
     heavy_data = None
     heavy_data_output_path = expand_env_vars(heavy_data_output_path)
     if heavy_data_output_path is not None:
-        # Mirror the local directory structure (experiments/reconstruction/...)
-        # under the heavy data root by computing the path relative to the
-        # project root (identified by pyproject.toml).
         project_root = base
         while project_root != project_root.parent:
             if (project_root / "pyproject.toml").exists():
@@ -90,6 +94,8 @@ def make_experiment_paths(
         except ValueError:
             rel = Path(base.name)
         heavy_data = Path(heavy_data_output_path) / rel / results_name
+        if run_subdir is not None:
+            heavy_data = heavy_data / Path(run_subdir)
     return ExperimentPaths(
         base=base,
         results=results,
@@ -112,7 +118,13 @@ def expand_env_vars(value: Any) -> Any:
     ``"${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32"`` resolves at load time.
     """
     if isinstance(value, str):
-        return os.path.expanduser(os.path.expandvars(value))
+        expanded = os.path.expanduser(os.path.expandvars(value))
+        if _UNRESOLVED_ENV_RE.search(expanded):
+            raise ValueError(
+                f"Unresolved environment variable in path or config value: {value!r}. "
+                "Check the environment variables used by the experiment config."
+            )
+        return expanded
     if isinstance(value, list):
         return [expand_env_vars(item) for item in value]
     if isinstance(value, dict):

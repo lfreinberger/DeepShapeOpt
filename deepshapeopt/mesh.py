@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
@@ -8,6 +9,9 @@ import numpy as np
 import trimesh
 import torch
 from stl import mesh as stl_mesh
+
+
+logger = logging.getLogger(__name__)
 
 
 def compute_tet_mesh_volume_centroid(
@@ -47,7 +51,6 @@ def compute_tet_mesh_volume_centroid(
     #warning if some vols are negative including percentage
     n_negative = (vols < 0).sum().item()
     # if n_negative > 0:
-    #     print(f"WARNING: {n_negative} / {len(vols)} tets have negative volume ({vols[vols<0].sum().item()/vols.sum().item()*100:.2f}%volume)!")
 
 
     total_vol = vols.sum()
@@ -175,7 +178,7 @@ def split_stl_into_patches(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading {input_stl} ...")
+    logger.debug("Loading %s", input_stl)
     original_mesh = stl_mesh.Mesh.from_file(input_stl.as_posix())
 
     # Triangle vertices: shape (n_triangles, 3, 3)
@@ -235,10 +238,12 @@ def split_stl_into_patches(
             raise ValueError(f"Unknown outlet_interior method: {method}")
         patch_faces[source_patch] = interior_regions[source_patch]
         patch_faces[interior_patch] = interior_regions[interior_patch]
-        print(
-            "Outlet interior patch split stats: "
-            f"{source_patch}={len(patch_faces[source_patch])} triangles, "
-            f"{interior_patch}={len(patch_faces[interior_patch])} triangles"
+        logger.info(
+            "Outlet interior patch split: %s=%d triangles, %s=%d triangles",
+            source_patch,
+            len(patch_faces[source_patch]),
+            interior_patch,
+            len(patch_faces[interior_patch]),
         )
         if outlet_interior.get("debug", True):
             _write_patch_debug_stls(output_dir, patch_faces, debug_patch_names)
@@ -268,7 +273,7 @@ def split_stl_into_patches(
                     f.write("  endfacet\n")
                 f.write(f"endsolid {patch_name}\n")
 
-        print(f"Saved multi-region STL to {multi_path}")
+        logger.debug("Saved multi-region STL to %s", multi_path)
 
     # Return stats in case you want to log/assert in tests
     return {name: len(tris) for name, tris in patch_faces.items()}
@@ -315,7 +320,7 @@ def _write_patch_debug_stls(
             continue
         path = debug_dir / f"{patch_name}.stl"
         _write_ascii_stl(path, patch_name, patch_faces[patch_name])
-        print(f"Saved outlet debug STL: {path}")
+        logger.debug("Saved outlet debug STL: %s", path)
 
     combined_path = debug_dir / "outlet_split_debug.stl"
     with open(combined_path, "w") as f:
@@ -334,7 +339,7 @@ def _write_patch_debug_stls(
                 f.write("    endloop\n")
                 f.write("  endfacet\n")
             f.write(f"endsolid {patch_name}\n")
-    print(f"Saved outlet split debug STL: {combined_path}")
+    logger.debug("Saved outlet split debug STL: %s", combined_path)
 
 
 def _polygon_area_2d(points: np.ndarray) -> float:
@@ -773,13 +778,21 @@ def _build_local_inset_outlet_regions(
         rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], outer_sample_3d[j], inner_3d[j]]), normal))
         rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], inner_3d[j], inner_3d[i]]), normal))
 
-    print(
-        f"Created {interior_patch_name} with local inset: "
-        f"inset_distance={inset_distance:.6e}, applied_scale={scale:.2f}, "
-        f"margin_range=[{margins.min():.6e}, {margins.max():.6e}], "
-        f"samples={sample_count}, "
-        f"outer_area={outer_area:.6e}, inner_area={inner_area:.6e}, "
-        f"interior_tris={len(interior_tris)}, {source_patch_name}_rim_tris={len(rim_tris)}"
+    logger.info(
+        "Created %s with local inset: inset_distance=%.6e, applied_scale=%.2f, "
+        "margin_range=[%.6e, %.6e], samples=%d, outer_area=%.6e, inner_area=%.6e, "
+        "interior_tris=%d, %s_rim_tris=%d",
+        interior_patch_name,
+        inset_distance,
+        scale,
+        margins.min(),
+        margins.max(),
+        sample_count,
+        outer_area,
+        inner_area,
+        len(interior_tris),
+        source_patch_name,
+        len(rim_tris),
     )
     return {
         source_patch_name: rim_tris,
@@ -898,11 +911,19 @@ def _build_local_distance_outlet_regions(
             "Increase outlet_interior.inset_fraction."
         )
 
-    print(
-        f"Created {interior_patch_name} with local distance split: "
-        f"threshold={threshold:.3f}, grid={nx}x{ny}, cell_size={cell_size:.6e}, "
-        f"{interior_patch_name}_cells={interior_cells}, "
-        f"{source_patch_name}_rim_cells={rim_cells}, mixed_cells={mixed_cells}"
+    logger.info(
+        "Created %s with local distance split: threshold=%.3f, grid=%dx%d, "
+        "cell_size=%.6e, %s_cells=%d, %s_rim_cells=%d, mixed_cells=%d",
+        interior_patch_name,
+        threshold,
+        nx,
+        ny,
+        cell_size,
+        interior_patch_name,
+        interior_cells,
+        source_patch_name,
+        rim_cells,
+        mixed_cells,
     )
 
     return {
@@ -1035,11 +1056,16 @@ def _build_centerline_band_outlet_regions(
     if not source_tris:
         raise ValueError("Centerline outlet rim produced no triangles.")
 
-    print(
-        f"Created {interior_patch_name} with centerline band: "
-        f"axis={'uv'[axis]}, exclusion_fraction={exclusion_fraction:.3f}, "
-        f"band_fraction={band_fraction:.3f}, stations={len(stations)}, "
-        f"strips={strips}, skipped_branch_transitions={skipped}"
+    logger.info(
+        "Created %s with centerline band: axis=%s, exclusion_fraction=%.3f, "
+        "band_fraction=%.3f, stations=%d, strips=%d, skipped_branch_transitions=%d",
+        interior_patch_name,
+        "uv"[axis],
+        exclusion_fraction,
+        band_fraction,
+        len(stations),
+        strips,
+        skipped,
     )
 
     return {
@@ -1063,10 +1089,10 @@ def _remove_box_caps(
             on_plane = np.all(np.abs(face_verts[:, :, axis] - val) < tol, axis=1)
             n = on_plane.sum()
             if n > 0:
-                print(f"[_remove_box_caps] axis={axis} val={val:.4f}: {n} cap faces (tol={tol})")
+                logger.debug("_remove_box_caps axis=%d val=%.4f: %d cap faces (tol=%s)", axis, val, n, tol)
             is_cap |= on_plane
 
-    print(f"[_remove_box_caps] total caps removed: {is_cap.sum()} / {len(mesh.faces)} faces")
+    logger.debug("_remove_box_caps removed %d / %d faces", is_cap.sum(), len(mesh.faces))
     if is_cap.any():
         mesh = mesh.copy()
         mesh.update_faces(~is_cap)
@@ -1434,6 +1460,6 @@ if __name__ == "__main__":
     stitched = stitch_meshes(mesh_a, mesh_b)
     stitched.export("stitched.stl")
 
-    print("stitch diagnostics:")
+    logger.info("stitch diagnostics:")
     for key, value in stitch_diagnostics(stitched).items():
-        print(f"  {key}: {value}")
+        logger.info("  %s: %s", key, value)

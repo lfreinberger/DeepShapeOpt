@@ -1,12 +1,53 @@
 {
   "version": "0.2.0",
   "configurations": [
-    
     {
-      "name": "Python Debugger: Current File",
+      "name": "Current File",
       "type": "debugpy",
       "request": "launch",
       "program": "${file}",
+      "console": "integratedTerminal",
+      "env": {
+        "DEEPSHAPEOPT_DATA_DIR": "data",
+        "DEEPSHAPEOPT_MODEL_DIR": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models",
+        "DEEPSHAPEOPT_RESULTS_DIR": "/storage/lfrei/DeepShapeOpt_test"
+      }
+    },
+    {
+      "name": "Test: reconstruction",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/reconstruct.py",
+      "args": ["--config", "tests/reconstruction/config.json"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "DEEPSHAPEOPT_DATA_DIR": "data",
+        "DEEPSHAPEOPT_MODEL_DIR": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models",
+        "DEEPSHAPEOPT_RESULTS_DIR": "/storage/lfrei/DeepShapeOpt_test"
+      }
+    },
+    {
+      "name": "Test: drag_latent",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize_drag_latent.py",
+      "args": ["--config", "tests/drag_latent/config.json"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "DEEPSHAPEOPT_DATA_DIR": "data",
+        "DEEPSHAPEOPT_MODEL_DIR": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models",
+        "DEEPSHAPEOPT_RESULTS_DIR": "/storage/lfrei/DeepShapeOpt_test"
+      }
+    },
+    {
+      "name": "Test: drag_ffd",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize_drag_ffd.py",
+      "args": ["--config", "tests/drag_ffd/config.json"],
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "env": {
         "DEEPSHAPEOPT_DATA_DIR": "data",

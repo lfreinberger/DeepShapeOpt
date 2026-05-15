@@ -6,6 +6,7 @@ experiment can be written as a short sequence of calls with only
 experiment-specific logic inline.
 """
 import time
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,15 +17,22 @@ import torch
 import trimesh
 
 from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-from DeepSDFStruct.mesh import TorchScaling, create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
+from DeepSDFStruct.mesh import TorchScaling, create_3D_mesh, export_surface_mesh
 from DeepSDFStruct.parametrization import SplineParametrization
 from DeepSDFStruct.pretrained_models import get_model
 from DeepSDFStruct.SDF import SDFfromDeepSDF
 
 from deepshapeopt.parameters import locked_indices_from_bboxes, make_locked_masks
-from deepshapeopt.reconstruction import fit_box_to_unit_cube, init_spline_parameters, build_parameter_spline, run_sdf_reconstruction
+from deepshapeopt.reconstruction import (
+    build_parameter_spline,
+    export_reconstructed_artifacts,
+    fit_box_to_unit_cube,
+    fit_lattice_to_sdf,
+    init_spline_parameters,
+    with_float32_lattice,
+)
 
-DTYPE = torch.float32
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -54,19 +62,20 @@ def setup_model_and_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
         device=rec_cfg["device"],
     )
 
-    design_domain = torch.tensor(rec_cfg["design_domain"], device=rec_cfg["device"], dtype=DTYPE)
+    dtype = torch.float32
+    design_domain = torch.tensor(rec_cfg["design_domain"], device=rec_cfg["device"], dtype=dtype)
     scale, center, norm_fn, denorm_fn, box_norm = fit_box_to_unit_cube(design_domain)
 
-    print("scale:", scale.item())
-    print("center:", center)
-    print("normalized box:", box_norm)
+    logger.debug("Scale: %s", scale.item())
+    logger.debug("Center: %s", center)
+    logger.debug("Normalized design box: %s", box_norm)
 
     scaling = TorchScaling(
         scale_factors=scale, translation=center, bounds=design_domain, device=rec_cfg["device"]
     )
 
     mesh_orig = trimesh.load(rec_cfg["mesh_path"])
-    V = torch.from_numpy(mesh_orig.vertices).to(device=model.device, dtype=DTYPE)
+    V = torch.from_numpy(mesh_orig.vertices).to(device=model.device, dtype=dtype)
     V_norm = norm_fn(V)
     mesh_norm = mesh_orig.copy()
     mesh_norm.vertices = V_norm.detach().cpu().numpy()
@@ -129,41 +138,6 @@ def build_lattice(rec_cfg: dict, model, sdf, box_norm: torch.Tensor) -> LatticeS
 # Phase 3: Reconstruction
 # ---------------------------------------------------------------------------
 
-def _with_float32_lattice(lattice_struct, box_norm, fn):
-    """Run *fn* with the lattice temporarily cast to float32.
-
-    The DeepSDF decoder weights are float32 and FlexiCubes creates
-    internal buffers in float32 (and uses ``torch.get_default_dtype()``
-    for grid construction), so all SDF evaluation / mesh generation
-    must happen in float32.  The MMA optimizer, however, works in
-    float64 (DTYPE).  This helper casts the parametrization, the
-    lattice bounds buffer, and the default dtype to float32, calls *fn*,
-    then restores everything.
-    """
-    # Save and cast parametrization params
-    params = list(lattice_struct.parametrization.parameters())
-    saved_params = [p.data for p in params]
-    for p in params:
-        p.data = p.data.float()
-
-    # Save and cast the lattice bounds buffer (used for coordinate
-    # normalization inside LatticeSDFStruct._compute)
-    saved_bounds = lattice_struct.bounds.data
-    lattice_struct.bounds.data = lattice_struct.bounds.data.float()
-
-    # FlexiCubes uses torch.get_default_dtype() to create grid points
-    saved_default_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(torch.float32)
-
-    try:
-        return fn(box_norm.float())
-    finally:
-        torch.set_default_dtype(saved_default_dtype)
-        for p, s in zip(params, saved_params):
-            p.data = s
-        lattice_struct.bounds.data = saved_bounds
-
-
 def run_reconstruction(
     lattice_struct: LatticeSDFStruct,
     mesh_norm: trimesh.Trimesh,
@@ -174,30 +148,34 @@ def run_reconstruction(
     scaling: TorchScaling,
     opt_cfg: dict,
     extend_bounds: bool = True,
+    debug: bool = False,
 ):
     """Run or load reconstruction, export visualization files, return parameters."""
     use_parameter = rec_cfg["reuse_parameter"]
     recon_parameter_file = rec_results_path / "rec_parameters.pt"
 
     if recon_parameter_file.exists() and use_parameter:
-        print("Loading existing reconstruction parameters...")
+        logger.info("Loading existing reconstruction parameters")
         recon_param = torch.load(recon_parameter_file, map_location=rec_cfg["device"])
-        print("Loaded parameters:", recon_param[0].shape, recon_param[0].min().item(), recon_param[0].max().item())
+        logger.debug(
+            "Loaded parameters: shape=%s min=%.6e max=%.6e",
+            tuple(recon_param[0].shape),
+            recon_param[0].min().item(),
+            recon_param[0].max().item(),
+        )
     else:
-        print("Running reconstruction...")
+        logger.info("Running reconstruction")
 
-        # Run reconstruction in float32 — the DeepSDF decoder and
-        # lattice bounds must match the decoder's float32 weights.
         saved_bounds = lattice_struct.bounds.data
         lattice_struct.bounds.data = lattice_struct.bounds.data.float()
 
-        recon_result = run_sdf_reconstruction(
+        recon_result = fit_lattice_to_sdf(
             lattice_struct,
             mesh_norm,
             box_norm.float(),
             rec_cfg,
             output_dir=rec_results_path,
-            save_vtp=True,
+            save_vtp=debug,
             box_constrained=True,
         )
 
@@ -205,47 +183,31 @@ def run_reconstruction(
 
         lattice_struct.bounds.data = saved_bounds
 
-        print("Reconstructed parameters:", recon_param[0].shape, recon_param[0].min().item(), recon_param[0].max().item())
+        logger.debug(
+            "Reconstructed parameters: shape=%s min=%.6e max=%.6e",
+            tuple(recon_param[0].shape),
+            recon_param[0].min().item(),
+            recon_param[0].max().item(),
+        )
         torch.save(recon_param, recon_parameter_file)
-
-    # Export SDF grid and reconstructed meshes in float32
-    # (decoder weights, FlexiCubes internals, and FlexiCubes grid
-    # construction via torch.get_default_dtype() all require float32)
-    mesh_res = opt_cfg["mesh_resolution"]
-    device = rec_cfg["device"]
-
-    def _export_meshes(box_norm_f32):
-        export_sdf_grid_vtk(
-            lattice_struct, N=64,
-            filename=rec_results_path / "reconstructed_sdf_grid.vtk",
-            bounds=box_norm_f32,
-        )
-
-        mesh_ps, deriv_ps = create_3D_mesh(
-            lattice_struct, mesh_res,
-            mesh_type="surface", differentiate=False,
-            device=device, bounds=box_norm_f32,
-            extend_bounds=extend_bounds
-        )
-        export_surface_mesh(rec_results_path / "reconstructed_mesh_parameterspace.stl", mesh_ps.to_gus(), deriv_ps)
-
-        mesh_phys, deriv_phys = create_3D_mesh(
-            lattice_struct, mesh_res,
-            mesh_type="surface", differentiate=False,
-            device=device, bounds=box_norm_f32,
-            deformation_function=scaling,
-            extend_bounds=extend_bounds
-        )
-        export_surface_mesh(rec_results_path / "reconstructed_mesh.stl", mesh_phys.to_gus(), deriv_phys)
-        print(f"Reconstructed mesh saved to {rec_results_path / 'reconstructed_mesh.stl'}")
 
     lattice_struct.parametrization.set_param(
         recon_param[0].to(device=model.device, dtype=torch.float32)
     )
-    _with_float32_lattice(lattice_struct, box_norm, _export_meshes)
+    export_reconstructed_artifacts(
+        lattice_struct,
+        rec_results_path,
+        mesh_resolution=opt_cfg["mesh_resolution"],
+        bounds=box_norm,
+        device=rec_cfg["device"],
+        scaling=scaling,
+        extend_bounds=extend_bounds,
+        export_sdf_grid=debug,
+        export_param_mesh=debug,
+    )
+    logger.debug("Reconstructed mesh saved to %s", rec_results_path / "reconstructed_mesh.stl")
 
-    # Restore float64 parameters on the lattice for the MMA optimizer
-    recon_param = [p.to(device=model.device, dtype=DTYPE) for p in recon_param]
+    recon_param = [p.to(device=model.device) for p in recon_param]
     lattice_struct.parametrization.set_param(recon_param[0])
     return recon_param
 
@@ -268,19 +230,20 @@ def setup_optimizer(
     param_spline_sp: splinepy.BSpline,
     opt_cfg: dict,
     rec_cfg: dict,
-    lock_bboxes: list,
+    lock_bboxes: list | None = None,
     n_constraints: int = 1,
 ) -> OptSetup:
-    """Create the MMA optimizer with locked control points."""
+    """Create the MMA optimizer, optionally locking selected control points."""
     from DeepSDFStruct.optimization import MMA
 
     param = next(lattice_struct.parametrization.parameters())
 
     locked_idx = locked_indices_from_bboxes(
-        param_spline_sp, lock_bboxes,
+        param_spline_sp, lock_bboxes or [],
         device=rec_cfg["device"], order="F",
     )
-    print(f"Locked control points: {locked_idx.numel()}")
+    if locked_idx.numel() > 0:
+        logger.info("Locked control points: %d", locked_idx.numel())
 
     mask_locked_cp, mask_locked_flat, locked_values = make_locked_masks(param, locked_idx)
 
@@ -325,13 +288,12 @@ def generate_mesh(lattice_struct, opt_cfg, rec_cfg, box_norm, scaling, mesh_type
             extend_bounds=extend_bounds
         )
 
-    return _with_float32_lattice(lattice_struct, box_norm, _create)
+    return with_float32_lattice(lattice_struct, box_norm, _create)
 
 
-def run_foam_case(case_dir: Path, mesh, derivative, opt_results_path: Path):
+def run_foam_case(case_dir: Path, mesh, derivative, opt_results_path: Path, plot_residuals: bool = False):
     """Export STL to foam case and run OpenFOAM."""
     import deepshapeopt.foam_utils as foam_utils
-    from deepshapeopt.plotting_utils import plot_residuals_from_log
 
     export_surface_mesh(
         case_dir / "constant/triSurface/shape.stl",
@@ -340,9 +302,11 @@ def run_foam_case(case_dir: Path, mesh, derivative, opt_results_path: Path):
 
     foam_case = foam_utils.run_openfoam_case(case_dir, verbose=False)
 
-    log_path = case_dir / "log.adjointOptimisationFoam"
-    if log_path.exists():
-        plot_residuals_from_log(log_path, output_dir=str(opt_results_path))
+    if plot_residuals:
+        from deepshapeopt.plotting_utils import plot_residuals_from_log
+        log_path = case_dir / "log.adjointOptimisationFoam"
+        if log_path.exists():
+            plot_residuals_from_log(log_path, output_dir=str(opt_results_path))
 
     return foam_case
 
@@ -431,21 +395,19 @@ def load_sensitivities(
 
 
 def mask_gradients(grads: list[torch.Tensor], mask_locked_flat: torch.Tensor):
-    """Zero out gradient entries for locked control points.
-
-    grads: list of gradient tensors (dJ, dV, dC, ...)
-    Returns list of masked flat tensors.
-    """
+    """Flatten gradients and zero entries belonging to locked control points."""
     masked = []
+    mask_flat = mask_locked_flat.reshape(-1)
     for g in grads:
         g_flat = g.reshape(-1).clone()
-        g_flat[mask_locked_flat] = 0.0
+        if mask_flat.any():
+            g_flat[mask_flat] = 0.0
         masked.append(g_flat)
     return masked
 
 
 def log_iteration_time(iter_start: float, start_time: float, iteration_times: list, total_iters: int, current_iter: int):
-    """Print timing info for the current iteration."""
+    """Log timing info for the current iteration."""
     iter_time = time.time() - iter_start
     iteration_times.append(iter_time)
 
@@ -454,7 +416,10 @@ def log_iteration_time(iter_start: float, start_time: float, iteration_times: li
     eta = avg_time * remaining
     elapsed = time.time() - start_time
 
-    print(f"[TIME] Iteration took: {iter_time:.2f}s")
-    print(f"[TIME] Avg/iter: {avg_time:.2f}s")
-    print(f"[TIME] Elapsed: {elapsed/60:.2f} min")
-    print(f"[TIME] ETA remaining: {eta/60:.2f} min ({eta/3600:.2f} h)")
+    logger.info(
+        "Iteration timing: %.2fs | avg %.2fs | elapsed %.2fmin | eta %.2fmin",
+        iter_time,
+        avg_time,
+        elapsed / 60,
+        eta / 60,
+    )
