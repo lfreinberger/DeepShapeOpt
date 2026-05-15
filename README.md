@@ -9,11 +9,13 @@ DeepShapeOpt is a research codebase for shape optimization with neural implicit 
 <!-- Replace this paragraph with the full paper citation once it is published. -->
 The results reported in the companion paper (citation TBA) were produced with the following archived artefacts:
 
-| Artefact | DOI |
+| Artefact | DOI (paper-specific version) |
 | --- | --- |
-| DeepShapeOpt source (this repository) | [10.5281/zenodo.20210464](https://doi.org/10.5281/zenodo.20210464) |
-| DeepSDFStruct (editable dependency, fork) | [10.5281/zenodo.20205817](https://doi.org/10.5281/zenodo.20205817) |
+| DeepShapeOpt source (this repository) | [10.5281/zenodo.20210465](https://doi.org/10.5281/zenodo.20210465) |
+| DeepSDFStruct (editable dependency, fork) | [10.5281/zenodo.20210456](https://doi.org/10.5281/zenodo.20210456) |
 | Training data for the neural decoder | [10.48436/12y18-j6236](https://doi.org/10.48436/12y18-j6236) |
+
+These DOIs resolve to the exact archived snapshots used to produce the paper. The always-latest releases are available under the concept DOIs [10.5281/zenodo.20210464](https://doi.org/10.5281/zenodo.20210464) (DeepShapeOpt) and [10.5281/zenodo.20205817](https://doi.org/10.5281/zenodo.20205817) (DeepSDFStruct).
 
 To reproduce the optimization results, the training data is **not required** — the pretrained decoder checkpoints are shipped inside the archived DeepSDFStruct release under `trained_models/`. The training data is only needed to retrain the decoder from scratch.
 
