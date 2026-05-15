@@ -33,6 +33,7 @@ tiling_results/
 results_tiling/
 flowRate/
 .vscode/*
+confidential/*
 
 # OpenFOAM cases: ignore everything in any foam_case, except these specific items
 **/foam_case/**
