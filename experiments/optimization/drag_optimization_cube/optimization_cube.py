@@ -13,13 +13,12 @@ from DeepSDFStruct.export_knot_grid import (
     export_control_lattice_paramspace,
     export_design_volume_paramspace,
 )
+from DeepSDFStruct.mesh import export_surface_mesh
 
 import deepshapeopt.config as config
-import deepshapeopt.foam_utils as foam_utils
 from deepshapeopt.config import ExperimentSpecifications
 from deepshapeopt.logging import OptimizationLogger
 from deepshapeopt.mesh import compute_tet_mesh_volume_centroid
-from deepshapeopt.plotting_utils import plot_optimization_history, plot_convergence_diagnostics, save_shape_snapshot
 from deepshapeopt.shape_optimization import (
     DTYPE,
     setup_model_and_domain,
@@ -31,6 +30,13 @@ from deepshapeopt.shape_optimization import (
     load_sensitivities,
     mask_gradients,
     log_iteration_time,
+)
+
+import deepshapeopt.foam_utils as foam_utils
+from deepshapeopt.plotting_utils import (
+    plot_optimization_history,
+    plot_convergence_diagnostics,
+    save_shape_snapshot,
 )
 
 
@@ -145,7 +151,6 @@ def optimize_shape(experiment_path: Path, specs):
             mesh_type="volume",
         )
 
-        from DeepSDFStruct.mesh import export_surface_mesh
         export_surface_mesh(paths.optimization / "current_shape.stl", mesh.to_gus(), derivative)
 
         save_shape_snapshot(

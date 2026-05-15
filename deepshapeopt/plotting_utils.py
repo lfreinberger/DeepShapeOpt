@@ -1,10 +1,21 @@
+from __future__ import annotations
+
 import os
 import re
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-import torch
 from pathlib import Path
+
+
+def _get_pyplot():
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
+def _get_poly3d_collection():
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    return Poly3DCollection
 
 
 def to_numpy(x):
@@ -79,6 +90,7 @@ def plot_optimization_history(
     normalize_objective=False,
     normalize_constraint=False,
 ):
+    plt = _get_pyplot()
 
     history_obj = np.asarray(to_numpy(history_obj), dtype=float)
 
@@ -139,6 +151,7 @@ def plot_optimization_history(
 
 
 def plot_residuals_from_log(logfile, output_dir="."):
+    plt = _get_pyplot()
 
     patterns = {
         "Ux": re.compile(r"Solving for Ux, Initial residual = ([0-9eE+.\-]+)"),
@@ -252,6 +265,8 @@ def save_shape_snapshot(
     title: str | None = None,
     show_axes: bool = True,
 ):
+    plt = _get_pyplot()
+    Poly3DCollection = _get_poly3d_collection()
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -351,6 +366,8 @@ def plot_center_constraint_history(
     history_center_penalty_weighted,
     output_dir,
 ):
+    plt = _get_pyplot()
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -394,6 +411,8 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
     output_dir : Path
         Directory where ``convergence_diagnostics.png`` is saved.
     """
+    plt = _get_pyplot()
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

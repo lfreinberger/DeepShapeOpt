@@ -1,26 +1,13 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Tuple
+
 import numpy as np
 import trimesh
 import torch
-from collections import defaultdict
-from pathlib import Path
-from typing import Callable, Dict, List
 from stl import mesh as stl_mesh
-from DeepSDFStruct.optimization import tet_signed_vol
-
-
-from collections import defaultdict
-from pathlib import Path
-from typing import Dict, List, Tuple
-
-import numpy as np
-import trimesh
-import numpy as np
-import trimesh
-from collections import defaultdict
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal
 
 
 def compute_tet_mesh_volume_centroid(
@@ -49,6 +36,8 @@ def compute_tet_mesh_volume_centroid(
     diag : dict, optional
         Only when return_diagnostics=True.
     """
+    from DeepSDFStruct.optimization import tet_signed_vol
+
     # Fix orientation: swap vertices 1 and 2 on negative-volume tets
     perm = torch.tensor([0, 2, 1, 3], device=tets.device)
     tets = tets[:, perm]

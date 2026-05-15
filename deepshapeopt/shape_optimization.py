@@ -6,7 +6,7 @@ experiment can be written as a short sequence of calls with only
 experiment-specific logic inline.
 """
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,20 +17,12 @@ import trimesh
 
 from DeepSDFStruct.lattice_structure import LatticeSDFStruct
 from DeepSDFStruct.mesh import TorchScaling, create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
-from DeepSDFStruct.optimization import MMA
 from DeepSDFStruct.parametrization import SplineParametrization
 from DeepSDFStruct.pretrained_models import get_model
 from DeepSDFStruct.SDF import SDFfromDeepSDF
 
-from deepshapeopt.config import ExperimentPaths, make_experiment_paths, ensure_experiment_dirs
 from deepshapeopt.parameters import locked_indices_from_bboxes, make_locked_masks
 from deepshapeopt.reconstruction import fit_box_to_unit_cube, init_spline_parameters, build_parameter_spline, run_sdf_reconstruction
-import deepshapeopt.foam_utils as foam_utils
-from deepshapeopt.plotting_utils import (
-    plot_optimization_history,
-    plot_residuals_from_log,
-    save_shape_snapshot,
-)
 
 DTYPE = torch.float32
 
@@ -268,7 +260,7 @@ class OptSetup:
     mask_locked_cp: torch.Tensor
     mask_locked_flat: torch.Tensor
     locked_values: torch.Tensor
-    optimizer: MMA
+    optimizer: Any
 
 
 def setup_optimizer(
@@ -280,6 +272,8 @@ def setup_optimizer(
     n_constraints: int = 1,
 ) -> OptSetup:
     """Create the MMA optimizer with locked control points."""
+    from DeepSDFStruct.optimization import MMA
+
     param = next(lattice_struct.parametrization.parameters())
 
     locked_idx = locked_indices_from_bboxes(
@@ -336,6 +330,9 @@ def generate_mesh(lattice_struct, opt_cfg, rec_cfg, box_norm, scaling, mesh_type
 
 def run_foam_case(case_dir: Path, mesh, derivative, opt_results_path: Path):
     """Export STL to foam case and run OpenFOAM."""
+    import deepshapeopt.foam_utils as foam_utils
+    from deepshapeopt.plotting_utils import plot_residuals_from_log
+
     export_surface_mesh(
         case_dir / "constant/triSurface/shape.stl",
         mesh.to_gus(), derivative,
@@ -370,6 +367,8 @@ def load_sensitivities(
     For "conservative", extra kwargs:
         faces (torch.Tensor): STL face connectivity, required for scatter
     """
+    import deepshapeopt.foam_utils as foam_utils
+
     time_step = foam_case[time_index]
     return_diagnostics = bool(kwargs.get("return_diagnostics", False))
     sens_diag: dict[str, Any] = {}

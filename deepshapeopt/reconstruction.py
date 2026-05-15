@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Reconstruction utilities and standalone reconstruction pipeline.
 
@@ -9,38 +11,16 @@ Provides:
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import splinepy
 import torch
-import trimesh
-import mlflow
 
-from DeepSDFStruct.pretrained_models import get_model
-from DeepSDFStruct.SDF import SDFfromDeepSDF, SDFfromMesh, normalize_mesh_to_unit_cube
-from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
-from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-from DeepSDFStruct.parametrization import SplineParametrization
-from DeepSDFStruct.torch_spline import TorchScaling
-from DeepSDFStruct.deep_sdf.reconstruction import reconstruct_from_samples
-from DeepSDFStruct.sampling import (
-    SampledSDF,
-    random_sample_sdf,
-    sample_mesh_surface,
-    save_points_to_vtp,
-)
-from DeepSDFStruct.export_knot_grid import (
-    export_knot_grid_paramspace,
-    export_control_lattice_paramspace,
-)
-from DeepSDFStruct.deep_sdf.metrics.error_metrics import compute_metrics_from_vtp
-
-from deepshapeopt.analysis import (
-    add_vertex_colors_from_scalar,
-    compute_vertex_sdf_error,
-    trimesh_to_pyvista,
-)
-from deepshapeopt.config import ExperimentSpecifications, make_experiment_paths, ensure_experiment_dirs
+if TYPE_CHECKING:
+    import trimesh
+    from DeepSDFStruct.lattice_structure import LatticeSDFStruct
+    from deepshapeopt.config import ExperimentSpecifications
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +141,9 @@ def run_sdf_reconstruction(
     dict with keys: ``params``, ``final_loss``, ``num_steps``,
     ``surface_samples`` (SampledSDF, only if save_vtp).
     """
+    from DeepSDFStruct.deep_sdf.reconstruction import reconstruct_from_samples
+    from DeepSDFStruct.sampling import save_points_to_vtp
+
     device = rec_cfg.get("device", "cuda")
     stds = rec_cfg.get("samples_surface_stds", [0.025, 0.0001])
     n_uniform_samples = int(rec_cfg.get("n_uniform_samples", 100000))
@@ -246,6 +229,9 @@ def sample_sdf(mesh, bounds, n_uniform_samples, n_surface_samples, device, stds,
         If True, use box-constrained surface sampling (clips samples to bounds).
         If False, use unconstrained surface sampling.
     """
+    from DeepSDFStruct.SDF import SDFfromMesh
+    from DeepSDFStruct.sampling import SampledSDF, random_sample_sdf, sample_mesh_surface
+
     gt_sdf = SDFfromMesh(mesh, scale=False)
 
     uniform_samples = random_sample_sdf(
@@ -382,6 +368,26 @@ def reconstruct_shape(
         Identifier for this run. Auto-generated from mesh name and tiling
         if not provided.
     """
+    import trimesh
+    from DeepSDFStruct.pretrained_models import get_model
+    from DeepSDFStruct.SDF import SDFfromDeepSDF, SDFfromMesh, normalize_mesh_to_unit_cube
+    from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
+    from DeepSDFStruct.lattice_structure import LatticeSDFStruct
+    from DeepSDFStruct.parametrization import SplineParametrization
+    from DeepSDFStruct.torch_spline import TorchScaling
+    from DeepSDFStruct.sampling import sample_mesh_surface, save_points_to_vtp
+    from DeepSDFStruct.export_knot_grid import (
+        export_knot_grid_paramspace,
+        export_control_lattice_paramspace,
+    )
+    from DeepSDFStruct.deep_sdf.metrics.error_metrics import compute_metrics_from_vtp
+    from deepshapeopt.analysis import (
+        add_vertex_colors_from_scalar,
+        compute_vertex_sdf_error,
+        trimesh_to_pyvista,
+    )
+    from deepshapeopt.config import make_experiment_paths, ensure_experiment_dirs
+
     experiment_path = Path(experiment_path).resolve()
     rec_cfg = specs["reconstruction"]
 
@@ -636,6 +642,9 @@ def reconstruct_shape(
         print(f"\nSaved unified error metrics to: {local_dir / 'error_metrics.json'}")
 
     # --- MLflow logging ---
+    if use_mlflow:
+        import mlflow
+
     if use_mlflow and mlflow.active_run() is not None:
         mlflow.log_param(f"{metric_prefix}_mesh_path", str(mesh_path))
         mlflow.log_param(f"{metric_prefix}_tiling", str(tiling))
