@@ -1,7 +1,7 @@
 {
-  "results_name": "results_cube",
+  "results_name": "results_cube_with_holes_4x4x4",
   "reconstruction": {
-    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_holes.stl",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
     "model_checkpoint": "latest",
     "tiling": [2, 2, 2],
@@ -10,7 +10,7 @@
     "n_uniform_samples": 100000,
     "n_surface_samples": 500000,
     "lr": 5e-3,
-    "num_iterations": 35,
+    "num_iterations": 30,
     "batch_size": 4096,
     "code_reg_lambda": 0.0,
     "code_bound": 1.0,
@@ -20,8 +20,9 @@
     "reuse_parameter": false
   },
   "optimization": {
+    "debug": false,
     "num_iter": 60,
-    "mesh_resolution": 48,
+    "mesh_resolution": 24,
     "max_step": 0.02,
     "bounds": [-2.0, 2.0],
     "use_center_constraint": true,

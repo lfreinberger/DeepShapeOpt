@@ -1,4 +1,7 @@
 from pathlib import Path
+import contextlib
+import io
+import logging
 import os
 import re
 import time
@@ -11,6 +14,9 @@ import shutil
 from foamlib import FoamCase, FoamFile, FoamFieldFile
 import warnings
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_foam_runtime(template_dir: Path, run_name: str) -> Path:
@@ -72,7 +78,11 @@ def run_openfoam_case(case_dir: Path, verbose: bool = True):
         raise FileNotFoundError(f"Foam case path does not exist: {case_dir}")
 
     foam_case = FoamCase(case_dir)
-    foam_case.clean()
+    if verbose:
+        foam_case.clean()
+    else:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            foam_case.clean()
 
     paraview_file = case_dir / "open.foam"
     paraview_file.touch(exist_ok=True)
@@ -80,7 +90,7 @@ def run_openfoam_case(case_dir: Path, verbose: bool = True):
     cmd = "source $WM_PROJECT_DIR/etc/bashrc && ./Allrun"
 
     start = time.time()
-    print(f"Running OpenFOAM ...")
+    logger.info("Running OpenFOAM")
     if verbose:
         subprocess.run(
             cmd,
@@ -101,7 +111,7 @@ def run_openfoam_case(case_dir: Path, verbose: bool = True):
         )
 
     end = time.time()
-    print(f"Allrun took {end - start:.2f} seconds")
+    logger.debug("OpenFOAM finished in %.2f seconds", end - start)
 
     return foam_case
 
@@ -159,7 +169,7 @@ def map_sensitivities_to_vertices(sampled_coords, sensitivities, verts, tol=1e-9
         raise ValueError(
             f"Only {n_matched} out of {n_total} vertices matched within tolerance {tol}. "
         )
-    print(f"Matched vertices: {n_matched} / {n_total} with max. distance {dist.max():.2e}")
+    logger.debug("Matched vertices: %d / %d with max distance %.2e", n_matched, n_total, dist.max())
 
     # initialize with zeros
     sens_on_verts = np.zeros(n_total, dtype=sensitivities.dtype)
@@ -183,7 +193,13 @@ def interpolate_sensitivities_to_vertices(
     else:
         nonzero_mask = sensitivities != 0
     n_nonzero = int(np.sum(nonzero_mask))
-    print(f"Interpolation: {n_verts} vertices, {n_nonzero}/{len(sampled_coords)} nonzero source points ({n_nonzero/len(verts_np)*100:.1f}%)")
+    logger.debug(
+        "Interpolation: %d vertices, %d/%d nonzero source points (%.1f%%)",
+        n_verts,
+        n_nonzero,
+        len(sampled_coords),
+        n_nonzero / len(verts_np) * 100,
+    )
 
     src_coords = sampled_coords[nonzero_mask]
     src_sens = sensitivities[nonzero_mask]
@@ -200,7 +216,7 @@ def interpolate_sensitivities_to_vertices(
     if n_fallback > 0:
         nearest_interp = NearestNDInterpolator(src_coords, src_sens)
         sens_on_verts[nan_rows] = nearest_interp(verts_np[nan_rows])
-        print(f"Interpolation: {n_fallback} vertices outside convex hull, filled with nearest-neighbor")
+        logger.debug("Interpolation: %d vertices outside convex hull, filled with nearest-neighbor", n_fallback)
 
     if warn_tol is not None:
         tree = cKDTree(src_coords)
@@ -288,7 +304,7 @@ def load_boundary_patch_faces(case_dir, patch_name="dragObject"):
         for j in range(1, len(face) - 1):
             triangles.append([face[0], face[j], face[j + 1]])
 
-    print(f"Boundary patch '{patch_name}': {n_faces} faces -> {len(triangles)} triangles")
+    logger.debug("Boundary patch %s: %d faces -> %d triangles", patch_name, n_faces, len(triangles))
     return np.array(triangles, dtype=np.int64)
 
 
@@ -361,9 +377,11 @@ def project_sensitivities_to_vertices(
 
     n_src = len(local_coords)
     n_target = len(target_np)
-    print(
-        f"Projection: {n_target} target vertices, "
-        f"{n_src} source vertices, {len(local_faces)} source triangles"
+    logger.debug(
+        "Projection: %d target vertices, %d source vertices, %d source triangles",
+        n_target,
+        n_src,
+        len(local_faces),
     )
 
     # Build pyvista surface mesh for cell locator
@@ -401,7 +419,7 @@ def project_sensitivities_to_vertices(
     # Distance diagnostics
     dists = np.linalg.norm(target_np - closest_pts, axis=1)
     max_dist = dists.max()
-    print(f"Projection: max distance = {max_dist:.6e}")
+    logger.debug("Projection: max distance = %.6e", max_dist)
 
     if warn_tol is not None:
         n_large = int(np.sum(dists > warn_tol))
@@ -411,8 +429,8 @@ def project_sensitivities_to_vertices(
                 f"Max distance = {max_dist:.6e}.",
                 RuntimeWarning,
             )
-    print(f"abs(local_sens).mean(): {abs(local_sens).mean():.6e}")
-    print(f"abs(sens_on_verts).mean(): {abs(sens_on_verts).mean():.6e}")
+    logger.debug("abs(local_sens).mean(): %.6e", abs(local_sens).mean())
+    logger.debug("abs(sens_on_verts).mean(): %.6e", abs(sens_on_verts).mean())
     return sens_on_verts
 
 
@@ -455,9 +473,10 @@ def conservative_sensitivity_transfer(
 
     n_src = len(local_coords)
     n_target = len(target_np)
-    print(
-        f"Conservative transfer: {n_src} source (OF) vertices, "
-        f"{n_target} target (STL) vertices"
+    logger.debug(
+        "Conservative transfer: %d source OF vertices, %d target STL vertices",
+        n_src,
+        n_target,
     )
 
     # --- build pyvista STL mesh for cell locator ---
@@ -501,11 +520,12 @@ def conservative_sensitivity_transfer(
         "conservative_n_src": int(n_src),
         "conservative_n_target": int(n_target),
     }
-    print(f"Conservative transfer: max projection distance = {max_dist:.6e}")
-    print(
-        f"Conservative transfer: sum|F_OF| = {total_force_of:.6e}, "
-        f"sum|F_STL| = {total_force_stl:.6e}, "
-        f"ratio = {total_force_stl / total_force_of:.6f}"
+    logger.debug("Conservative transfer: max projection distance = %.6e", max_dist)
+    logger.debug(
+        "Conservative transfer: sum|F_OF|=%.6e, sum|F_STL|=%.6e, ratio=%.6f",
+        total_force_of,
+        total_force_stl,
+        total_force_stl / total_force_of,
     )
 
     if warn_tol is not None:
@@ -687,7 +707,7 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
     dst_internal = f"{vtk_series_dir}/internal_{e:04d}.vtu"
 
     shutil.copy2(src_internal, dst_internal)
-    print(f"Saved volume VTK for ParaView: {dst_internal}")
+    logger.debug("Saved volume VTK for ParaView: %s", dst_internal)
 
     # ---------- boundary (optional) ----------
     boundary_dir = latest_vtk_dir / "boundary"
@@ -696,9 +716,6 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
     if boundary_dir.exists() and src_boundary.exists():
         dst_boundary = f"{vtk_series_dir}/dragObject_{e:04d}.vtp"
         shutil.copy2(src_boundary, dst_boundary)
-        print(f"Saved boundary VTK for ParaView: {dst_boundary}")
+        logger.debug("Saved boundary VTK for ParaView: %s", dst_boundary)
     else:
-        print(
-            f"WARNING: boundary VTK not found for iteration {e} "
-            f"(expected {src_boundary})"
-        )
+        logger.debug("Boundary VTK not found for iteration %s (expected %s)", e, src_boundary)

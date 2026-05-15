@@ -1,150 +1,130 @@
 # DeepShapeOpt
 
-DeepShapeOpt is a research codebase for neural implicit geometry representation
-and gradient-based shape optimization. The repository contains the reusable
-method implementation and examples used to reproduce the results from
-*Shape Optimization Using a Neural Implicit Geometry Representation Framework*.
+DeepShapeOpt is a research codebase for shape optimization with neural implicit geometry representations and OpenFOAM-based adjoint sensitivities. The public repository focuses on drag optimization of cube-like benchmark geometries.
 
-## Highlights
+## Installation
 
-- Neural implicit geometry (DeepSDF) parameterization with B-spline lattices.
-- Free-form deformation (FFD) optimization baseline.
-- Reconstruction pipelines with configurable sampling, tiling, and loss settings.
-- OpenFOAM-driven shape optimization with adjoint sensitivities.
-- Reproducible, config-first experiments and standardized output structure.
-
-## Dependencies
-
-- Python >= 3.11.
-- Core deps are defined in pyproject.toml, including `DeepSDFStruct` and
-  scientific tooling (torchmesh, gmsh, foamlib, mlflow, etc.).
-- A compatible OpenFOAM environment is required for optimization experiments.
-
-DeepShapeOpt uses `DeepSDFStruct` as a separate dependency. The dependency is
-currently pinned to commit `0fcd508`; tag that commit as `v1.0.0-paper` before
-the final archived release.
-
-The intended citable releases are:
-
-- DeepShapeOpt v1.0.0-paper
-- DeepSDFStruct v1.0.0-paper
-
-After creating GitHub releases, archive both releases with Zenodo and replace the
-placeholder citation metadata with the Zenodo version DOIs.
-
-## Setup
-
-Create a Python environment and install the package in editable mode:
+The project uses Python 3.11+ and `uv`.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv sync
 ```
 
-For full optimization runs, install and source a compatible OpenFOAM
-environment before running the optimization scripts.
+`DeepSDFStruct` is configured as an editable local dependency in `pyproject.toml`. Make sure the path in `[tool.uv.sources]` matches your checkout.
 
-### Data and Results Locations
+## Environment
 
-The data package is distributed separately through the TU Wien cloud. See
-data_manifest.json for the expected layout and checksums.
-
-Set the data/model/result locations so experiment configs resolve correctly:
+Set these variables before running an optimization:
 
 ```bash
 export DEEPSHAPEOPT_DATA_DIR=/path/to/deepshapeopt-data
-export DEEPSHAPEOPT_MODEL_DIR=$DEEPSHAPEOPT_DATA_DIR/models
+export DEEPSHAPEOPT_MODEL_DIR=/path/to/DeepSDFStruct/trained_models
 export DEEPSHAPEOPT_RESULTS_DIR=/path/to/deepshapeopt-results
 ```
 
-Experiment configs expand environment variables at load time, so paths like
-${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32 work directly in JSON files.
+For local development, `.vscode/launch.json` contains matching debug configurations.
 
-## Quickstart
+## Repository layout
 
-Make sure the pretrained primitive decoder is available in the data package
-under:
+- `scripts/` — pipeline entry points (`reconstruct.py`, `optimize_drag_latent.py`, `optimize_drag_ffd.py`); each takes a `--config` JSON.
+- `deepshapeopt/` — library package: config loading, lattice/spline parametrization, SDF reconstruction, the outer optimization loop, OpenFOAM case handling, meshing, and logging/plotting utilities.
+- `experiments/drag_cube/` — drag-optimization configs (`config_latent_*.json`, `config_ffd_*.json`) and the OpenFOAM `foam_case/` template that the scripts copy per run.
+- `experiments/reconstruction/{rim,shiba,ship_propeller,feed_channel}/` — public reconstruction cases, one `config.json` each.
+- `data/shapes/` — input STL meshes referenced by the configs via `${DEEPSHAPEOPT_DATA_DIR}`.
+
+## Workflows
+
+### Shape Reconstruction
+
+The reconstruction workflow fits a DeepSDF microtile lattice to an input STL without running any flow solver.
+
+```bash
+uv run python scripts/reconstruct.py \
+  --config experiments/reconstruction/rim/config.json
+```
+
+Other public reconstruction configs:
 
 ```text
-DeepSDFStruct/trained_models/primitives_cl32
+experiments/reconstruction/shiba/config.json
+experiments/reconstruction/ship_propeller/config.json
+experiments/reconstruction/feed_channel/config.json
 ```
 
-Place or symlink that directory at:
+### Latent Drag Optimization
+
+The latent workflow reconstructs the shape with a DeepSDF microtile and optimizes B-spline latent parameters.
+
+```bash
+uv run python scripts/optimize_drag_latent.py \
+  --config experiments/drag_cube/config_latent_cube.json
+```
+
+Other public latent configs:
 
 ```text
-${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32
+experiments/drag_cube/config_latent_cube_with_cylinders.json
+experiments/drag_cube/config_latent_cube_with_holes.json
 ```
 
-Alternatively, train the primitive decoder from the provided training data:
+### FFD Drag Optimization
+
+The FFD workflow optimizes a free-form deformation of the input mesh directly.
 
 ```bash
-python scripts/train_latent_field.py \
-  --config experiments/training/primitives_cl32/specs.json \
-  --output "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32"
+uv run python scripts/optimize_drag_ffd.py \
+  --config experiments/drag_cube/config_ffd_cube_with_cylinders_7x7x7.json
 ```
 
-Run a reconstruction example:
-
-```bash
-python experiments/reconstruction/feed_channel/reconstruct_feed_channel.py
-```
-
-Run the cube optimization with the neural SDF parameterization:
-
-```bash
-python experiments/optimization/drag_optimization_cube/optimization_cube.py \
-  --config experiments/optimization/drag_optimization_cube/config_cube_with_holes.json
-```
-
-Run the cube optimization with FFD:
-
-```bash
-python experiments/optimization/drag_optimization_cube/optimization_cube_ffd.py \
-  --config experiments/optimization/drag_optimization_cube/config_ffd_cube_with_cylinders_7x7x7.json
-```
-
-## Experiments Overview
-
-Reconstruction experiments live under experiments/reconstruction and are driven
-by JSON configs (mesh path, spline tiling, sampling counts, and training
-iterations). Example entry points:
-
-- feed_channel/reconstruct_feed_channel.py
-- primitive_shape/reconstruct_primitive_shape.py
-- rim/reconstruct_rim.py
-- shiba/reconstruct_shiba.py
-- ship_propeller/reconstruct_ship_propeller.py
-
-Optimization experiments live under experiments/optimization and wrap
-reconstruction, CFD runs, sensitivity extraction, and MMA optimization. The
-configs include reconstruction parameters, optimization hyperparameters, and
-OpenFOAM sensitivity extraction settings.
-
-## Output Structure
-
-Each experiment writes results under its local results directory (e.g.
-experiments/optimization/drag_optimization_cube/results_cube/). If
-DEEPSHAPEOPT_RESULTS_DIR is set, heavy data (VTK series, STL series, control
-lattices) is mirrored to that external location while a lightweight summary
-stays alongside the experiment.
-
-The common folder structure is:
+The smaller FFD lattice config is available at:
 
 ```text
-results*/
+experiments/drag_cube/config_ffd_cube_with_cylinders_5x5x5.json
+```
+
+## Outputs
+
+Each run writes lightweight results next to the experiment config, for example:
+
+```text
+experiments/drag_cube/results_cube/
   reconstruction/
   optimization/
 ```
 
-## Reproducibility Notes
+The optimization folder contains the current shape, optimized parameters, CSV/text history, residual plots, convergence diagnostics, and optimization history plots.
 
-- The paper workflow includes: (1) primitive decoder training, (2) flow-channel
-  reconstruction, (3) cube drag optimization with the neural SDF
-  parameterization, (4) cube drag optimization with FFD.
+Large debug exports are written only when debug mode is enabled. Enable debug mode with either:
+
+```json
+{
+  "debug": true
+}
+```
+
+or:
+
+```json
+{
+  "optimization": {
+    "debug": true
+  }
+}
+```
+
+When `heavy_data_output_path` is set, debug exports are mirrored under `DEEPSHAPEOPT_RESULTS_DIR` while preserving the experiment path layout.
+
+## Notes
+
+- Iteration numbering starts at `0` in logs, files, and plots.
+- Normal console output is intentionally concise: iteration, objective, constraints, MMA change, and timing.
+- Detailed sensitivity-transfer diagnostics and heavy visualization series are debug-only.
+- OpenFOAM residual plots are generated whenever solver logs are available.
 
 ## Citation
 
-CITATION.cff will be updated with Zenodo DOIs after the v1.0.0-paper releases
-are archived. Please cite both DeepShapeOpt and DeepSDFStruct when referencing
-the method and experiments.
+If this code supports a publication, cite the project using `CITATION.cff`.
+
+## License
+
+See `LICENSE`.

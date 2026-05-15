@@ -1,17 +1,18 @@
 {
-  "results_name": "results_ffd_cube_with_cylinders_7x7x7",
+  "results_name": "results_ffd_cube_with_cylinders_5x5x5",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
-    "n_control_points": [7, 7, 7],
+    "n_control_points": [5, 5, 5],
     "spline_degree": [2, 2, 2],
     "design_domain": [[-0.9, -0.9, -0.9], [0.9, 0.9, 0.9]],
     "device": "cuda"
   },
   "optimization": {
+    "debug": false,
     "num_iter": 60,
     "mesh_resolution": 64,
     "max_step": 0.05,
-    "bounds": [-5.0, 5.0],
+    "bounds": [-2.0, 2.0],
     "use_center_constraint": true,
     "center_tol": 0.05,
     "convergence_obj_tol": 0.0002,
@@ -25,7 +26,7 @@
     },
     "use_jacobian_constraint": true,
     "jacobian_threshold": 0.1,
-    "jacobian_samples": 16
+    "jacobian_samples": 8
   }
 
 }

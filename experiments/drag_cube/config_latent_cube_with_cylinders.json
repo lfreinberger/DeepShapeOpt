@@ -20,6 +20,7 @@
     "reuse_parameter": false
   },
   "optimization": {
+    "debug": false,
     "num_iter": 60,
     "mesh_resolution": 48,
     "max_step": 0.02,

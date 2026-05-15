@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 """
-Reconstruction utilities and standalone reconstruction pipeline.
+Reconstruction utilities and the standalone reconstruction pipeline.
 
-Provides:
-- Building blocks for B-spline parametrized SDF reconstruction
-  (used by both standalone reconstruction experiments and the optimization pipeline)
-- A complete `reconstruct_shape` function for standalone reconstruction experiments
+Public API:
+- ``fit_lattice_to_sdf``: core fit step — sample the ground-truth SDF,
+  call ``reconstruct_from_samples``, and export sample VTPs. Shared by both
+  the standalone pipeline and the in-optimization phase.
+- ``reconstruct_shape``: standalone pipeline used by ``scripts/reconstruct.py``.
+- ``export_reconstructed_artifacts`` / ``with_float32_lattice``: post-fit
+  export helpers shared with ``shape_optimization.run_reconstruction``
+  (the in-optimization reconstruction phase, which lives there because it
+  also handles ``reuse_parameter`` caching).
 """
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,6 +22,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import splinepy
 import torch
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import trimesh
@@ -75,7 +83,7 @@ def build_parameter_spline(
         knots = np.linspace(mins[i_box], maxs[i_box], n_box + 1)[1:-1]
         if len(knots) == 0:
             continue
-        print(f"Inserting {n_box - 1} knots at {knots} into spline dim {i_box}")
+        logger.debug("Inserting %d knots at %s into spline dim %d", n_box - 1, knots, i_box)
         param_spline_sp.insert_knots(i_box, knots)
 
     return param_spline_sp
@@ -87,7 +95,7 @@ def init_spline_parameters(param_spline, mean=0.0, std=0.001):
         torch.nn.init.normal_(p, mean=mean, std=std)
 
 
-def run_sdf_reconstruction(
+def fit_lattice_to_sdf(
     lattice_struct: LatticeSDFStruct,
     mesh: trimesh.Trimesh,
     bounds: torch.Tensor,
@@ -100,11 +108,10 @@ def run_sdf_reconstruction(
     mlflow_log_every_n_steps: int = 10,
     box_constrained: bool = True,
 ):
-    """Core SDF reconstruction: sample ground truth, fit, and export.
+    """Core fit step: sample ground-truth SDF, fit the lattice, export VTPs.
 
-    This is the single reconstruction entry point used by both the standalone
-    reconstruction pipeline (`reconstruct_shape`) and the optimization
-    pipeline (`shape_optimization.run_reconstruction`).
+    Shared by both the standalone pipeline (`reconstruct_shape`) and the
+    in-optimization phase (`shape_optimization.run_reconstruction`).
 
     Parameters
     ----------
@@ -283,12 +290,15 @@ def sample_sdf(mesh, bounds, n_uniform_samples, n_surface_samples, device, stds,
 
         final_samples = torch.cat(all_samples, dim=0)[:n_surface_samples]
         final_distances = torch.cat(all_distances, dim=0)[:n_surface_samples]
-        print(
-            f"Box-constrained sampling (rejection): {final_samples.shape[0]}/{n_surface_samples} "
-            f"surface samples inside bounds (acceptance rate ~{acceptance_rate:.1%})"
+        logger.debug(
+            "Box-constrained sampling (rejection): %d/%d surface samples inside bounds (acceptance rate ~%.1f%%)",
+            final_samples.shape[0], n_surface_samples, acceptance_rate * 100,
         )
         if final_samples.shape[0] < n_surface_samples:
-            print(f"WARNING: only collected {final_samples.shape[0]} of {n_surface_samples} requested surface samples inside bounds")
+            logger.warning(
+                "Only collected %d of %d requested surface samples inside bounds",
+                final_samples.shape[0], n_surface_samples,
+            )
         surface_samples = SampledSDF(samples=final_samples, distances=final_distances)
 
     return uniform_samples + surface_samples
@@ -324,6 +334,99 @@ def fit_box_to_unit_cube(box_bounds: torch.Tensor, eps: float = 1e-12):
 
 
 # ---------------------------------------------------------------------------
+# Post-fit export helpers (shared by both pipelines)
+# ---------------------------------------------------------------------------
+
+def with_float32_lattice(lattice_struct, bounds, fn):
+    """Run *fn(bounds_f32)* with the lattice temporarily cast to float32.
+
+    DeepSDF/FlexiCubes mesh generation requires float32; the outer
+    optimization keeps parameters in float64. This helper performs the
+    local cast around ``fn`` and restores the original dtype afterwards.
+    """
+    params = list(lattice_struct.parametrization.parameters())
+    saved_params = [p.data for p in params]
+    for p in params:
+        p.data = p.data.float()
+
+    saved_bounds = lattice_struct.bounds.data
+    lattice_struct.bounds.data = lattice_struct.bounds.data.float()
+
+    saved_default_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float32)
+
+    try:
+        return fn(bounds.float())
+    finally:
+        torch.set_default_dtype(saved_default_dtype)
+        for p, s in zip(params, saved_params):
+            p.data = s
+        lattice_struct.bounds.data = saved_bounds
+
+
+def export_reconstructed_artifacts(
+    lattice_struct,
+    output_dir: Path,
+    *,
+    mesh_resolution: int,
+    bounds: torch.Tensor,
+    device,
+    scaling=None,
+    extend_bounds: bool = True,
+    sdf_grid_N: int = 64,
+    sdf_grid_name: str = "reconstructed_sdf_grid.vtk",
+    param_mesh_name: str = "reconstructed_mesh_parameterspace.stl",
+    physical_mesh_name: str = "reconstructed_mesh.stl",
+    export_sdf_grid: bool = True,
+    export_param_mesh: bool = True,
+) -> Path:
+    """Export SDF grid + param-space STL + (if scaling) physical-space STL.
+
+    Wraps generation in :func:`with_float32_lattice`. Returns the path of the
+    physical-space mesh (or the param-space mesh if no ``scaling`` was given).
+    """
+    from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
+
+    output_dir = Path(output_dir)
+
+    def _export(bounds_f32):
+        if export_sdf_grid:
+            export_sdf_grid_vtk(
+                lattice_struct, N=sdf_grid_N,
+                filename=str(output_dir / sdf_grid_name),
+                bounds=bounds_f32,
+            )
+
+        if export_param_mesh:
+            ps_mesh, ps_deriv = create_3D_mesh(
+                lattice_struct, mesh_resolution,
+                mesh_type="surface", differentiate=False,
+                device=device, bounds=bounds_f32,
+                extend_bounds=extend_bounds,
+            )
+            export_surface_mesh(
+                str(output_dir / param_mesh_name), ps_mesh.to_gus(), ps_deriv,
+            )
+
+        if scaling is None:
+            return output_dir / param_mesh_name
+
+        phys_mesh, phys_deriv = create_3D_mesh(
+            lattice_struct, mesh_resolution,
+            mesh_type="surface", differentiate=False,
+            device=device, bounds=bounds_f32,
+            deformation_function=scaling,
+            extend_bounds=extend_bounds,
+        )
+        export_surface_mesh(
+            str(output_dir / physical_mesh_name), phys_mesh.to_gus(), phys_deriv,
+        )
+        return output_dir / physical_mesh_name
+
+    return with_float32_lattice(lattice_struct, bounds, _export)
+
+
+# ---------------------------------------------------------------------------
 # Private helpers for reconstruct_shape
 # ---------------------------------------------------------------------------
 
@@ -336,6 +439,127 @@ def _write_json(path: Path, obj: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
+
+
+def _compute_reconstruction_metrics(
+    *,
+    lattice_struct,
+    mesh,
+    mesh_orig,
+    reconstructed_mesh_path: Path,
+    heavy_dir: Path,
+    mesh_stem: str,
+    n_surface_samples: int,
+    samples_surface_stds,
+    error_cutoff: float,
+    device,
+):
+    """Compute SDF-sample and mesh-vertex error metrics; save accompanying VTPs."""
+    import trimesh
+    from DeepSDFStruct.SDF import SDFfromMesh
+    from DeepSDFStruct.sampling import sample_mesh_surface, save_points_to_vtp
+    from DeepSDFStruct.deep_sdf.metrics.error_metrics import compute_metrics_from_vtp
+    from deepshapeopt.analysis import (
+        add_vertex_colors_from_scalar,
+        compute_vertex_sdf_error,
+        trimesh_to_pyvista,
+    )
+
+    # Sample GT SDF on the surface and save GT + reconstructed sample VTPs.
+    gt_sdf_obj = SDFfromMesh(mesh, scale=False)
+    surface_samples = sample_mesh_surface(
+        gt_sdf_obj, mesh,
+        n_samples=n_surface_samples, stds=samples_surface_stds, device=device,
+    )
+    gt_points = torch.hstack(
+        (surface_samples.samples.detach(), surface_samples.distances.detach())
+    )
+    save_points_to_vtp(heavy_dir / "gt_sdf_samples_surface.vtp", gt_points)
+
+    samples = surface_samples.samples.detach()
+    rec_dist = lattice_struct(samples)
+    rec_points = torch.hstack((samples, rec_dist.detach()))
+    save_points_to_vtp(heavy_dir / "rec_sdf_samples_surface.vtp", rec_points)
+
+    sdf_metrics = compute_metrics_from_vtp(
+        gt_vtp_path=heavy_dir / "gt_sdf_samples_surface.vtp",
+        pred_vtp_path=heavy_dir / "rec_sdf_samples_surface.vtp",
+        cutoff=error_cutoff,
+        output_json_path=None,
+    )
+
+    # Mesh-vertex SDF error: reconstructed mesh evaluated against the GT mesh.
+    reconstructed_trimesh = trimesh.load_mesh(str(reconstructed_mesh_path), force="mesh")
+    reconstructed_norm, mesh_sdf_error = compute_vertex_sdf_error(
+        mesh_orig, reconstructed_trimesh
+    )
+    abs_err = np.abs(mesh_sdf_error)
+    mesh_metrics = {
+        "num_vertices": int(reconstructed_norm.vertices.shape[0]),
+        "mae": float(abs_err.mean()),
+        "rmse": float(np.sqrt(np.mean(mesh_sdf_error ** 2))),
+        "median": float(np.median(abs_err)),
+        "p95": float(np.quantile(abs_err, 0.95)),
+        "max": float(abs_err.max()),
+        "min_signed_error": float(mesh_sdf_error.min()),
+        "max_signed_error": float(mesh_sdf_error.max()),
+        "mean_signed_error": float(mesh_sdf_error.mean()),
+    }
+
+    mesh_error_poly = trimesh_to_pyvista(reconstructed_norm)
+    mesh_error_poly.point_data["sdf_error"] = mesh_sdf_error
+    add_vertex_colors_from_scalar(mesh_error_poly, scalar_name="sdf_error", cmap_name="turbo")
+    mesh_error_vtp_path = heavy_dir / f"{mesh_stem}_mesh_sdf_error.vtp"
+    mesh_error_poly.save(str(mesh_error_vtp_path))
+
+    logger.debug(
+        "Mesh-vertex SDF error: n=%d mae=%.6e rmse=%.6e median=%.6e p95=%.6e (VTP: %s)",
+        mesh_metrics["num_vertices"], mesh_metrics["mae"], mesh_metrics["rmse"],
+        mesh_metrics["median"], mesh_metrics["p95"], mesh_error_vtp_path,
+    )
+
+    return sdf_metrics, mesh_metrics
+
+
+def _log_reconstruction_to_mlflow(
+    *,
+    metric_prefix: str,
+    case_name: str,
+    mesh_path: Path,
+    tiling,
+    checkpoint: str,
+    recon_result: dict,
+    metrics: dict | None,
+    mesh_metrics: dict | None,
+    local_dir: Path,
+    reconstructed_mesh_path: Path,
+) -> None:
+    """Log reconstruction params, metrics, and artifacts to the active MLflow run."""
+    import mlflow
+
+    if mlflow.active_run() is None:
+        return
+
+    mlflow.log_param(f"{metric_prefix}_mesh_path", str(mesh_path))
+    mlflow.log_param(f"{metric_prefix}_tiling", str(tiling))
+    mlflow.log_param(f"{metric_prefix}_checkpoint", checkpoint)
+
+    if recon_result["final_loss"] is not None:
+        mlflow.log_metric(f"{metric_prefix}_final_loss", recon_result["final_loss"])
+
+    artifact_path = f"reconstruction/{case_name}"
+    mlflow.log_artifact(str(local_dir / "specs_reconstruction.json"), artifact_path=f"{artifact_path}/config")
+    mlflow.log_artifact(str(local_dir / "loss_plot.png"), artifact_path=artifact_path)
+    mlflow.log_artifact(str(reconstructed_mesh_path), artifact_path=artifact_path)
+
+    for prefix, m in (("sdf", metrics), ("mesh", mesh_metrics)):
+        if m is None:
+            continue
+        for key in ("mae", "rmse", "median", "p95"):
+            mlflow.log_metric(f"{metric_prefix}_{prefix}_{key}", m[key])
+
+    if metrics is not None or mesh_metrics is not None:
+        mlflow.log_artifact(str(local_dir / "error_metrics.json"), artifact_path=artifact_path)
 
 
 # ---------------------------------------------------------------------------
@@ -370,21 +594,13 @@ def reconstruct_shape(
     """
     import trimesh
     from DeepSDFStruct.pretrained_models import get_model
-    from DeepSDFStruct.SDF import SDFfromDeepSDF, SDFfromMesh, normalize_mesh_to_unit_cube
-    from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
+    from DeepSDFStruct.SDF import SDFfromDeepSDF, normalize_mesh_to_unit_cube
     from DeepSDFStruct.lattice_structure import LatticeSDFStruct
     from DeepSDFStruct.parametrization import SplineParametrization
     from DeepSDFStruct.torch_spline import TorchScaling
-    from DeepSDFStruct.sampling import sample_mesh_surface, save_points_to_vtp
     from DeepSDFStruct.export_knot_grid import (
         export_knot_grid_paramspace,
         export_control_lattice_paramspace,
-    )
-    from DeepSDFStruct.deep_sdf.metrics.error_metrics import compute_metrics_from_vtp
-    from deepshapeopt.analysis import (
-        add_vertex_colors_from_scalar,
-        compute_vertex_sdf_error,
-        trimesh_to_pyvista,
     )
     from deepshapeopt.config import make_experiment_paths, ensure_experiment_dirs
 
@@ -499,7 +715,7 @@ def reconstruct_shape(
     # --- Reconstruct ---
     metric_prefix = mlflow_metric_prefix or f"reconstruction_{case_name}"
 
-    recon_result = run_sdf_reconstruction(
+    recon_result = fit_lattice_to_sdf(
         lattice_struct,
         mesh,
         bounds,
@@ -515,170 +731,54 @@ def reconstruct_shape(
 
     lattice_struct.parametrization.set_param(recon_result["params"][0])
 
-    # --- Post-reconstruction exports (standalone-specific) ---
-    metrics = None
+    # --- Mesh + SDF-grid exports ---
+    physical_mesh_name = f"{mesh_path.stem}_reconstructed.stl"
+    reconstructed_mesh_path = export_reconstructed_artifacts(
+        lattice_struct,
+        heavy_dir,
+        mesh_resolution=create_mesh_N,
+        bounds=bounds,
+        device=mesh_device,
+        scaling=scaling,
+        physical_mesh_name=physical_mesh_name,
+        param_mesh_name=f"{mesh_path.stem}_reconstructed_param_space.stl",
+    )
+
+    # --- Error metrics ---
+    metrics, mesh_metrics = None, None
     if save_vtp:
-        # Surface-only samples for error metrics
-        gt_sdf_obj = SDFfromMesh(mesh, scale=False)
-        surface_samples = sample_mesh_surface(
-            gt_sdf_obj, mesh,
-            n_samples=n_surface_samples,
-            stds=samples_surface_stds,
+        metrics, mesh_metrics = _compute_reconstruction_metrics(
+            lattice_struct=lattice_struct,
+            mesh=mesh,
+            mesh_orig=mesh_orig,
+            reconstructed_mesh_path=reconstructed_mesh_path,
+            heavy_dir=heavy_dir,
+            mesh_stem=mesh_path.stem,
+            n_surface_samples=n_surface_samples,
+            samples_surface_stds=samples_surface_stds,
+            error_cutoff=rec_cfg.get("error_cutoff", 0.1),
             device=device,
         )
-        gt_points_surface = torch.hstack(
-        (surface_samples.samples.detach(), surface_samples.distances.detach())
+        _write_json(
+            local_dir / "error_metrics.json",
+            {"sdf_sample_error": metrics, "mesh_vertex_error": mesh_metrics},
         )
-        save_points_to_vtp(heavy_dir / "gt_sdf_samples_surface.vtp", gt_points_surface)
-
-        samples_surface = surface_samples.samples.detach()
-        rec_dist_surface = lattice_struct(samples_surface)
-        rec_points_surface = torch.hstack(
-        (samples_surface, rec_dist_surface.detach())
-        )
-        save_points_to_vtp(
-            heavy_dir / "rec_sdf_samples_surface.vtp", rec_points_surface
-        )
-
-        # Compute reconstruction error metrics on SDF samples (neural SDF error)
-        error_cutoff = rec_cfg.get("error_cutoff", 0.1)
-        metrics = compute_metrics_from_vtp(
-            gt_vtp_path=heavy_dir / "gt_sdf_samples_surface.vtp",
-            pred_vtp_path=heavy_dir / "rec_sdf_samples_surface.vtp",
-            cutoff=error_cutoff,
-            output_json_path=None,
-        )
-
-        export_sdf_grid_vtk(
-            lattice_struct,
-            N=64,
-            filename=str(heavy_dir / "reconstructed_sdf_grid.vtk"),
-            bounds=bounds,
-        )
-
-    # --- Generate output mesh ---
-    lattice_struct = lattice_struct.to(mesh_device)
-    scaling = scaling.to(mesh_device)
-    lattice_struct.microtile.model.device = mesh_device
-    lattice_struct.microtile.model._decoder = (
-        lattice_struct.microtile.model._decoder.to(mesh_device)
-    )
-
-    surf_mesh, derivative = create_3D_mesh(
-        lattice_struct,
-        create_mesh_N,
-        differentiate=False,
-        device=mesh_device,
-        mesh_type="surface",
-        deformation_function=scaling,
-    )
-
-    reconstructed_mesh_filename = f"{mesh_path.stem}_reconstructed.stl"
-    reconstructed_mesh_path = heavy_dir / reconstructed_mesh_filename
-    export_surface_mesh(str(reconstructed_mesh_path), surf_mesh.to_gus(), derivative)
-
-    # Create reconstruted 3D mesh in parameter space for visualization
-    param_surf_mesh, _ = create_3D_mesh(
-        lattice_struct,
-        create_mesh_N,
-        differentiate=False,
-        device=mesh_device,
-        mesh_type="surface",
-        deformation_function=None,  # no scaling, keep in param space
-    )
-    export_surface_mesh(
-        str(heavy_dir / f"{mesh_path.stem}_reconstructed_param_space.stl"),
-        param_surf_mesh.to_gus(),
-        derivative,
-    )
-
-    # --- Mesh-vs-mesh vertex SDF error (explicit reconstructed mesh vs GT) ---
-    mesh_metrics = None
-    if save_vtp:
-        reconstructed_mesh_trimesh = trimesh.load_mesh(
-            str(reconstructed_mesh_path), force="mesh"
-        )
-        reconstructed_mesh_norm, mesh_sdf_error = compute_vertex_sdf_error(
-            mesh_orig, reconstructed_mesh_trimesh
-        )
-
-        mesh_abs_error = np.abs(mesh_sdf_error)
-        mesh_metrics = {
-            "num_vertices": int(reconstructed_mesh_norm.vertices.shape[0]),
-            "mae": float(mesh_abs_error.mean()),
-            "rmse": float(np.sqrt(np.mean(mesh_sdf_error ** 2))),
-            "median": float(np.median(mesh_abs_error)),
-            "p95": float(np.quantile(mesh_abs_error, 0.95)),
-            "max": float(mesh_abs_error.max()),
-            "min_signed_error": float(mesh_sdf_error.min()),
-            "max_signed_error": float(mesh_sdf_error.max()),
-            "mean_signed_error": float(mesh_sdf_error.mean()),
-        }
-
-        mesh_error_poly = trimesh_to_pyvista(reconstructed_mesh_norm)
-        mesh_error_poly.point_data["sdf_error"] = mesh_sdf_error
-        add_vertex_colors_from_scalar(
-            mesh_error_poly, scalar_name="sdf_error", cmap_name="turbo"
-        )
-        mesh_error_vtp_path = heavy_dir / f"{mesh_path.stem}_mesh_sdf_error.vtp"
-        mesh_error_poly.save(str(mesh_error_vtp_path))
-
-        print("\nMesh-vertex SDF error (explicit mesh vs GT mesh)")
-        print("------------------------------------------------")
-        print(f"num vertices: {mesh_metrics['num_vertices']}")
-        print(f"mae:          {mesh_metrics['mae']:.8e}")
-        print(f"rmse:         {mesh_metrics['rmse']:.8e}")
-        print(f"median:       {mesh_metrics['median']:.8e}")
-        print(f"p95:          {mesh_metrics['p95']:.8e}")
-        print(f"Saved mesh-error VTP to: {mesh_error_vtp_path}")
-
-    # --- Write unified error metrics JSON ---
-    if metrics is not None or mesh_metrics is not None:
-        combined_error_metrics = {
-            "sdf_sample_error": metrics,
-            "mesh_vertex_error": mesh_metrics,
-        }
-        _write_json(local_dir / "error_metrics.json", combined_error_metrics)
-        print(f"\nSaved unified error metrics to: {local_dir / 'error_metrics.json'}")
+        logger.debug("Saved unified error metrics to: %s", local_dir / "error_metrics.json")
 
     # --- MLflow logging ---
     if use_mlflow:
-        import mlflow
-
-    if use_mlflow and mlflow.active_run() is not None:
-        mlflow.log_param(f"{metric_prefix}_mesh_path", str(mesh_path))
-        mlflow.log_param(f"{metric_prefix}_tiling", str(tiling))
-        mlflow.log_param(f"{metric_prefix}_checkpoint", checkpoint)
-
-        if recon_result["final_loss"] is not None:
-            mlflow.log_metric(f"{metric_prefix}_final_loss", recon_result["final_loss"])
-
-        mlflow.log_artifact(
-            str(local_dir / "specs_reconstruction.json"),
-            artifact_path=f"reconstruction/{case_name}/config",
+        _log_reconstruction_to_mlflow(
+            metric_prefix=metric_prefix,
+            case_name=case_name,
+            mesh_path=mesh_path,
+            tiling=tiling,
+            checkpoint=checkpoint,
+            recon_result=recon_result,
+            metrics=metrics,
+            mesh_metrics=mesh_metrics,
+            local_dir=local_dir,
+            reconstructed_mesh_path=reconstructed_mesh_path,
         )
-        mlflow.log_artifact(
-            str(local_dir / "loss_plot.png"),
-            artifact_path=f"reconstruction/{case_name}",
-        )
-        mlflow.log_artifact(
-            str(reconstructed_mesh_path),
-            artifact_path=f"reconstruction/{case_name}",
-        )
-
-        if metrics is not None:
-            for key in ("mae", "rmse", "median", "p95"):
-                mlflow.log_metric(f"{metric_prefix}_sdf_{key}", metrics[key])
-
-        if mesh_metrics is not None:
-            for key in ("mae", "rmse", "median", "p95"):
-                mlflow.log_metric(f"{metric_prefix}_mesh_{key}", mesh_metrics[key])
-
-        if metrics is not None or mesh_metrics is not None:
-            mlflow.log_artifact(
-                str(local_dir / "error_metrics.json"),
-                artifact_path=f"reconstruction/{case_name}",
-            )
 
     # --- Save summary ---
     run_info["status"] = "finished"
@@ -688,10 +788,9 @@ def reconstruct_shape(
     run_info["reconstructed_mesh_path"] = str(reconstructed_mesh_path)
     _write_json(local_dir / "specs_summary.json", run_info)
 
-    print("Done.")
-    print("Results in:", local_dir)
+    logger.info("Reconstruction done. Results in %s", local_dir)
     if heavy_dir != local_dir:
-        print("Heavy data in:", heavy_dir)
+        logger.debug("Heavy data in: %s", heavy_dir)
 
     return {
         "case_name": case_name,
