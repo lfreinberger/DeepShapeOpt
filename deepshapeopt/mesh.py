@@ -209,33 +209,16 @@ def split_stl_into_patches(
         if source_patch not in patch_faces:
             raise ValueError(f"Cannot create outlet interior patch: missing source patch '{source_patch}'.")
 
-        method = outlet_interior.get("method", "local_inset")
-        if method == "local_inset":
-            interior_regions = _build_local_inset_outlet_regions(
-                patch_faces[source_patch],
-                source_patch_name=source_patch,
-                interior_patch_name=interior_patch,
-                inset_distance=float(outlet_interior.get("inset_distance", 0.10)),
-            )
-        elif method == "centerline_band":
-            interior_regions = _build_centerline_band_outlet_regions(
-                patch_faces[source_patch],
-                source_patch_name=source_patch,
-                interior_patch_name=interior_patch,
-                exclusion_fraction=float(outlet_interior.get("inset_fraction", 0.20)),
-                station_count=int(outlet_interior.get("station_count", 240)),
-            )
-        elif method == "local_distance":
-            interior_regions = _build_local_distance_outlet_regions(
-                patch_faces[source_patch],
-                source_patch_name=source_patch,
-                interior_patch_name=interior_patch,
-                threshold=float(outlet_interior.get("inset_fraction", 0.10)),
-                grid_resolution=int(outlet_interior.get("grid_resolution", 180)),
-                ray_directions=int(outlet_interior.get("ray_directions", 16)),
-            )
-        else:
-            raise ValueError(f"Unknown outlet_interior method: {method}")
+        interior_regions = _build_polygon_offset_outlet_regions(
+            patch_faces[source_patch],
+            source_patch_name=source_patch,
+            interior_patch_name=interior_patch,
+            inset_distance=float(outlet_interior.get("inset_distance", 1.0)),
+            quad_segs=int(outlet_interior.get("quad_segs", 8)),
+            join_style=str(outlet_interior.get("join_style", "round")),
+            triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
+            debug_dir=(output_dir / "debug_outlet_interior") if outlet_interior.get("debug", True) else None,
+        )
         patch_faces[source_patch] = interior_regions[source_patch]
         patch_faces[interior_patch] = interior_regions[interior_patch]
         logger.info(
@@ -342,144 +325,6 @@ def _write_patch_debug_stls(
     logger.debug("Saved outlet split debug STL: %s", combined_path)
 
 
-def _polygon_area_2d(points: np.ndarray) -> float:
-    x = points[:, 0]
-    y = points[:, 1]
-    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-
-
-def _points_in_polygon_2d(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
-    x = points[:, 0]
-    y = points[:, 1]
-    inside = np.zeros(len(points), dtype=bool)
-    x0 = polygon[:, 0]
-    y0 = polygon[:, 1]
-    x1 = np.roll(x0, -1)
-    y1 = np.roll(y0, -1)
-    for ax, ay, bx, by in zip(x0, y0, x1, y1):
-        crosses = ((ay > y) != (by > y)) & (
-            x < (bx - ax) * (y - ay) / (by - ay + 1e-300) + ax
-        )
-        inside ^= crosses
-    return inside
-
-
-def _distance_to_polygon_segments_2d(points: np.ndarray, polygon: np.ndarray, chunk_size: int = 4096) -> np.ndarray:
-    seg_a = polygon
-    seg_b = np.roll(polygon, -1, axis=0)
-    seg = seg_b - seg_a
-    seg_len2 = np.einsum("ij,ij->i", seg, seg)
-    seg_len2 = np.where(seg_len2 < 1e-30, 1.0, seg_len2)
-
-    out = np.empty(len(points), dtype=float)
-    for start in range(0, len(points), chunk_size):
-        p = points[start:start + chunk_size]
-        ap = p[:, None, :] - seg_a[None, :, :]
-        t = np.clip(np.einsum("nsi,si->ns", ap, seg) / seg_len2[None, :], 0.0, 1.0)
-        closest = seg_a[None, :, :] + t[:, :, None] * seg[None, :, :]
-        dist2 = np.sum((p[:, None, :] - closest) ** 2, axis=2)
-        out[start:start + chunk_size] = np.sqrt(dist2.min(axis=1))
-    return out
-
-
-def _ray_polygon_distance_2d(point: np.ndarray, direction: np.ndarray, polygon: np.ndarray) -> float:
-    seg_a = polygon
-    seg_b = np.roll(polygon, -1, axis=0)
-    seg = seg_b - seg_a
-    cross = direction[0] * seg[:, 1] - direction[1] * seg[:, 0]
-    valid = np.abs(cross) > 1e-14
-    if not np.any(valid):
-        return np.inf
-
-    delta = seg_a - point
-    t = np.full(len(seg), np.inf, dtype=float)
-    u = np.full(len(seg), np.inf, dtype=float)
-    t[valid] = (
-        delta[valid, 0] * seg[valid, 1] - delta[valid, 1] * seg[valid, 0]
-    ) / cross[valid]
-    u[valid] = (
-        delta[valid, 0] * direction[1] - delta[valid, 1] * direction[0]
-    ) / cross[valid]
-    hits = (t > 1e-12) & (u >= -1e-12) & (u <= 1.0 + 1e-12)
-    if not np.any(hits):
-        return np.inf
-    return float(np.min(t[hits]))
-
-
-def _local_half_width_2d(points: np.ndarray, polygon: np.ndarray, n_directions: int) -> np.ndarray:
-    angles = np.linspace(0.0, np.pi, n_directions, endpoint=False)
-    directions = np.column_stack([np.cos(angles), np.sin(angles)])
-    half_width = np.empty(len(points), dtype=float)
-
-    for i, p in enumerate(points):
-        widths = []
-        for direction in directions:
-            d_pos = _ray_polygon_distance_2d(p, direction, polygon)
-            d_neg = _ray_polygon_distance_2d(p, -direction, polygon)
-            if np.isfinite(d_pos) and np.isfinite(d_neg):
-                widths.append(0.5 * (d_pos + d_neg))
-        half_width[i] = min(widths) if widths else np.nan
-    return half_width
-
-
-def _order_boundary_loop_from_triangles(triangles: np.ndarray, tol: float = 1e-8) -> np.ndarray:
-    vertex_ids: dict[tuple[int, int, int], int] = {}
-    vertices: list[np.ndarray] = []
-
-    def vid(point: np.ndarray) -> int:
-        key = tuple(np.round(point / tol).astype(np.int64))
-        if key not in vertex_ids:
-            vertex_ids[key] = len(vertices)
-            vertices.append(np.asarray(point, dtype=float))
-        return vertex_ids[key]
-
-    edge_counts: dict[tuple[int, int], int] = defaultdict(int)
-    for tri in triangles:
-        ids = [vid(p) for p in tri]
-        for a, b in ((ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])):
-            edge_counts[tuple(sorted((a, b)))] += 1
-
-    adjacency: dict[int, list[int]] = defaultdict(list)
-    for (a, b), count in edge_counts.items():
-        if count == 1:
-            adjacency[a].append(b)
-            adjacency[b].append(a)
-
-    if not adjacency:
-        raise ValueError("Outlet patch has no boundary edges.")
-
-    loops: list[list[int]] = []
-    visited_edges: set[tuple[int, int]] = set()
-    for start in adjacency:
-        for first_next in adjacency[start]:
-            edge = tuple(sorted((start, first_next)))
-            if edge in visited_edges:
-                continue
-            loop = [start]
-            prev, curr = start, first_next
-            while True:
-                visited_edges.add(tuple(sorted((prev, curr))))
-                loop.append(curr)
-                candidates = [n for n in adjacency[curr] if n != prev]
-                if not candidates:
-                    break
-                next_id = candidates[0]
-                if next_id == start:
-                    visited_edges.add(tuple(sorted((curr, next_id))))
-                    break
-                prev, curr = curr, next_id
-                if len(loop) > len(adjacency) + 2:
-                    raise ValueError("Could not order outlet boundary loop.")
-            if len(loop) >= 3:
-                loops.append(loop)
-
-    if not loops:
-        raise ValueError("Could not find a closed outlet boundary loop.")
-
-    verts = np.asarray(vertices)
-    return verts[max(loops, key=len)]
-
-
 def _make_plane_basis(points: np.ndarray, triangles: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     normal = np.zeros(3, dtype=float)
     for tri in triangles:
@@ -522,556 +367,302 @@ def _orient_triangle(tri: np.ndarray, normal: np.ndarray) -> np.ndarray:
     return tri
 
 
-def _clip_scalar_polygon(
-    points: list[np.ndarray],
-    values: list[float],
-    keep_positive: bool,
-) -> tuple[list[np.ndarray], list[float]]:
-    if not points:
-        return [], []
+def _all_boundary_loops_from_triangles(triangles: np.ndarray, tol: float = 1e-8) -> list[np.ndarray]:
+    """Return every closed boundary loop of the given triangle set as a 3D point array.
 
-    out_points: list[np.ndarray] = []
-    out_values: list[float] = []
+    Unlike _order_boundary_loop_from_triangles (which returns only the longest loop),
+    this preserves disconnected outlet components — required for multi-channel cross
+    sections where each channel has its own perimeter.
+    """
+    vertex_ids: dict[tuple[int, int, int], int] = {}
+    vertices: list[np.ndarray] = []
 
-    def keep(value: float) -> bool:
-        return value >= 0.0 if keep_positive else value <= 0.0
+    def vid(point: np.ndarray) -> int:
+        key = tuple(np.round(point / tol).astype(np.int64))
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(np.asarray(point, dtype=float))
+        return vertex_ids[key]
 
-    for i, curr_point in enumerate(points):
-        prev_point = points[i - 1]
-        curr_value = values[i]
-        prev_value = values[i - 1]
-        curr_keep = keep(curr_value)
-        prev_keep = keep(prev_value)
+    edge_counts: dict[tuple[int, int], int] = defaultdict(int)
+    for tri in triangles:
+        ids = [vid(p) for p in tri]
+        for a, b in ((ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])):
+            edge_counts[tuple(sorted((a, b)))] += 1
 
-        if curr_keep != prev_keep:
-            denom = prev_value - curr_value
-            t = 0.5 if abs(denom) < 1e-30 else prev_value / denom
-            t = float(np.clip(t, 0.0, 1.0))
-            out_points.append(prev_point + t * (curr_point - prev_point))
-            out_values.append(0.0)
-        if curr_keep:
-            out_points.append(curr_point)
-            out_values.append(curr_value)
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for (a, b), count in edge_counts.items():
+        if count == 1:
+            adjacency[a].append(b)
+            adjacency[b].append(a)
 
-    return out_points, out_values
+    if not adjacency:
+        raise ValueError("Outlet patch has no boundary edges.")
+
+    verts = np.asarray(vertices)
+    loops: list[np.ndarray] = []
+    visited_edges: set[tuple[int, int]] = set()
+    for start in list(adjacency.keys()):
+        for first_next in adjacency[start]:
+            edge = tuple(sorted((start, first_next)))
+            if edge in visited_edges:
+                continue
+            loop_ids = [start]
+            prev, curr = start, first_next
+            closed = False
+            while True:
+                visited_edges.add(tuple(sorted((prev, curr))))
+                loop_ids.append(curr)
+                candidates = [n for n in adjacency[curr] if n != prev and tuple(sorted((curr, n))) not in visited_edges]
+                if not candidates:
+                    # Try to close on start if possible
+                    if start in adjacency[curr]:
+                        visited_edges.add(tuple(sorted((curr, start))))
+                        closed = True
+                    break
+                next_id = candidates[0]
+                if next_id == start:
+                    visited_edges.add(tuple(sorted((curr, next_id))))
+                    closed = True
+                    break
+                prev, curr = curr, next_id
+                if len(loop_ids) > len(adjacency) + 2:
+                    raise ValueError("Could not chain outlet boundary loop.")
+            if closed and len(loop_ids) >= 3:
+                loops.append(verts[loop_ids])
+
+    if not loops:
+        raise ValueError("Could not find any closed outlet boundary loop.")
+    return loops
 
 
-def _triangulate_planar_polygon(points_3d: list[np.ndarray], normal: np.ndarray) -> list[np.ndarray]:
-    if len(points_3d) < 3:
+def _build_shapely_multipolygon(loops_2d: list[np.ndarray]):
+    """Build a shapely (Multi)Polygon from a list of 2D loops, classifying outer rings vs holes by containment depth.
+
+    Even depth (0, 2, ...) -> outer ring of a new polygon; odd depth -> hole of the enclosing ring.
+    All input loops must be closed (first != last is acceptable; shapely closes implicitly).
+    """
+    from shapely.geometry import Polygon, MultiPolygon
+    from shapely.geometry.polygon import orient
+
+    rings = [np.asarray(l, dtype=float) for l in loops_2d]
+    polys_test = [Polygon(r) for r in rings]
+    # Containment graph: ring i is enclosed by ring j iff a vertex of ring i is
+    # inside ring j's polygon. A vertex of ring i can never coincide with the
+    # interior of ring i itself (so witness is unambiguous), and rings cannot
+    # cross (well-formed boundary), so any single vertex suffices.
+    from shapely.geometry import Point
+    depth = [0] * len(rings)
+    parent = [-1] * len(rings)
+    for i, ri in enumerate(rings):
+        witness = Point(ri[0, 0], ri[0, 1])
+        candidates = []
+        for j, pj in enumerate(polys_test):
+            if i == j:
+                continue
+            if pj.contains(witness):
+                candidates.append(j)
+        depth[i] = len(candidates)
+        if candidates:
+            # Direct parent = smallest enclosing polygon by area.
+            parent[i] = min(candidates, key=lambda j: polys_test[j].area)
+
+    # Assemble: outer rings have even depth. Each outer ring's holes are
+    # children (parent == this ring) with odd depth.
+    outer_indices = [i for i, d in enumerate(depth) if d % 2 == 0]
+    polygons = []
+    for oi in outer_indices:
+        holes = [rings[j].tolist() for j in range(len(rings)) if parent[j] == oi and depth[j] % 2 == 1]
+        poly = Polygon(rings[oi].tolist(), holes=holes)
+        polygons.append(orient(poly, sign=1.0))  # CCW exterior, CW holes
+
+    if not polygons:
+        raise ValueError("polygon_offset: no outer rings detected after containment classification.")
+    if len(polygons) == 1:
+        return polygons[0]
+    return MultiPolygon(polygons)
+
+
+def _triangulate_shapely_to_2d(poly, engine: str = "triangle") -> list[tuple[np.ndarray, np.ndarray]]:
+    """Triangulate a shapely Polygon or MultiPolygon (with optional holes) into 2D triangles.
+
+    Returns a list of (vertices_2d, faces) tuples, one per polygon component. faces indexes vertices_2d.
+    Empty geometries return an empty list.
+    """
+    from shapely.geometry import MultiPolygon, Polygon
+    from trimesh.creation import triangulate_polygon
+
+    if poly.is_empty:
         return []
-    p0 = points_3d[0]
-    triangles = []
-    for i in range(1, len(points_3d) - 1):
-        tri = np.array([p0, points_3d[i], points_3d[i + 1]])
-        triangles.append(_orient_triangle(tri, normal))
-    return triangles
-
-
-def _triangulate_polygon_2d(points: np.ndarray) -> np.ndarray:
-    order = list(range(len(points)))
-    if _polygon_area_2d(points) < 0:
-        order = list(reversed(order))
-        points = points[order]
-
-    def cross2(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
-        ab = b - a
-        ac = c - a
-        return float(ab[0] * ac[1] - ab[1] * ac[0])
-
-    def point_in_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
-        v0 = c - a
-        v1 = b - a
-        v2 = p - a
-        den = v0[0] * v1[1] - v1[0] * v0[1]
-        if abs(den) < 1e-20:
-            return False
-        u = (v2[0] * v1[1] - v1[0] * v2[1]) / den
-        v = (v0[0] * v2[1] - v2[0] * v0[1]) / den
-        return u > 1e-12 and v > 1e-12 and (u + v) < 1.0 - 1e-12
-
-    remaining = list(range(len(points)))
-    triangles: list[list[int]] = []
-    guard = 0
-    while len(remaining) > 3:
-        clipped = False
-        for pos, idx in enumerate(remaining):
-            prev_idx = remaining[(pos - 1) % len(remaining)]
-            next_idx = remaining[(pos + 1) % len(remaining)]
-            a, b, c = points[prev_idx], points[idx], points[next_idx]
-            if cross2(a, b, c) <= 1e-14:
-                continue
-            if any(
-                point_in_triangle(points[other], a, b, c)
-                for other in remaining
-                if other not in (prev_idx, idx, next_idx)
-            ):
-                continue
-            triangles.append([order[prev_idx], order[idx], order[next_idx]])
-            del remaining[pos]
-            clipped = True
-            break
-        guard += 1
-        if not clipped or guard > len(points) * len(points):
-            raise ValueError("Ear clipping failed to triangulate inset outlet polygon.")
-    triangles.append([order[idx] for idx in remaining])
-    return np.asarray(triangles, dtype=np.int64)
-
-
-def _inward_vertex_directions_2d(polygon: np.ndarray) -> np.ndarray:
-    if _polygon_area_2d(polygon) < 0:
-        polygon = polygon[::-1]
-    dirs = []
-    centroid = polygon.mean(axis=0)
-    for i in range(len(polygon)):
-        prev_p = polygon[(i - 1) % len(polygon)]
-        curr_p = polygon[i]
-        next_p = polygon[(i + 1) % len(polygon)]
-        prev_dir = curr_p - prev_p
-        next_dir = next_p - curr_p
-        prev_dir = prev_dir / max(np.linalg.norm(prev_dir), 1e-30)
-        next_dir = next_dir / max(np.linalg.norm(next_dir), 1e-30)
-        n_prev = np.array([-prev_dir[1], prev_dir[0]])
-        n_next = np.array([-next_dir[1], next_dir[0]])
-        candidates = [
-            centroid - curr_p,
-            n_prev + n_next,
-            n_prev,
-            n_next,
-            0.5 * (prev_p + next_p) - curr_p,
-        ]
-        scale = max(np.ptp(polygon[:, 0]), np.ptp(polygon[:, 1]), 1.0)
-        direction = None
-        for candidate in candidates:
-            if np.linalg.norm(candidate) < 1e-14:
-                continue
-            cand = candidate / np.linalg.norm(candidate)
-            if _points_in_polygon_2d((curr_p + 1e-6 * scale * cand)[None, :], polygon)[0]:
-                direction = cand
-                break
-        if direction is None:
-            best_dir = None
-            best_dist = -np.inf
-            for angle in np.linspace(0.0, 2.0 * np.pi, 64, endpoint=False):
-                cand = np.array([np.cos(angle), np.sin(angle)])
-                if not _points_in_polygon_2d((curr_p + 1e-6 * scale * cand)[None, :], polygon)[0]:
-                    continue
-                dist = _ray_polygon_distance_2d(curr_p + 1e-6 * scale * cand, cand, polygon)
-                if np.isfinite(dist) and dist > best_dist:
-                    best_dist = dist
-                    best_dir = cand
-            direction = best_dir
-        if direction is None:
-            direction = candidates[0] / max(np.linalg.norm(candidates[0]), 1e-30)
-        dirs.append(direction)
-    return np.asarray(dirs)
-
-
-def _smooth_periodic(values: np.ndarray, passes: int = 2) -> np.ndarray:
-    out = values.astype(float).copy()
-    for _ in range(passes):
-        padded = np.r_[out[-2:], out, out[:2]]
-        out = np.array([
-            np.median(padded[i:i + 5])
-            for i in range(len(out))
-        ])
-    return out
-
-
-def _resample_closed_polyline(points: np.ndarray, n_samples: int) -> np.ndarray:
-    edges = np.roll(points, -1, axis=0) - points
-    lengths = np.linalg.norm(edges, axis=1)
-    perimeter = float(lengths.sum())
-    if perimeter <= 1e-30:
-        raise ValueError("Cannot resample degenerate outlet boundary.")
-
-    cumulative = np.r_[0.0, np.cumsum(lengths)]
-    samples = np.linspace(0.0, perimeter, int(n_samples), endpoint=False)
-    out = np.empty((len(samples), points.shape[1]), dtype=float)
-    edge_idx = np.searchsorted(cumulative, samples, side="right") - 1
-    edge_idx = np.clip(edge_idx, 0, len(points) - 1)
-    local = samples - cumulative[edge_idx]
-    t = local / np.maximum(lengths[edge_idx], 1e-30)
-    out = points[edge_idx] + t[:, None] * edges[edge_idx]
-    return out
-
-
-def _smooth_closed_points(points: np.ndarray, passes: int, keep_inside: np.ndarray | None = None) -> np.ndarray:
-    out = points.copy()
-    for _ in range(passes):
-        candidate = (
-            0.25 * np.roll(out, 1, axis=0)
-            + 0.5 * out
-            + 0.25 * np.roll(out, -1, axis=0)
-        )
-        if keep_inside is not None:
-            inside = _points_in_polygon_2d(candidate, keep_inside)
-            candidate = np.where(inside[:, None], candidate, out)
-        out = candidate
-    return out
-
-
-def _build_local_inset_outlet_regions(
-    outlet_triangles: list[np.ndarray],
-    source_patch_name: str,
-    interior_patch_name: str,
-    inset_distance: float,
-) -> dict[str, list[np.ndarray]]:
-    triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
-
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
-        outer_3d = outer_3d[::-1]
-
-    sample_count = max(160, min(800, len(outer_2d) * 8))
-    outer_sample_2d = _resample_closed_polyline(outer_2d, sample_count)
-    outer_sample_3d = _unproject_from_plane(outer_sample_2d, origin, axis_u, axis_v)
-
-    extent = max(float(np.ptp(outer_sample_2d[:, 0])), float(np.ptp(outer_sample_2d[:, 1])))
-    eps = max(extent * 1e-8, 1e-12)
-    directions = _inward_vertex_directions_2d(outer_sample_2d)
-    inset_distance = max(float(inset_distance), eps)
-    outer_area = abs(_polygon_area_2d(outer_2d))
-    last_error: Exception | None = None
-    for scale in (1.0, 0.75, 0.5, 0.35, 0.25, 0.15, 0.1):
-        margins = np.full(len(outer_sample_2d), scale * inset_distance, dtype=float)
-        inner_2d = outer_sample_2d + margins[:, None] * directions
-
-        try:
-            for i in range(len(inner_2d)):
-                if _points_in_polygon_2d(inner_2d[i:i + 1], outer_2d)[0]:
-                    continue
-                margin = margins[i]
-                while margin > eps:
-                    margin *= 0.5
-                    candidate = outer_sample_2d[i] + margin * directions[i]
-                    if _points_in_polygon_2d(candidate[None, :], outer_2d)[0]:
-                        inner_2d[i] = candidate
-                        margins[i] = margin
-                        break
-                else:
-                    inner_2d[i] = outer_sample_2d[i] + eps * directions[i]
-                    margins[i] = eps
-
-            inner_2d = _smooth_closed_points(inner_2d, passes=4, keep_inside=outer_2d)
-            inner_area = abs(_polygon_area_2d(inner_2d))
-            if inner_area <= 1e-20 or inner_area >= outer_area:
-                raise ValueError("Local inset outlet polygon has invalid area.")
-            inner_tri_idx = _triangulate_polygon_2d(inner_2d)
-            break
-        except Exception as exc:
-            last_error = exc
+    if isinstance(poly, MultiPolygon):
+        components = list(poly.geoms)
+    elif isinstance(poly, Polygon):
+        components = [poly]
     else:
-        raise ValueError(f"Could not create valid local inset outlet polygon: {last_error}")
+        # GeometryCollection: keep only polygonal pieces
+        components = [g for g in getattr(poly, "geoms", []) if isinstance(g, Polygon) and not g.is_empty]
 
-    inner_3d = _unproject_from_plane(inner_2d, origin, axis_u, axis_v)
-    interior_tris = [
-        _orient_triangle(inner_3d[idx], normal)
-        for idx in inner_tri_idx
-    ]
-
-    rim_tris: list[np.ndarray] = []
-    for i in range(len(outer_sample_3d)):
-        j = (i + 1) % len(outer_sample_3d)
-        rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], outer_sample_3d[j], inner_3d[j]]), normal))
-        rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], inner_3d[j], inner_3d[i]]), normal))
-
-    logger.info(
-        "Created %s with local inset: inset_distance=%.6e, applied_scale=%.2f, "
-        "margin_range=[%.6e, %.6e], samples=%d, outer_area=%.6e, inner_area=%.6e, "
-        "interior_tris=%d, %s_rim_tris=%d",
-        interior_patch_name,
-        inset_distance,
-        scale,
-        margins.min(),
-        margins.max(),
-        sample_count,
-        outer_area,
-        inner_area,
-        len(interior_tris),
-        source_patch_name,
-        len(rim_tris),
-    )
-    return {
-        source_patch_name: rim_tris,
-        interior_patch_name: interior_tris,
-    }
-
-
-def _build_local_distance_outlet_regions(
-    outlet_triangles: list[np.ndarray],
-    source_patch_name: str,
-    interior_patch_name: str,
-    threshold: float,
-    grid_resolution: int = 180,
-    ray_directions: int = 16,
-) -> dict[str, list[np.ndarray]]:
-    triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
-
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
-
-    bbox_min = outer_2d.min(axis=0)
-    bbox_max = outer_2d.max(axis=0)
-    span = bbox_max - bbox_min
-    max_span = float(np.max(span))
-    if max_span <= 0.0:
-        raise ValueError("Outlet boundary has invalid 2D extent.")
-
-    cell_size = max_span / int(grid_resolution)
-    nx = max(1, int(np.ceil(span[0] / cell_size)))
-    ny = max(1, int(np.ceil(span[1] / cell_size)))
-    x0 = bbox_min[0]
-    y0 = bbox_min[1]
-
-    xs = x0 + (np.arange(nx) + 0.5) * cell_size
-    ys = y0 + (np.arange(ny) + 0.5) * cell_size
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
-    centers = np.column_stack([xx.ravel(), yy.ravel()])
-    inside = _points_in_polygon_2d(centers, outer_2d)
-    inside_flat_ids = np.flatnonzero(inside)
-    if len(inside_flat_ids) == 0:
-        raise ValueError("Rasterized outlet has no cells inside the boundary.")
-
-    grid_x = x0 + np.arange(nx + 1) * cell_size
-    grid_y = y0 + np.arange(ny + 1) * cell_size
-    gx, gy = np.meshgrid(grid_x, grid_y, indexing="ij")
-    grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-    grid_inside = _points_in_polygon_2d(grid_points, outer_2d)
-    inside_points = grid_points[grid_inside]
-    if len(inside_points) == 0:
-        raise ValueError("Rasterized outlet has no grid vertices inside the boundary.")
-
-    d_wall = _distance_to_polygon_segments_2d(inside_points, outer_2d)
-    local_half_width = _local_half_width_2d(
-        inside_points,
-        outer_2d,
-        n_directions=int(ray_directions),
-    )
-    finite = np.isfinite(local_half_width) & (local_half_width > 0.0)
-    fallback = np.nanmedian(local_half_width[finite]) if np.any(finite) else np.nan
-    if not np.isfinite(fallback) or fallback <= 0.0:
-        fallback = max(float(np.nanmax(d_wall)), cell_size)
-    local_half_width = np.where(finite, local_half_width, fallback)
-
-    normalized_grid = np.full(len(grid_points), -np.inf, dtype=float)
-    normalized_grid[grid_inside] = d_wall / np.maximum(local_half_width, 1e-30)
-    phi_grid = normalized_grid.reshape((nx + 1, ny + 1)) - float(threshold)
-
-    def point_3d(i: int, j: int) -> np.ndarray:
-        p2 = np.array([x0 + i * cell_size, y0 + j * cell_size])
-        return _unproject_from_plane(p2[None, :], origin, axis_u, axis_v)[0]
-
-    source_tris: list[np.ndarray] = []
-    interior_tris: list[np.ndarray] = []
-    interior_cells = 0
-    rim_cells = 0
-    mixed_cells = 0
-    for flat_id in inside_flat_ids:
-        i = flat_id // ny
-        j = flat_id % ny
-        cell_points = [
-            point_3d(i, j),
-            point_3d(i + 1, j),
-            point_3d(i + 1, j + 1),
-            point_3d(i, j + 1),
-        ]
-        cell_phi = [
-            float(phi_grid[i, j]),
-            float(phi_grid[i + 1, j]),
-            float(phi_grid[i + 1, j + 1]),
-            float(phi_grid[i, j + 1]),
-        ]
-
-        interior_poly, _ = _clip_scalar_polygon(cell_points, cell_phi, keep_positive=True)
-        rim_poly, _ = _clip_scalar_polygon(cell_points, cell_phi, keep_positive=False)
-
-        if len(interior_poly) >= 3:
-            interior_cells += 1
-            interior_tris.extend(_triangulate_planar_polygon(interior_poly, normal))
-        if len(rim_poly) >= 3:
-            rim_cells += 1
-            source_tris.extend(_triangulate_planar_polygon(rim_poly, normal))
-        if len(interior_poly) >= 3 and len(rim_poly) >= 3:
-            mixed_cells += 1
-
-    if not interior_tris:
-        raise ValueError(
-            f"No outletInterior triangles for normalized threshold {threshold}. "
-            "Lower outlet_interior.inset_fraction or increase grid_resolution."
-        )
-    if not source_tris:
-        raise ValueError(
-            f"No outlet rim triangles for normalized threshold {threshold}. "
-            "Increase outlet_interior.inset_fraction."
-        )
-
-    logger.info(
-        "Created %s with local distance split: threshold=%.3f, grid=%dx%d, "
-        "cell_size=%.6e, %s_cells=%d, %s_rim_cells=%d, mixed_cells=%d",
-        interior_patch_name,
-        threshold,
-        nx,
-        ny,
-        cell_size,
-        interior_patch_name,
-        interior_cells,
-        source_patch_name,
-        rim_cells,
-        mixed_cells,
-    )
-
-    return {
-        source_patch_name: source_tris,
-        interior_patch_name: interior_tris,
-    }
-
-
-def _scanline_intervals_2d(polygon: np.ndarray, axis: int, value: float) -> list[tuple[float, float]]:
-    cross_axis = 1 - axis
-    coords = []
-    for a, b in zip(polygon, np.roll(polygon, -1, axis=0)):
-        av = a[axis]
-        bv = b[axis]
-        if abs(av - bv) < 1e-14:
+    out: list[tuple[np.ndarray, np.ndarray]] = []
+    for comp in components:
+        if comp.is_empty or comp.area <= 0:
             continue
-        if (av <= value < bv) or (bv <= value < av):
-            t = (value - av) / (bv - av)
-            coords.append(float(a[cross_axis] + t * (b[cross_axis] - a[cross_axis])))
-
-    coords = sorted(coords)
-    intervals = []
-    for i in range(0, len(coords) - 1, 2):
-        lo, hi = coords[i], coords[i + 1]
-        if hi - lo > 1e-12:
-            intervals.append((lo, hi))
-    return intervals
+        verts_2d, faces = triangulate_polygon(comp, engine=engine)
+        if len(faces) == 0:
+            continue
+        out.append((np.asarray(verts_2d, dtype=float), np.asarray(faces, dtype=np.int64)))
+    return out
 
 
-def _station_point_3d(
-    station: float,
-    transverse: float,
-    axis: int,
-    origin: np.ndarray,
-    axis_u: np.ndarray,
-    axis_v: np.ndarray,
-) -> np.ndarray:
-    p2 = np.zeros(2)
-    p2[axis] = station
-    p2[1 - axis] = transverse
-    return _unproject_from_plane(p2[None, :], origin, axis_u, axis_v)[0]
-
-
-def _add_scanline_quad(
-    target: list[np.ndarray],
-    s0: float,
-    s1: float,
-    a0: float,
-    b0: float,
-    a1: float,
-    b1: float,
-    axis: int,
+def _lift_2d_triangles_to_3d(
+    triangulations: list[tuple[np.ndarray, np.ndarray]],
     origin: np.ndarray,
     axis_u: np.ndarray,
     axis_v: np.ndarray,
     normal: np.ndarray,
-) -> None:
-    if min(abs(b0 - a0), abs(b1 - a1), abs(s1 - s0)) < 1e-12:
-        return
-    p00 = _station_point_3d(s0, a0, axis, origin, axis_u, axis_v)
-    p01 = _station_point_3d(s0, b0, axis, origin, axis_u, axis_v)
-    p11 = _station_point_3d(s1, b1, axis, origin, axis_u, axis_v)
-    p10 = _station_point_3d(s1, a1, axis, origin, axis_u, axis_v)
-    target.append(_orient_triangle(np.array([p00, p10, p11]), normal))
-    target.append(_orient_triangle(np.array([p00, p11, p01]), normal))
+) -> list[np.ndarray]:
+    """Convert per-component 2D triangulations into a flat list of oriented 3D triangles."""
+    out: list[np.ndarray] = []
+    for verts_2d, faces in triangulations:
+        verts_3d = _unproject_from_plane(verts_2d, origin, axis_u, axis_v)
+        for tri in verts_3d[faces]:
+            out.append(_orient_triangle(tri, normal))
+    return out
 
 
-def _build_centerline_band_outlet_regions(
+def _build_polygon_offset_outlet_regions(
     outlet_triangles: list[np.ndarray],
     source_patch_name: str,
     interior_patch_name: str,
-    exclusion_fraction: float,
-    station_count: int = 240,
+    inset_distance: float,
+    quad_segs: int = 8,
+    join_style: str = "round",
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
 ) -> dict[str, list[np.ndarray]]:
+    """Split the outlet into a smooth interior patch and a wall-margin rim using a true 2D Minkowski offset.
+
+    The outlet boundary is extracted as one or more 2D loops in the outlet plane, assembled into a
+    shapely (Multi)Polygon, and shrunk inward via ``buffer(-inset_distance, ...)``. Both the inset
+    polygon and its ring complement are re-triangulated so the resulting STL patch boundary is the
+    smooth offset curve itself, not the original triangle edges nearest to it. Channels narrower than
+    ``2 * inset_distance`` collapse cleanly to empty interior — which is the correct geometric result.
+    """
+    import shapely  # local import: keeps shapely optional for users not invoking this method
+
+    join_style_map = {"round": "round", "mitre": "mitre", "bevel": "bevel"}
+    if join_style not in join_style_map:
+        raise ValueError(f"polygon_offset: unknown join_style '{join_style}' (expected one of {sorted(join_style_map)}).")
+    if inset_distance <= 0:
+        raise ValueError(f"polygon_offset: inset_distance must be positive, got {inset_distance}.")
+
     triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
 
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
+    all_loop_pts = np.vstack(loops_3d)
+    origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
 
-    span = outer_2d.max(axis=0) - outer_2d.min(axis=0)
-    axis = int(np.argmax(span))
-    axis_min = float(outer_2d[:, axis].min())
-    axis_max = float(outer_2d[:, axis].max())
-    if axis_max <= axis_min:
-        raise ValueError("Outlet boundary has invalid 2D extent.")
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+    poly_in = poly_outlet.buffer(
+        -float(inset_distance),
+        quad_segs=int(quad_segs),
+        join_style=join_style_map[join_style],
+    )
+    if poly_in.is_empty or poly_in.area <= 0:
+        raise ValueError(
+            f"polygon_offset: inset_distance={inset_distance} erased the entire outlet; reduce it."
+        )
+    poly_ring = poly_outlet.difference(poly_in)
 
-    exclusion_fraction = float(np.clip(exclusion_fraction, 0.0, 0.49))
-    band_fraction = 1.0 - 2.0 * exclusion_fraction
-    if band_fraction <= 0.0:
-        raise ValueError("Centerline band is empty. Lower outlet_interior.inset_fraction.")
-
-    eps = 1e-9 * (axis_max - axis_min)
-    stations = np.linspace(axis_min + eps, axis_max - eps, int(station_count))
-    station_intervals = [_scanline_intervals_2d(outer_2d, axis, s) for s in stations]
-
-    source_tris: list[np.ndarray] = []
-    interior_tris: list[np.ndarray] = []
-    skipped = 0
-    strips = 0
-
-    for k in range(len(stations) - 1):
-        intervals0 = station_intervals[k]
-        intervals1 = station_intervals[k + 1]
-        if not intervals0 or not intervals1:
-            continue
-        if len(intervals0) != len(intervals1):
-            skipped += 1
-            continue
-
-        s0 = float(stations[k])
-        s1 = float(stations[k + 1])
-        for (lo0, hi0), (lo1, hi1) in zip(intervals0, intervals1):
-            c0 = 0.5 * (lo0 + hi0)
-            c1 = 0.5 * (lo1 + hi1)
-            h0 = 0.5 * (hi0 - lo0) * band_fraction
-            h1 = 0.5 * (hi1 - lo1) * band_fraction
-            blo0, bhi0 = c0 - h0, c0 + h0
-            blo1, bhi1 = c1 - h1, c1 + h1
-
-            _add_scanline_quad(source_tris, s0, s1, lo0, blo0, lo1, blo1, axis, origin, axis_u, axis_v, normal)
-            _add_scanline_quad(interior_tris, s0, s1, blo0, bhi0, blo1, bhi1, axis, origin, axis_u, axis_v, normal)
-            _add_scanline_quad(source_tris, s0, s1, bhi0, hi0, bhi1, hi1, axis, origin, axis_u, axis_v, normal)
-            strips += 1
-
-    if not interior_tris:
-        raise ValueError("Centerline outletInterior produced no triangles.")
-    if not source_tris:
-        raise ValueError("Centerline outlet rim produced no triangles.")
-
-    logger.info(
-        "Created %s with centerline band: axis=%s, exclusion_fraction=%.3f, "
-        "band_fraction=%.3f, stations=%d, strips=%d, skipped_branch_transitions=%d",
-        interior_patch_name,
-        "uv"[axis],
-        exclusion_fraction,
-        band_fraction,
-        len(stations),
-        strips,
-        skipped,
+    interior_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(poly_in, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+    rim_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(poly_ring, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
     )
 
+    logger.info(
+        "Created %s via polygon_offset: inset_distance=%.6e, loops=%d, "
+        "outlet_area=%.6e, inset_area=%.6e (%.1f%%), ring_area=%.6e, "
+        "%s_tris=%d, %s_tris=%d",
+        interior_patch_name,
+        inset_distance,
+        len(loops_2d),
+        poly_outlet.area,
+        poly_in.area,
+        100.0 * poly_in.area / poly_outlet.area,
+        poly_ring.area,
+        interior_patch_name,
+        len(interior_tris_3d),
+        source_patch_name,
+        len(rim_tris_3d),
+    )
+
+    if debug_dir is not None:
+        _write_polygon_offset_debug(
+            debug_dir, loops_2d, poly_outlet, poly_in, poly_ring,
+            origin, axis_u, axis_v,
+        )
+
     return {
-        source_patch_name: source_tris,
-        interior_patch_name: interior_tris,
+        source_patch_name: rim_tris_3d,
+        interior_patch_name: interior_tris_3d,
     }
+
+
+def _write_polygon_offset_debug(
+    debug_dir: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    poly_in,
+    poly_ring,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+) -> None:
+    """Write 2D-in-3D polyline OBJs for each stage of the polygon offset; small format, ParaView-readable."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def collect_rings(geom) -> list[np.ndarray]:
+        rings: list[np.ndarray] = []
+        if geom.is_empty:
+            return rings
+        if isinstance(geom, MultiPolygon):
+            for g in geom.geoms:
+                rings.extend(collect_rings(g))
+            return rings
+        if isinstance(geom, Polygon):
+            rings.append(np.asarray(geom.exterior.coords, dtype=float)[:, :2])
+            for hole in geom.interiors:
+                rings.append(np.asarray(hole.coords, dtype=float)[:, :2])
+            return rings
+        for g in getattr(geom, "geoms", []):
+            if isinstance(g, Polygon):
+                rings.extend(collect_rings(g))
+        return rings
+
+    def write_obj(path: Path, rings: list[np.ndarray]) -> None:
+        with open(path, "w") as f:
+            v_offset = 1
+            for ring in rings:
+                if len(ring) == 0:
+                    continue
+                ring_3d = _unproject_from_plane(np.asarray(ring, dtype=float), origin, axis_u, axis_v)
+                for v in ring_3d:
+                    f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+                idxs = list(range(v_offset, v_offset + len(ring_3d)))
+                f.write("l " + " ".join(str(i) for i in idxs) + f" {v_offset}\n")
+                v_offset += len(ring_3d)
+
+    write_obj(debug_dir / "polygon_offset_outlet_boundary.obj", [r for r in loops_2d])
+    write_obj(debug_dir / "polygon_offset_inset.obj", collect_rings(poly_in))
+    write_obj(debug_dir / "polygon_offset_ring.obj", collect_rings(poly_ring))
+    logger.debug("Wrote polygon_offset debug curves to %s", debug_dir)
 
 
 def _remove_box_caps(
@@ -1110,8 +701,6 @@ both loops forward -- advancing whichever cursor produces the shorter new
 bridge edge -- emitting one triangle per step. Handles loops with
 different vertex counts and makes no assumption about a shared axis.
 """
-
-
 
 
 def _get_boundary_edges(mesh: trimesh.Trimesh) -> np.ndarray:
