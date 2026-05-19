@@ -264,33 +264,40 @@ def load_boundary_patch_faces(case_dir, patch_name="dragObject"):
 
     start_face = int(patch_info["startFace"])
     n_faces = int(patch_info["nFaces"])
+    end_face = start_face + n_faces
 
-    # --- parse only the needed face lines from the faces file ---
-    # The file has a header, then a count line, then '(', then face lines.
-    # Face i corresponds to the i-th face line after '('.
-    face_pattern = re.compile(r"\d+\(([^)]+)\)")
+    # Stream face records of the form `N(v0 v1 ... vN-1)` from the faces file.
+    # High-vertex polyhedral faces (e.g. at snappyHexMesh refinement transitions)
+    # can wrap across multiple lines, so we cannot parse one face per line —
+    # instead we buffer chunks and consume complete records as they appear.
+    face_pattern = re.compile(r"\s*(\d+)\s*\(([^)]*)\)")
 
     patch_faces_raw = []
     with open(faces_path, "r") as f:
-        # Skip header until we find the opening '('
-        line_idx = -1
         for line in f:
-            line = line.strip()
-            if line == "(":
-                line_idx = 0
+            if line.strip() == "(":
                 break
 
-        # Now read face lines, only keep those in [start_face, start_face + n_faces)
-        end_face = start_face + n_faces
-        for line in f:
-            if line_idx >= end_face:
-                break
-            if line_idx >= start_face:
-                m = face_pattern.match(line.strip())
-                if m:
-                    verts = [int(x) for x in m.group(1).split()]
+        buf = ""
+        face_idx = 0
+        chunk_size = 65536
+        done = False
+        while not done and face_idx < end_face:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                done = True
+            buf += chunk
+            pos = 0
+            while face_idx < end_face:
+                m = face_pattern.match(buf, pos)
+                if not m:
+                    break
+                if face_idx >= start_face:
+                    verts = [int(x) for x in m.group(2).split()]
                     patch_faces_raw.append(verts)
-            line_idx += 1
+                face_idx += 1
+                pos = m.end()
+            buf = buf[pos:]
 
     if len(patch_faces_raw) != n_faces:
         raise RuntimeError(
