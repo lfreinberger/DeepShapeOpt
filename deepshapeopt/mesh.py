@@ -572,9 +572,21 @@ def _triangulate_shapely_to_2d(poly, engine: str = "triangle") -> list[tuple[np.
 
     out: list[tuple[np.ndarray, np.ndarray]] = []
     for comp in components:
-        if comp.is_empty or comp.area <= 0:
+        if comp.is_empty or comp.area <= 1e-12:
             continue
-        verts_2d, faces = triangulate_polygon(comp, engine=engine)
+        try:
+            verts_2d, faces = triangulate_polygon(comp, engine=engine)
+        except ValueError as exc:
+            # Trimesh's triangulate_polygon dedups coordinates and then requires
+            # at least 4 in the cleaned ring; a clipped polygon can collapse to a
+            # near-collinear sliver here even though comp.area > 0. Skip and log.
+            n_coords = len(comp.exterior.coords) if hasattr(comp, "exterior") else 0
+            logger.warning(
+                "_triangulate_shapely_to_2d: skipping component (area=%.3e, "
+                "exterior_coords=%d): %s",
+                comp.area, n_coords, exc,
+            )
+            continue
         if len(faces) == 0:
             continue
         out.append((np.asarray(verts_2d, dtype=float), np.asarray(faces, dtype=np.int64)))
@@ -918,7 +930,69 @@ def _write_section_partition_debug(
     write_obj(debug_dir / "outlet_polygon.obj", collect_rings(poly_outlet))
     for name, sec_poly in section_polys:
         write_obj(debug_dir / f"section_{name}.obj", collect_rings(sec_poly))
+
+    try:
+        _write_section_partition_2d_png(
+            debug_dir / "sections_2d.png", loops_2d, poly_outlet, section_polys
+        )
+    except Exception as exc:
+        # matplotlib failures shouldn't abort the optimization run
+        logger.warning("Failed to write sections_2d.png: %s", exc)
+
     logger.debug("Wrote section_partition debug curves to %s", debug_dir)
+
+
+def _write_section_partition_2d_png(
+    path: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    section_polys: list[tuple[str, Any]],
+) -> None:
+    """Plot outlet boundary, user-section bounding polygons, and clipped sections in 2D."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon as MplPolygon
+    from shapely.geometry import MultiPolygon, Polygon
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Outlet boundary (the raw triangle perimeter)
+    for loop in loops_2d:
+        ax.plot(loop[:, 0], loop[:, 1], color="black", lw=1.5, label="_outlet_boundary")
+    ax.plot([], [], color="black", lw=1.5, label="outlet boundary")
+
+    # Clipped section polygons, filled, color-coded
+    cmap = plt.get_cmap("tab10")
+    for i, (name, sec_geom) in enumerate(section_polys):
+        color = cmap(i % 10)
+        comps = (
+            list(sec_geom.geoms) if isinstance(sec_geom, MultiPolygon) else [sec_geom]
+        )
+        for comp in comps:
+            if not isinstance(comp, Polygon) or comp.is_empty:
+                continue
+            verts = np.asarray(comp.exterior.coords, dtype=float)[:, :2]
+            ax.add_patch(
+                MplPolygon(verts, closed=True, facecolor=color, edgecolor=color,
+                           alpha=0.35, lw=1.0)
+            )
+        # Label at centroid
+        c = sec_geom.centroid
+        if not sec_geom.is_empty:
+            ax.text(c.x, c.y, f"{name}\nA={sec_geom.area:.3g}", color=color,
+                    ha="center", va="center", fontsize=9, fontweight="bold")
+
+    ax.set_aspect("equal", "box")
+    ax.set_xlabel("world y")
+    ax.set_ylabel("world z")
+    ax.set_title("section_partition: outlet (black) + clipped sections")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.grid(True, ls=":", alpha=0.4)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
