@@ -151,7 +151,8 @@ def split_stl_into_patches(
     write_multi_region: bool = True,
     multi_region_name: str = "multi_region.stl",
     outlet_interior: dict[str, Any] | None = None,
-) -> Dict[str, int]:
+    section_partition: dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """
     Split an STL into patches according to a user-provided classify_face function.
 
@@ -170,8 +171,11 @@ def split_stl_into_patches(
 
     Returns
     -------
-    Dict[str, int]
-        Mapping patch_name -> number of faces in that patch.
+    Dict[str, Any]
+        ``face_counts`` maps ``patch_name -> n_faces``. When ``section_partition``
+        is active, ``section_areas`` maps section ``patch_name -> 2D area`` so the
+        caller can derive area-weighted target fractions for the flowRatePartition
+        objective. ``section_areas`` is ``None`` otherwise.
     """
 
     input_stl = Path(input_stl)
@@ -201,8 +205,47 @@ def split_stl_into_patches(
         name: tris for name, tris in patch_faces.items() if len(tris) > 0
     }
     debug_patch_names: list[str] = []
+    section_areas: dict[str, float] | None = None
 
-    if outlet_interior and outlet_interior.get("enabled", False):
+    if section_partition and section_partition.get("enabled", False):
+        if outlet_interior and outlet_interior.get("enabled", False):
+            logger.warning(
+                "section_partition is enabled — ignoring outlet_interior (mutually exclusive)."
+            )
+        source_patch = section_partition.get("source_patch", "outlet")
+        name_prefix = section_partition.get("name_prefix", "section_")
+        sections_cfg = section_partition.get("sections", [])
+        if source_patch not in patch_faces:
+            raise ValueError(
+                f"section_partition: source patch '{source_patch}' missing from classifier output."
+            )
+        debug_dir = (
+            output_dir / "debug_section_partition"
+            if section_partition.get("debug", True)
+            else None
+        )
+        region_triangles, section_areas = _build_section_partition_regions(
+            patch_faces[source_patch],
+            source_patch_name=source_patch,
+            sections=sections_cfg,
+            name_prefix=name_prefix,
+            triangulation_engine=str(section_partition.get("triangulation_engine", "triangle")),
+            debug_dir=debug_dir,
+        )
+        del patch_faces[source_patch]
+        for name, tris in region_triangles.items():
+            patch_faces[name] = tris
+
+        if section_partition.get("debug", True):
+            _write_patch_debug_stls(
+                output_dir,
+                patch_faces,
+                list(region_triangles.keys()),
+                debug_subdir="debug_section_partition",
+                combined_name="sections_split_debug.stl",
+            )
+
+    elif outlet_interior and outlet_interior.get("enabled", False):
         source_patch = outlet_interior.get("source_patch", "outlet")
         interior_patch = outlet_interior.get("patch_name", "outletInterior")
         debug_patch_names = [source_patch, interior_patch]
@@ -279,7 +322,10 @@ def split_stl_into_patches(
         logger.debug("Saved multi-region STL to %s", multi_path)
 
     # Return stats in case you want to log/assert in tests
-    return {name: len(tris) for name, tris in patch_faces.items()}
+    return {
+        "face_counts": {name: len(tris) for name, tris in patch_faces.items()},
+        "section_areas": section_areas,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +360,10 @@ def _write_patch_debug_stls(
     output_dir: Path,
     patch_faces: dict[str, list[np.ndarray]],
     patch_names: list[str],
+    debug_subdir: str = "debug_outlet_interior",
+    combined_name: str = "outlet_split_debug.stl",
 ) -> None:
-    debug_dir = output_dir / "debug_outlet_interior"
+    debug_dir = output_dir / debug_subdir
     debug_dir.mkdir(parents=True, exist_ok=True)
 
     for patch_name in patch_names:
@@ -325,7 +373,7 @@ def _write_patch_debug_stls(
         _write_ascii_stl(path, patch_name, patch_faces[patch_name])
         logger.debug("Saved outlet debug STL: %s", path)
 
-    combined_path = debug_dir / "outlet_split_debug.stl"
+    combined_path = debug_dir / combined_name
     with open(combined_path, "w") as f:
         for patch_name in patch_names:
             tris = patch_faces.get(patch_name)
@@ -683,6 +731,194 @@ def _write_polygon_offset_debug(
     write_obj(debug_dir / "polygon_offset_inset.obj", collect_rings(poly_in))
     write_obj(debug_dir / "polygon_offset_ring.obj", collect_rings(poly_ring))
     logger.debug("Wrote polygon_offset debug curves to %s", debug_dir)
+
+
+# ---------------------------------------------------------------------------
+# Section partitioning (for flowRatePartition objective)
+# ---------------------------------------------------------------------------
+
+def _world_aligned_outlet_basis(
+    triangles: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Plane basis with (u, v) pinned to world (y, z) for an outlet ~perpendicular to world x.
+
+    Unlike _make_plane_basis, which chooses an arbitrary in-plane direction from the first
+    boundary edge, this fixes the basis so that user-specified polygons in (y, z) world
+    coordinates project directly into the (u, v) plane. The plane origin lies on the outlet
+    at world (y=0, z=0), so projection of any point on the outlet returns its world (y, z).
+    """
+    normal_acc = np.zeros(3, dtype=float)
+    for tri in triangles:
+        normal_acc += np.cross(tri[1] - tri[0], tri[2] - tri[0])
+    n_norm = np.linalg.norm(normal_acc)
+    if n_norm < 1e-14:
+        raise ValueError(
+            "section_partition: degenerate outlet triangle set; cannot determine plane normal."
+        )
+    normal = normal_acc / n_norm
+
+    if abs(normal[0]) < np.cos(np.deg2rad(30.0)):
+        raise ValueError(
+            f"section_partition: outlet normal {tuple(float(v) for v in normal)} is not "
+            "aligned with world-x. This feature currently assumes axial extrusion along "
+            "world-x so that user polygons can be given in world (y, z) coordinates."
+        )
+
+    pts = triangles.reshape(-1, 3)
+    mean_x = float(pts[:, 0].mean())
+    origin = np.array([mean_x, 0.0, 0.0])
+    axis_u = np.array([0.0, 1.0, 0.0])
+    axis_v = np.array([0.0, 0.0, 1.0])
+    return origin, normal, axis_u, axis_v
+
+
+def _build_section_partition_regions(
+    outlet_triangles: list[np.ndarray],
+    source_patch_name: str,
+    sections: list[dict[str, Any]],
+    name_prefix: str = "section_",
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
+) -> tuple[dict[str, list[np.ndarray]], dict[str, float]]:
+    """Subdivide a planar outlet patch into N section sub-patches via 2D shapely intersection.
+
+    Each section in ``sections`` provides a 2D polygon in world (y, z) coordinates; the
+    intersection with the projected outlet polygon is re-triangulated and lifted back to 3D
+    using the world-aligned plane basis. Section areas are returned so the caller can derive
+    area-weighted target fractions (equal-mean-velocity targets) for the flowRatePartition
+    adjoint objective.
+    """
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+
+    if not sections:
+        raise ValueError("section_partition: 'sections' list is empty.")
+
+    triangles = np.asarray(outlet_triangles, dtype=float)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
+    if not loops_3d:
+        raise ValueError("section_partition: no boundary loops found on outlet patch.")
+
+    origin, normal, axis_u, axis_v = _world_aligned_outlet_basis(triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+    outlet_area = float(poly_outlet.area)
+
+    region_triangles: dict[str, list[np.ndarray]] = {}
+    region_areas: dict[str, float] = {}
+    debug_polys: list[tuple[str, Any]] = []
+    used_names: set[str] = set()
+
+    for idx, sec in enumerate(sections):
+        name = sec.get("name") or f"{name_prefix}{idx + 1:02d}"
+        if name in used_names:
+            raise ValueError(f"section_partition: duplicate section name '{name}'.")
+        used_names.add(name)
+        if "polygon" not in sec:
+            raise ValueError(f"section_partition: section '{name}' is missing 'polygon' key.")
+        poly_arr = np.asarray(sec["polygon"], dtype=float)
+        if poly_arr.ndim != 2 or poly_arr.shape[1] != 2:
+            raise ValueError(
+                f"section_partition: section '{name}' polygon must be a list of [y, z] pairs."
+            )
+        sec_poly = Polygon(poly_arr)
+        if not sec_poly.is_valid:
+            sec_poly = make_valid(sec_poly)
+        clipped = poly_outlet.intersection(sec_poly)
+        if clipped.is_empty or clipped.area <= 0:
+            raise ValueError(
+                f"section_partition: section '{name}' has empty intersection with outlet "
+                "(check polygon coordinates against outlet bbox)."
+            )
+
+        tris_2d = _triangulate_shapely_to_2d(clipped, engine=triangulation_engine)
+        tris_3d = _lift_2d_triangles_to_3d(tris_2d, origin, axis_u, axis_v, normal)
+        if not tris_3d:
+            raise ValueError(
+                f"section_partition: section '{name}' produced no triangles after lifting."
+            )
+        region_triangles[name] = tris_3d
+        region_areas[name] = float(clipped.area)
+        debug_polys.append((name, clipped))
+
+    sum_area = sum(region_areas.values())
+    coverage = sum_area / max(outlet_area, 1e-30)
+    if abs(coverage - 1.0) > 0.05:
+        # >5% gap or overlap between section sum and outlet — likely a polygon spec bug.
+        logger.warning(
+            "section_partition: section areas cover %.1f%% of outlet (sum=%.4e, outlet=%.4e). "
+            "Sections should tile the outlet for the area-weighted target-fraction objective.",
+            100.0 * coverage,
+            sum_area,
+            outlet_area,
+        )
+
+    logger.info(
+        "section_partition: split %s into %d sections (%s)",
+        source_patch_name,
+        len(region_triangles),
+        ", ".join(f"{n} area={a:.4e}" for n, a in region_areas.items()),
+    )
+
+    if debug_dir is not None:
+        _write_section_partition_debug(
+            debug_dir, loops_2d, poly_outlet, debug_polys, origin, axis_u, axis_v
+        )
+
+    return region_triangles, region_areas
+
+
+def _write_section_partition_debug(
+    debug_dir: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    section_polys: list[tuple[str, Any]],
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+) -> None:
+    """Write per-section polyline OBJs (lifted to 3D) for ParaView inspection."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def collect_rings(geom) -> list[np.ndarray]:
+        rings: list[np.ndarray] = []
+        if geom.is_empty:
+            return rings
+        if isinstance(geom, MultiPolygon):
+            for g in geom.geoms:
+                rings.extend(collect_rings(g))
+            return rings
+        if isinstance(geom, Polygon):
+            rings.append(np.asarray(geom.exterior.coords, dtype=float)[:, :2])
+            for hole in geom.interiors:
+                rings.append(np.asarray(hole.coords, dtype=float)[:, :2])
+            return rings
+        for g in getattr(geom, "geoms", []):
+            if isinstance(g, Polygon):
+                rings.extend(collect_rings(g))
+        return rings
+
+    def write_obj(path: Path, rings: list[np.ndarray]) -> None:
+        with open(path, "w") as f:
+            v_offset = 1
+            for ring in rings:
+                if len(ring) == 0:
+                    continue
+                ring_3d = _unproject_from_plane(np.asarray(ring, dtype=float), origin, axis_u, axis_v)
+                for v in ring_3d:
+                    f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+                idxs = list(range(v_offset, v_offset + len(ring_3d)))
+                f.write("l " + " ".join(str(i) for i in idxs) + f" {v_offset}\n")
+                v_offset += len(ring_3d)
+
+    write_obj(debug_dir / "outlet_boundary.obj", [r for r in loops_2d])
+    write_obj(debug_dir / "outlet_polygon.obj", collect_rings(poly_outlet))
+    for name, sec_poly in section_polys:
+        write_obj(debug_dir / f"section_{name}.obj", collect_rings(sec_poly))
+    logger.debug("Wrote section_partition debug curves to %s", debug_dir)
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,11 @@ def prepare_foam_runtime(template_dir: Path, run_name: str) -> Path:
     return runtime_dir
 
 
-def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str, str]:
+def configure_foam_runtime(
+    case_dir: Path,
+    constraint_enabled: bool,
+    section_patches: list[tuple[str, float]] | None = None,
+) -> dict[str, str]:
     """Derive adjoint-time directories from optimisationDict and patch the runtime case.
 
     Reads primal/adjoint ``nIters`` from ``system/optimisationDict`` and computes the
@@ -39,6 +43,15 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
       - ``optimisationDict``: sets ``am1.as2.active`` to ``constraint_enabled``
       - ``controlDict``: forces ``purgeWrite = 0`` so no needed time dir is purged
       - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the derived times
+
+    When ``section_patches`` is provided (list of ``(patch_name, target_fraction)`` pairs),
+    additionally:
+      - ``optimisationDict``: replaces the ``as1`` objectiveNames block with a single
+        ``flowBalance`` objective of type ``flowRatePartition`` over the listed sections.
+      - ``snappyHexMeshDict``: removes ``outlet``/``outletInterior`` region entries from
+        ``geometry.shape.stl.regions`` and ``castellatedMeshControls.refinementSurfaces.
+        extrusion_die.regions``, replacing them with one entry per section (inheriting
+        the prior outlet refinement level).
 
     Should be called once after ``prepare_foam_runtime`` copies the template.
     Operating on the template directly would dirty the git-tracked files.
@@ -56,6 +69,9 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
 
     opt["adjointManagers", "am1", "adjointSolvers", "as2", "active"] = bool(constraint_enabled)
 
+    if section_patches is not None:
+        _inject_section_partition_into_runtime(case_dir, opt, section_patches)
+
     t_as1 = p_n + as1_n
     adjoint_times = {"as1": str(t_as1)}
     if constraint_enabled:
@@ -71,6 +87,62 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
     allrun_path.write_text(text.replace(marker, ",".join(adjoint_times.values())))
 
     return adjoint_times
+
+
+def _inject_section_partition_into_runtime(
+    case_dir: Path,
+    opt: FoamFile,
+    section_patches: list[tuple[str, float]],
+) -> None:
+    """Rewrite optimisationDict objectives and snappyHexMeshDict regions for section_partition."""
+    if not section_patches:
+        raise ValueError("section_patches must contain at least one (name, fraction) entry.")
+    names = [name for name, _ in section_patches]
+    fractions = [float(f) for _, f in section_patches]
+
+    # optimisationDict: replace the as1 objectiveNames block with a single flowBalance objective.
+    # The objective key 'flowBalance' + adjoint solver name 'as1' produces the output file
+    # name 'flowBalanceas1' that load_metric_sensitivities then reads.
+    opt["adjointManagers", "am1", "adjointSolvers", "as1", "objectives", "objectiveNames"] = {
+        "flowBalance": {
+            "weight": 1.0,
+            "type": "flowRatePartition",
+            "inletPatches": ["inlet"],
+            "outletPatches": names,
+            "targetFractions": fractions,
+            "normalise": True,
+        }
+    }
+
+    # snappyHexMeshDict: rewrite both the geometry.regions block and the refinementSurfaces
+    # regions block. Sections inherit the refinement level from the prior outlet entry, since
+    # they are geometric subdivisions of that patch.
+    snap_path = case_dir / "system" / "snappyHexMeshDict"
+    snap = FoamFile(snap_path)
+
+    geom_regions_path = ("geometry", "shape.stl", "regions")
+    refine_regions_path = (
+        "castellatedMeshControls", "refinementSurfaces", "extrusion_die", "regions",
+    )
+
+    # Capture the outlet refinement level (if present) so sections inherit it.
+    outlet_level = None
+    try:
+        outlet_level = snap[(*refine_regions_path, "outlet", "level")]
+    except KeyError:
+        pass
+
+    for stale in ("outlet", "outletInterior"):
+        for parent_path in (geom_regions_path, refine_regions_path):
+            try:
+                del snap[(*parent_path, stale)]
+            except KeyError:
+                pass
+
+    for name in names:
+        snap[(*geom_regions_path, name)] = {"name": name}
+        if outlet_level is not None:
+            snap[(*refine_regions_path, name)] = {"level": outlet_level}
 
 
 def run_openfoam_case(case_dir: Path, verbose: bool = True):
