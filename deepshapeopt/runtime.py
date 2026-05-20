@@ -57,6 +57,21 @@ def configure_logging(debug: bool, log_file: Path | None = None) -> None:
         if not debug:
             lg.setLevel(logging.WARNING)
 
+    # Third-party libraries emit huge volumes of DEBUG/INFO records that
+    # drown out our own output. Pin them to WARNING regardless of mode so
+    # turning on debug for deepshapeopt code doesn't unleash matplotlib
+    # font-scoring, gustaf getter/setter traces, etc.
+    for noisy in (
+        "matplotlib",
+        "PIL",
+        "fontTools",
+        "gustaf",
+        "trimesh",
+        "h5py",
+        "asyncio",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     if not debug:
         warnings.filterwarnings("ignore", category=UserWarning, module=r"DeepSDFStruct\..*")
         warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\..*")
