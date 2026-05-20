@@ -209,16 +209,36 @@ def split_stl_into_patches(
         if source_patch not in patch_faces:
             raise ValueError(f"Cannot create outlet interior patch: missing source patch '{source_patch}'.")
 
-        interior_regions = _build_polygon_offset_outlet_regions(
-            patch_faces[source_patch],
-            source_patch_name=source_patch,
-            interior_patch_name=interior_patch,
-            inset_distance=float(outlet_interior.get("inset_distance", 1.0)),
-            quad_segs=int(outlet_interior.get("quad_segs", 8)),
-            join_style=str(outlet_interior.get("join_style", "round")),
-            triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
-            debug_dir=(output_dir / "debug_outlet_interior") if outlet_interior.get("debug", True) else None,
-        )
+        method = str(outlet_interior.get("method", "polygon_offset"))
+        debug_dir = (output_dir / "debug_outlet_interior") if outlet_interior.get("debug", True) else None
+        if method == "polygon_offset":
+            interior_regions = _build_polygon_offset_outlet_regions(
+                patch_faces[source_patch],
+                source_patch_name=source_patch,
+                interior_patch_name=interior_patch,
+                inset_distance=float(outlet_interior.get("inset_distance", 1.0)),
+                quad_segs=int(outlet_interior.get("quad_segs", 8)),
+                join_style=str(outlet_interior.get("join_style", "round")),
+                triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
+                debug_dir=debug_dir,
+            )
+        elif method == "medial_axis":
+            interior_regions = _build_medial_axis_outlet_regions(
+                patch_faces[source_patch],
+                source_patch_name=source_patch,
+                interior_patch_name=interior_patch,
+                boundary_sample_ds=float(outlet_interior.get("boundary_sample_ds", 0.05)),
+                strip_half_width=float(outlet_interior.get("strip_half_width", 0.1)),
+                min_dist_from_boundary=float(outlet_interior.get("min_dist_from_boundary", 0.3)),
+                prune_branch_len=float(outlet_interior.get("prune_branch_len", 1.0)),
+                triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
+                debug_dir=debug_dir,
+            )
+        else:
+            raise ValueError(
+                f"Unknown outlet_interior.method '{method}' "
+                "(expected 'polygon_offset' or 'medial_axis')."
+            )
         patch_faces[source_patch] = interior_regions[source_patch]
         patch_faces[interior_patch] = interior_regions[interior_patch]
         logger.info(
@@ -665,6 +685,331 @@ def _write_polygon_offset_debug(
     logger.debug("Wrote polygon_offset debug curves to %s", debug_dir)
 
 
+# ---------------------------------------------------------------------------
+# Medial-axis outlet split
+# ---------------------------------------------------------------------------
+
+def _resample_loop_2d(loop_2d: np.ndarray, ds: float) -> np.ndarray:
+    """Uniformly resample a closed 2D polyline at spacing ~ds (min 16 points)."""
+    pts = np.asarray(loop_2d, float)
+    if not np.allclose(pts[0], pts[-1]):
+        pts = np.vstack([pts, pts[0:1]])
+    seg_len = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg_len)])
+    n = max(int(round(s[-1] / ds)), 16)
+    s_new = np.linspace(0.0, s[-1], n, endpoint=False)
+    xs = np.interp(s_new, s, pts[:, 0])
+    ys = np.interp(s_new, s, pts[:, 1])
+    return np.column_stack([xs, ys])
+
+
+def _voronoi_medial_axis(poly, ds: float, min_dist: float):
+    """Compute a Voronoi-based medial axis of a shapely (Multi)Polygon.
+
+    Dense-samples the boundary at spacing ``ds``, builds the Voronoi diagram,
+    keeps edges interior to ``poly`` whose endpoints are at least ``min_dist``
+    from the boundary (drops the dense same-side fringe), and merges into one
+    or more polylines. Returns a shapely MultiLineString (possibly empty).
+    """
+    import shapely
+    from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
+    from shapely.ops import linemerge, unary_union, voronoi_diagram
+
+    polys = list(poly.geoms) if isinstance(poly, shapely.MultiPolygon) else [poly]
+    sample_pts: list[np.ndarray] = []
+    for p in polys:
+        for ring in [p.exterior, *p.interiors]:
+            coords = np.asarray(ring.coords, float)[:, :2]
+            sample_pts.append(_resample_loop_2d(coords, ds))
+    if not sample_pts:
+        return MultiLineString()
+    all_pts = np.vstack(sample_pts)
+    mp = MultiPoint([(x, y) for x, y in all_pts])
+
+    vd = voronoi_diagram(mp, envelope=poly.envelope, edges=True)
+    # shapely returns a GeometryCollection containing a single MultiLineString
+    # of all Voronoi edges; clip it to the polygon directly.
+    clipped = vd.intersection(poly)
+    if clipped.is_empty:
+        return MultiLineString()
+    if isinstance(clipped, LineString):
+        inside = [clipped]
+    elif isinstance(clipped, MultiLineString):
+        inside = list(clipped.geoms)
+    else:
+        inside = [g for g in getattr(clipped, "geoms", []) if isinstance(g, LineString)]
+    if not inside:
+        return MultiLineString()
+
+    # Fringe filter: keep only edges whose endpoints are well inside the polygon.
+    boundary = poly.boundary
+    kept = [
+        ls for ls in inside
+        if all(boundary.distance(Point(c)) >= min_dist for c in ls.coords)
+    ]
+    if not kept:
+        return MultiLineString()
+
+    merged = linemerge(unary_union(kept))
+    if isinstance(merged, LineString):
+        merged = MultiLineString([merged])
+    return merged
+
+
+def _prune_short_polylines(ml, min_len: float):
+    """Drop polylines shorter than min_len (returns empty MultiLineString if all removed)."""
+    from shapely.geometry import MultiLineString
+
+    if ml.is_empty:
+        return ml
+    kept = [g for g in ml.geoms if g.length >= min_len]
+    return MultiLineString(kept)
+
+
+def _build_medial_axis_outlet_regions(
+    outlet_triangles: list[np.ndarray],
+    source_patch_name: str,
+    interior_patch_name: str,
+    boundary_sample_ds: float,
+    strip_half_width: float,
+    min_dist_from_boundary: float,
+    prune_branch_len: float = 1.0,
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
+) -> dict[str, list[np.ndarray]]:
+    """Split the outlet using a buffered medial-axis strip as the interior patch.
+
+    The medial axis (Voronoi-based) of the outlet polygon is extracted, pruned,
+    buffered by ``strip_half_width`` and clipped to the outlet to form the
+    interior patch; the rim is the outlet minus the strip. Both regions are
+    re-triangulated to the smooth strip boundary.
+
+    Use ``min_dist_from_boundary`` slightly below the channel's narrowest local
+    half-width (otherwise the medial line gets cut into disconnected pieces).
+    """
+    import shapely
+
+    if strip_half_width <= 0:
+        raise ValueError(f"medial_axis: strip_half_width must be positive, got {strip_half_width}.")
+    if boundary_sample_ds <= 0:
+        raise ValueError(f"medial_axis: boundary_sample_ds must be positive, got {boundary_sample_ds}.")
+    if min_dist_from_boundary <= 0:
+        raise ValueError(f"medial_axis: min_dist_from_boundary must be positive, got {min_dist_from_boundary}.")
+
+    triangles = np.asarray(outlet_triangles, dtype=float)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
+    if not loops_3d:
+        raise ValueError("medial_axis: no boundary loops on outlet patch.")
+
+    all_loop_pts = np.vstack(loops_3d)
+    origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+
+    medial = _voronoi_medial_axis(poly_outlet, ds=boundary_sample_ds, min_dist=min_dist_from_boundary)
+    medial = _prune_short_polylines(medial, prune_branch_len)
+    if medial.is_empty:
+        raise ValueError(
+            f"medial_axis: extraction produced an empty medial axis "
+            f"(min_dist_from_boundary={min_dist_from_boundary} too large, or channel too narrow)."
+        )
+
+    strip_2d = medial.buffer(strip_half_width, join_style="round", cap_style="round")
+    strip_2d = strip_2d.intersection(poly_outlet)
+    if strip_2d.is_empty or strip_2d.area <= 0:
+        raise ValueError(
+            f"medial_axis: buffered strip is empty (strip_half_width={strip_half_width})."
+        )
+    ring_2d = poly_outlet.difference(strip_2d)
+
+    interior_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(strip_2d, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+    rim_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(ring_2d, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+
+    total_medial_len = sum(g.length for g in medial.geoms)
+    try:
+        clearance = float(strip_2d.boundary.distance(poly_outlet.boundary))
+    except Exception:
+        clearance = float("nan")
+    logger.info(
+        "Created %s via medial_axis: medial polylines=%d (len=%.3e), "
+        "outlet_area=%.6e, strip_area=%.6e (%.1f%%), rim_area=%.6e, "
+        "wall_clearance=%.4e, %s_tris=%d, %s_tris=%d",
+        interior_patch_name,
+        len(medial.geoms),
+        total_medial_len,
+        poly_outlet.area,
+        strip_2d.area,
+        100.0 * strip_2d.area / poly_outlet.area,
+        ring_2d.area,
+        clearance,
+        interior_patch_name,
+        len(interior_tris_3d),
+        source_patch_name,
+        len(rim_tris_3d),
+    )
+
+    if debug_dir is not None:
+        _write_medial_axis_debug(
+            debug_dir, poly_outlet, medial, strip_2d,
+            origin, axis_u, axis_v,
+            params=dict(
+                boundary_sample_ds=boundary_sample_ds,
+                strip_half_width=strip_half_width,
+                min_dist_from_boundary=min_dist_from_boundary,
+                prune_branch_len=prune_branch_len,
+            ),
+            clearance=clearance,
+            medial_length=total_medial_len,
+        )
+
+    return {
+        source_patch_name: rim_tris_3d,
+        interior_patch_name: interior_tris_3d,
+    }
+
+
+def _write_medial_axis_debug(
+    debug_dir: Path,
+    poly_outlet,
+    medial,
+    strip_2d,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    params: dict[str, float],
+    clearance: float,
+    medial_length: float,
+) -> None:
+    """Write the medial-axis polyline (OBJ in 3D) and a PNG overview+zoom."""
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    # Medial axis as a 3D OBJ polyline
+    obj_path = debug_dir / "medial_axis.obj"
+    with open(obj_path, "w") as f:
+        v_offset = 1
+        for g in medial.geoms:
+            coords_2d = np.asarray(g.coords, dtype=float)
+            pts_3d = _unproject_from_plane(coords_2d, origin, axis_u, axis_v)
+            for v in pts_3d:
+                f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+            for i in range(len(pts_3d) - 1):
+                f.write(f"l {v_offset + i} {v_offset + i + 1}\n")
+            v_offset += len(pts_3d)
+
+    _render_medial_axis_png(
+        debug_dir / "medial_axis.png",
+        poly_outlet, medial, strip_2d,
+        params=params, clearance=clearance, medial_length=medial_length,
+    )
+
+
+def _render_medial_axis_png(
+    path: Path,
+    poly,
+    medial,
+    strip,
+    params: dict[str, float],
+    clearance: float,
+    medial_length: float,
+    zoom_size_mm: float = 4.0,
+) -> None:
+    """Render an overview + zoom of the outlet split (matplotlib, Agg backend)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import PathPatch, Rectangle
+        from matplotlib.path import Path as MplPath
+    except ImportError:
+        logger.warning("matplotlib not available; skipping medial_axis.png debug render.")
+        return
+
+    def polygon_to_patch(p, **kw):
+        verts, codes = [], []
+        def add_ring(coords):
+            cs = list(coords)
+            verts.extend(cs)
+            codes.append(MplPath.MOVETO)
+            codes.extend([MplPath.LINETO] * (len(cs) - 2))
+            codes.append(MplPath.CLOSEPOLY)
+        polys = list(p.geoms) if p.geom_type == "MultiPolygon" else [p]
+        for q in polys:
+            add_ring(q.exterior.coords)
+            for h in q.interiors:
+                add_ring(h.coords)
+        return PathPatch(MplPath(verts, codes), **kw)
+
+    def draw_scene(ax, lw_scale=1.0):
+        ax.add_patch(polygon_to_patch(poly, facecolor="#dddddd", edgecolor="none", zorder=0))
+        if not strip.is_empty:
+            ax.add_patch(polygon_to_patch(
+                strip, facecolor="#ffc8a8", edgecolor="#d2691e",
+                lw=0.6 * lw_scale, zorder=1, label="strip",
+            ))
+        polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        for q in polys:
+            ex = np.asarray(q.exterior.coords)
+            ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8 * lw_scale, label="outer wall")
+            for h in q.interiors:
+                hc = np.asarray(h.coords)
+                ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8 * lw_scale, label="inner wall")
+        for g in medial.geoms:
+            c = np.asarray(g.coords)
+            ax.plot(c[:, 0], c[:, 1], "-", color="#d62728", lw=1.2 * lw_scale, label="medial axis")
+
+    minx, miny, maxx, maxy = poly.bounds
+    cx, cy = 0.5 * (minx + maxx), miny + 0.45 * (maxy - miny)
+    medial_pts = np.vstack([np.asarray(g.coords) for g in medial.geoms])
+    nearest = medial_pts[np.argmin(np.hypot(medial_pts[:, 0] - cx, medial_pts[:, 1] - cy))]
+    half = 0.5 * zoom_size_mm
+
+    title = (
+        f"ds={params['boundary_sample_ds']}, min_dist={params['min_dist_from_boundary']}, "
+        f"strip_w={params['strip_half_width']}, prune<{params['prune_branch_len']}  |  "
+        f"medial {medial_length:.1f} mm, strip {100 * strip.area / poly.area:.1f}%, "
+        f"clearance {clearance:.3f} mm"
+    )
+
+    fig, (ax, axz) = plt.subplots(
+        2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [1.0, 1.4]}
+    )
+    draw_scene(ax)
+    handles, labels = ax.get_legend_handles_labels()
+    seen = {}
+    for h, l in zip(handles, labels):
+        seen.setdefault(l, h)
+    ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel("u [mm]")
+    ax.set_ylabel("v [mm]")
+    ax.add_patch(Rectangle(
+        (nearest[0] - half, nearest[1] - half), zoom_size_mm, zoom_size_mm,
+        fill=False, edgecolor="0.2", lw=1.0, zorder=3,
+    ))
+
+    draw_scene(axz, lw_scale=1.5)
+    axz.set_xlim(nearest[0] - half, nearest[0] + half)
+    axz.set_ylim(nearest[1] - half, nearest[1] + half)
+    axz.set_aspect("equal")
+    axz.set_title(f"zoom: {zoom_size_mm:.1f} x {zoom_size_mm:.1f} mm window", fontsize=10)
+    axz.set_xlabel("u [mm]")
+    axz.set_ylabel("v [mm]")
+    axz.grid(True, linestyle=":", color="0.7", lw=0.4)
+
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _remove_box_caps(
     mesh: trimesh.Trimesh,
     box_bounds: np.ndarray,
@@ -678,12 +1023,9 @@ def _remove_box_caps(
     for axis in range(3):
         for val in [box_min[axis], box_max[axis]]:
             on_plane = np.all(np.abs(face_verts[:, :, axis] - val) < tol, axis=1)
-            n = on_plane.sum()
-            if n > 0:
-                logger.debug("_remove_box_caps axis=%d val=%.4f: %d cap faces (tol=%s)", axis, val, n, tol)
             is_cap |= on_plane
 
-    logger.debug("_remove_box_caps removed %d / %d faces", is_cap.sum(), len(mesh.faces))
+    logger.debug("_remove_box_caps removed %d / %d faces (tol=%s)", is_cap.sum(), len(mesh.faces), tol)
     if is_cap.any():
         mesh = mesh.copy()
         mesh.update_faces(~is_cap)
