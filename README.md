@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/1237823553.svg)](https://doi.org/10.5281/zenodo.20210464)
 
-DeepShapeOpt is a research codebase for shape optimization with neural implicit geometry representations and OpenFOAM-based adjoint sensitivities. The public repository focuses on drag optimization of cube-like benchmark geometries.
+DeepShapeOpt is a research codebase for shape optimization with neural implicit geometry representations and OpenFOAM-based adjoint sensitivities. The repository focuses on drag optimization of cube-like benchmark geometries.
 
 ## Reproducing the paper
 
@@ -130,13 +130,6 @@ or:
 ```
 
 When `heavy_data_output_path` is set, debug exports are mirrored under `DEEPSHAPEOPT_RESULTS_DIR` while preserving the experiment path layout.
-
-## Notes
-
-- Iteration numbering starts at `0` in logs, files, and plots.
-- Normal console output is intentionally concise: iteration, objective, constraints, MMA change, and timing.
-- Detailed sensitivity-transfer diagnostics and heavy visualization series are debug-only.
-- OpenFOAM residual plots are generated whenever solver logs are available.
 
 ## Citation
 
