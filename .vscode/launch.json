@@ -53,7 +53,7 @@
         "DEEPSHAPEOPT_DATA_DIR": "data",
         "DEEPSHAPEOPT_MODEL_DIR": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models",
         "DEEPSHAPEOPT_RESULTS_DIR": "/storage/lfrei/DeepShapeOpt_test"
-      }
+      },
     }
   ]
 }

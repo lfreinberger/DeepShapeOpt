@@ -683,7 +683,7 @@ def _build_polygon_offset_outlet_regions(
     if debug_dir is not None:
         _write_polygon_offset_debug(
             debug_dir, loops_2d, poly_outlet, poly_in, poly_ring,
-            origin, axis_u, axis_v,
+            origin, axis_u, axis_v, inset_distance=float(inset_distance),
         )
 
     return {
@@ -701,6 +701,7 @@ def _write_polygon_offset_debug(
     origin: np.ndarray,
     axis_u: np.ndarray,
     axis_v: np.ndarray,
+    inset_distance: float,
 ) -> None:
     """Write 2D-in-3D polyline OBJs for each stage of the polygon offset; small format, ParaView-readable."""
     from shapely.geometry import MultiPolygon, Polygon
@@ -742,7 +743,103 @@ def _write_polygon_offset_debug(
     write_obj(debug_dir / "polygon_offset_outlet_boundary.obj", [r for r in loops_2d])
     write_obj(debug_dir / "polygon_offset_inset.obj", collect_rings(poly_in))
     write_obj(debug_dir / "polygon_offset_ring.obj", collect_rings(poly_ring))
+    _render_polygon_offset_png(
+        debug_dir / "polygon_offset.png",
+        poly_outlet, poly_in, poly_ring,
+        origin=origin, axis_u=axis_u, axis_v=axis_v,
+        inset_distance=float(inset_distance),
+    )
     logger.debug("Wrote polygon_offset debug curves to %s", debug_dir)
+
+
+def _render_polygon_offset_png(
+    path: Path,
+    poly_outlet,
+    poly_in,
+    poly_ring,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    inset_distance: float,
+) -> None:
+    """Render overview of the polygon-offset outlet split in world (y, z) with z up, y to the left."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import PathPatch
+        from matplotlib.path import Path as MplPath
+    except ImportError:
+        logger.warning("matplotlib not available; skipping polygon_offset.png debug render.")
+        return
+
+    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
+        """Lift 2D plane coords to 3D world, then drop x → return (-y, z) so that z is up, y points left."""
+        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
+        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
+
+    def polygon_to_patch(p, **kw):
+        verts, codes = [], []
+        def add_ring(coords):
+            cs = list(to_world_yz(np.asarray(coords)))
+            verts.extend(cs)
+            codes.append(MplPath.MOVETO)
+            codes.extend([MplPath.LINETO] * (len(cs) - 2))
+            codes.append(MplPath.CLOSEPOLY)
+        polys = list(p.geoms) if p.geom_type == "MultiPolygon" else [p]
+        for q in polys:
+            if q.is_empty:
+                continue
+            add_ring(q.exterior.coords)
+            for h in q.interiors:
+                add_ring(h.coords)
+        if not verts:
+            return None
+        return PathPatch(MplPath(verts, codes), **kw)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ring_patch = polygon_to_patch(
+        poly_ring, facecolor="#dddddd", edgecolor="none", zorder=0, label="outlet",
+    )
+    if ring_patch is not None:
+        ax.add_patch(ring_patch)
+    in_patch = polygon_to_patch(
+        poly_in, facecolor="#ffc8a8", edgecolor="#d2691e",
+        lw=0.6, zorder=1, label="outletInterior",
+    )
+    if in_patch is not None:
+        ax.add_patch(in_patch)
+    polys = list(poly_outlet.geoms) if poly_outlet.geom_type == "MultiPolygon" else [poly_outlet]
+    for q in polys:
+        ex = to_world_yz(np.asarray(q.exterior.coords))
+        ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8)
+        for h in q.interiors:
+            hc = to_world_yz(np.asarray(h.coords))
+            ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8)
+    in_polys = list(poly_in.geoms) if poly_in.geom_type == "MultiPolygon" else [poly_in]
+    for q in in_polys:
+        if q.is_empty:
+            continue
+        ex = to_world_yz(np.asarray(q.exterior.coords))
+        ax.plot(ex[:, 0], ex[:, 1], "-", color="#d62728", lw=1.0)
+        for h in q.interiors:
+            hc = to_world_yz(np.asarray(h.coords))
+            ax.plot(hc[:, 0], hc[:, 1], "-", color="#d62728", lw=1.0)
+
+    handles, labels = ax.get_legend_handles_labels()
+    seen = {}
+    for h, l in zip(handles, labels):
+        seen.setdefault(l, h)
+    ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title(f"offset = {inset_distance:g} mm", fontsize=10)
+    ax.set_xlabel("y [mm]")
+    ax.set_ylabel("z [mm]")
+
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -1213,111 +1310,131 @@ def _write_medial_axis_debug(
                 f.write(f"l {v_offset + i} {v_offset + i + 1}\n")
             v_offset += len(pts_3d)
 
-    _render_medial_axis_png(
-        debug_dir / "medial_axis.png",
+    _render_medial_axis_pngs(
+        debug_dir,
         poly_outlet, medial, strip_2d,
-        params=params, clearance=clearance, medial_length=medial_length,
+        origin=origin, axis_u=axis_u, axis_v=axis_v,
+        strip_half_width=float(params["strip_half_width"]),
     )
 
 
-def _render_medial_axis_png(
-    path: Path,
+def _render_medial_axis_pngs(
+    debug_dir: Path,
     poly,
     medial,
     strip,
-    params: dict[str, float],
-    clearance: float,
-    medial_length: float,
-    zoom_size_mm: float = 4.0,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    strip_half_width: float,
 ) -> None:
-    """Render an overview + zoom of the outlet split (matplotlib, Agg backend)."""
+    """Render three PNGs (outlet-only, medial-axis-only, combined) in world (y, z), z up, y left."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        from matplotlib.patches import PathPatch, Rectangle
+        from matplotlib.patches import PathPatch
         from matplotlib.path import Path as MplPath
     except ImportError:
-        logger.warning("matplotlib not available; skipping medial_axis.png debug render.")
+        logger.warning("matplotlib not available; skipping medial_axis PNG debug renders.")
         return
+
+    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
+        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
+        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
 
     def polygon_to_patch(p, **kw):
         verts, codes = [], []
         def add_ring(coords):
-            cs = list(coords)
+            cs = list(to_world_yz(np.asarray(coords)))
             verts.extend(cs)
             codes.append(MplPath.MOVETO)
             codes.extend([MplPath.LINETO] * (len(cs) - 2))
             codes.append(MplPath.CLOSEPOLY)
         polys = list(p.geoms) if p.geom_type == "MultiPolygon" else [p]
         for q in polys:
+            if q.is_empty:
+                continue
             add_ring(q.exterior.coords)
             for h in q.interiors:
                 add_ring(h.coords)
+        if not verts:
+            return None
         return PathPatch(MplPath(verts, codes), **kw)
 
-    def draw_scene(ax, lw_scale=1.0):
-        ax.add_patch(polygon_to_patch(poly, facecolor="#dddddd", edgecolor="none", zorder=0))
-        if not strip.is_empty:
-            ax.add_patch(polygon_to_patch(
-                strip, facecolor="#ffc8a8", edgecolor="#d2691e",
-                lw=0.6 * lw_scale, zorder=1, label="strip",
-            ))
+    def draw_outlet(ax) -> None:
+        rim_patch = polygon_to_patch(
+            poly, facecolor="#dddddd", edgecolor="none", zorder=0, label="outlet",
+        )
+        if rim_patch is not None:
+            ax.add_patch(rim_patch)
         polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
         for q in polys:
-            ex = np.asarray(q.exterior.coords)
-            ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8 * lw_scale, label="outer wall")
+            ex = to_world_yz(np.asarray(q.exterior.coords))
+            ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8)
             for h in q.interiors:
-                hc = np.asarray(h.coords)
-                ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8 * lw_scale, label="inner wall")
+                hc = to_world_yz(np.asarray(h.coords))
+                ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8)
+
+    def draw_medial(ax) -> None:
+        first = True
         for g in medial.geoms:
-            c = np.asarray(g.coords)
-            ax.plot(c[:, 0], c[:, 1], "-", color="#d62728", lw=1.2 * lw_scale, label="medial axis")
+            c = to_world_yz(np.asarray(g.coords))
+            ax.plot(
+                c[:, 0], c[:, 1], "-", color="#d62728", lw=1.2,
+                label="medial axis" if first else None,
+            )
+            first = False
 
-    minx, miny, maxx, maxy = poly.bounds
-    cx, cy = 0.5 * (minx + maxx), miny + 0.45 * (maxy - miny)
-    medial_pts = np.vstack([np.asarray(g.coords) for g in medial.geoms])
-    nearest = medial_pts[np.argmin(np.hypot(medial_pts[:, 0] - cx, medial_pts[:, 1] - cy))]
-    half = 0.5 * zoom_size_mm
+    def draw_strip(ax) -> None:
+        strip_patch = polygon_to_patch(
+            strip, facecolor="#ffc8a8", edgecolor="#d2691e",
+            lw=0.6, zorder=1, label="outletInterior",
+        )
+        if strip_patch is not None:
+            ax.add_patch(strip_patch)
 
-    title = (
-        f"ds={params['boundary_sample_ds']}, min_dist={params['min_dist_from_boundary']}, "
-        f"strip_w={params['strip_half_width']}, prune<{params['prune_branch_len']}  |  "
-        f"medial {medial_length:.1f} mm, strip {100 * strip.area / poly.area:.1f}%, "
-        f"clearance {clearance:.3f} mm"
-    )
+    # Shared frame: bounds and decoration applied to every figure.
+    polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+    outlet_pts = np.vstack([to_world_yz(np.asarray(q.exterior.coords)) for q in polys])
+    xmin, ymin = outlet_pts.min(axis=0)
+    xmax, ymax = outlet_pts.max(axis=0)
+    pad = 0.02 * max(xmax - xmin, ymax - ymin, 1e-9)
 
-    fig, (ax, axz) = plt.subplots(
-        2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [1.0, 1.4]}
-    )
-    draw_scene(ax)
-    handles, labels = ax.get_legend_handles_labels()
-    seen = {}
-    for h, l in zip(handles, labels):
-        seen.setdefault(l, h)
-    ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
-    ax.set_aspect("equal")
-    ax.set_title(title, fontsize=10)
-    ax.set_xlabel("u [mm]")
-    ax.set_ylabel("v [mm]")
-    ax.add_patch(Rectangle(
-        (nearest[0] - half, nearest[1] - half), zoom_size_mm, zoom_size_mm,
-        fill=False, edgecolor="0.2", lw=1.0, zorder=3,
-    ))
+    def finalize(fig, ax, title: str, out: Path) -> None:
+        handles, labels = ax.get_legend_handles_labels()
+        seen = {}
+        for h, l in zip(handles, labels):
+            seen.setdefault(l, h)
+        if seen:
+            ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
+        ax.set_aspect("equal")
+        ax.set_xlim(xmin - pad, xmax + pad)
+        ax.set_ylim(ymin - pad, ymax + pad)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("y [mm]")
+        ax.set_ylabel("z [mm]")
+        fig.tight_layout()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
 
-    draw_scene(axz, lw_scale=1.5)
-    axz.set_xlim(nearest[0] - half, nearest[0] + half)
-    axz.set_ylim(nearest[1] - half, nearest[1] + half)
-    axz.set_aspect("equal")
-    axz.set_title(f"zoom: {zoom_size_mm:.1f} x {zoom_size_mm:.1f} mm window", fontsize=10)
-    axz.set_xlabel("u [mm]")
-    axz.set_ylabel("v [mm]")
-    axz.grid(True, linestyle=":", color="0.7", lw=0.4)
+    title = f"strip half width = {strip_half_width:g} mm"
 
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    finalize(fig, ax, "outlet", debug_dir / "medial_axis_outlet.png")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    draw_medial(ax)
+    finalize(fig, ax, "medial axis", debug_dir / "medial_axis_only.png")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    draw_strip(ax)
+    draw_medial(ax)
+    finalize(fig, ax, title, debug_dir / "medial_axis.png")
 
 
 def _remove_box_caps(
