@@ -28,6 +28,9 @@ def to_numpy(x):
     return x
 
 
+_EXTRA_COLORS = ["tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:olive"]
+
+
 def _plot_obj_con_axes(
     ax1,
     iterations,
@@ -38,11 +41,14 @@ def _plot_obj_con_axes(
     con_label="Constraint",
     history_obj_total=None,
     obj_total_label="Objective (total)",
+    extra_series=None,
 ):
     """Plot objective on left axis and constraint/volume on right axis.
 
-    If ``history_obj_total`` is given, a second curve (e.g. objective + regularizer)
+    If ``history_obj_total`` is given, a second curve (e.g. objective + penalties)
     is overlaid on the same left axis so it shares the objective's scale.
+    ``extra_series`` is an optional list of ``(label, values)`` (e.g. individual
+    penalty contributions) plotted on the same left axis with distinct colors.
     """
     l1, = ax1.plot(
         iterations,
@@ -68,6 +74,17 @@ def _plot_obj_con_axes(
             label=obj_total_label,
         )
         lines.append(lt)
+
+    for i, (label, values) in enumerate(extra_series or []):
+        le, = ax1.plot(
+            iterations,
+            values,
+            marker=".",
+            linestyle=":",
+            color=_EXTRA_COLORS[i % len(_EXTRA_COLORS)],
+            label=label,
+        )
+        lines.append(le)
 
     if history_con is not None and not np.all(np.isnan(history_con)):
         ax2 = ax1.twinx()
@@ -112,6 +129,7 @@ def plot_optimization_history(
     con_label="Constraint",
     history_obj_total=None,
     obj_total_label="Objective (total)",
+    extra_series=None,
 ):
     plt = _get_pyplot()
 
@@ -122,6 +140,11 @@ def plot_optimization_history(
 
     if history_obj_total is not None:
         history_obj_total = np.asarray(to_numpy(history_obj_total), dtype=float)
+
+    extra_series = [
+        (label, np.asarray(to_numpy(values), dtype=float))
+        for label, values in (extra_series or [])
+    ]
 
     if limit_con is not None:
         limit_con = float(to_numpy(limit_con))
@@ -141,6 +164,10 @@ def plot_optimization_history(
     obj_total_abs = history_obj_total.copy() if history_obj_total is not None else None
     obj_total_norm = history_obj_total / obj0 if history_obj_total is not None else None
 
+    # Extra series (e.g. penalty contributions) share the objective scale / J0.
+    extra_abs = [(label, values) for label, values in extra_series]
+    extra_norm = [(label, values / obj0) for label, values in extra_series]
+
     con_norm = None
     limit_norm = None
     if has_con:
@@ -157,6 +184,7 @@ def plot_optimization_history(
         con_label=con_label,
         history_obj_total=obj_total_abs,
         obj_total_label=obj_total_label,
+        extra_series=extra_abs,
     )
     ax_top.set_title("Absolute values")
 
@@ -166,6 +194,7 @@ def plot_optimization_history(
         con_label=f"{con_label} / initial",
         history_obj_total=obj_total_norm,
         obj_total_label=f"{obj_total_label} / J\u2080",
+        extra_series=extra_norm,
     )
     ax_bot.set_xlabel("Iteration")
     ax_bot.set_title("Normalized values")
