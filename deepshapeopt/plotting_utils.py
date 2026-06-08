@@ -36,8 +36,14 @@ def _plot_obj_con_axes(
     limit_con,
     obj_label="Objective",
     con_label="Constraint",
+    history_obj_total=None,
+    obj_total_label="Objective (total)",
 ):
-    """Plot objective on left axis and constraint/volume on right axis."""
+    """Plot objective on left axis and constraint/volume on right axis.
+
+    If ``history_obj_total`` is given, a second curve (e.g. objective + regularizer)
+    is overlaid on the same left axis so it shares the objective's scale.
+    """
     l1, = ax1.plot(
         iterations,
         history_obj,
@@ -51,6 +57,17 @@ def _plot_obj_con_axes(
     ax1.grid(True, linestyle="--", alpha=0.4)
 
     lines = [l1]
+
+    if history_obj_total is not None:
+        lt, = ax1.plot(
+            iterations,
+            history_obj_total,
+            marker="^",
+            linestyle="--",
+            color="tab:green",
+            label=obj_total_label,
+        )
+        lines.append(lt)
 
     if history_con is not None and not np.all(np.isnan(history_con)):
         ax2 = ax1.twinx()
@@ -93,6 +110,8 @@ def plot_optimization_history(
     result_dir=None,
     obj_label="Objective",
     con_label="Constraint",
+    history_obj_total=None,
+    obj_total_label="Objective (total)",
 ):
     plt = _get_pyplot()
 
@@ -100,6 +119,9 @@ def plot_optimization_history(
 
     if history_con is not None:
         history_con = np.asarray(to_numpy(history_con), dtype=float)
+
+    if history_obj_total is not None:
+        history_obj_total = np.asarray(to_numpy(history_obj_total), dtype=float)
 
     if limit_con is not None:
         limit_con = float(to_numpy(limit_con))
@@ -115,6 +137,10 @@ def plot_optimization_history(
     obj0 = history_obj[0] if history_obj[0] != 0 else 1.0
     obj_norm = history_obj / obj0
 
+    # Normalize the total objective by the same J0 so both curves share scale.
+    obj_total_abs = history_obj_total.copy() if history_obj_total is not None else None
+    obj_total_norm = history_obj_total / obj0 if history_obj_total is not None else None
+
     con_norm = None
     limit_norm = None
     if has_con:
@@ -129,6 +155,8 @@ def plot_optimization_history(
         ax_top, iterations, obj_abs, con_abs, limit_abs,
         obj_label=obj_label,
         con_label=con_label,
+        history_obj_total=obj_total_abs,
+        obj_total_label=obj_total_label,
     )
     ax_top.set_title("Absolute values")
 
@@ -136,6 +164,8 @@ def plot_optimization_history(
         ax_bot, iterations, obj_norm, con_norm, limit_norm,
         obj_label="Objective (J/J\u2080)",
         con_label=f"{con_label} / initial",
+        history_obj_total=obj_total_norm,
+        obj_total_label=f"{obj_total_label} / J\u2080",
     )
     ax_bot.set_xlabel("Iteration")
     ax_bot.set_title("Normalized values")
