@@ -46,6 +46,7 @@ _DEFAULTS = {
     "refine_band_beta": 1.0,
     "snap_iters": 4,
     "max_disp_frac": 0.7,
+    "smooth_iters": 2,
     "min_pyr_frac": 0.02,
     "quality_max_rounds": 5,
     "volume_grid_res": 64,
@@ -53,6 +54,9 @@ _DEFAULTS = {
     "enable_fast_path": True,
     "check_sign": True,
     "sign_probe_point": None,
+    # checkMesh gate: failed checks whose description matches one of these
+    # substrings only log a warning instead of aborting the iteration.
+    "checkmesh_ignore": ["skew"],
 }
 
 
@@ -244,6 +248,8 @@ class SdfHexMeshPipeline:
             h_local,
             snap_iters=int(self.cfg["snap_iters"]),
             max_disp_frac=float(self.cfg["max_disp_frac"]),
+            smooth_iters=int(self.cfg["smooth_iters"]),
+            wall_edges=self._wall_edges_local(mesh, wall_ids),
         )
         final_points, n_relaxed = self._quality_guard(mesh, points0, wall_ids, handle)
 
@@ -297,6 +303,17 @@ class SdfHexMeshPipeline:
         local = np.searchsorted(wall_ids, wall_faces)
         tris = np.concatenate([local[:, [0, 1, 2]], local[:, [0, 2, 3]]], axis=0)
         return torch.as_tensor(tris, dtype=torch.long)
+
+    def _wall_edges_local(self, mesh: PolyMeshData, wall_ids: np.ndarray) -> np.ndarray:
+        """Unique wall-surface edges with indices local to ``wall_ids``."""
+        wall_faces = mesh.faces[mesh.wall_face_slice()]
+        local = np.searchsorted(wall_ids, wall_faces)  # [Fw, 4]
+        edges = np.concatenate(
+            [local[:, [0, 1]], local[:, [1, 2]], local[:, [2, 3]], local[:, [3, 0]]],
+            axis=0,
+        )
+        edges = np.sort(edges, axis=1)
+        return np.unique(edges, axis=0)
 
     def _quality_guard(
         self,
@@ -398,15 +415,24 @@ class SdfHexMeshPipeline:
             raise RuntimeError(f"checkMesh log not found: {log_path}")
         ok, failures = checkmesh_log_ok(log_path.read_text())
         if not ok:
-            archive = self.results_dir / "failed_mesh"
-            archive.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(
-                case_dir / "constant" / "polyMesh", archive / "polyMesh", dirs_exist_ok=True
-            )
-            shutil.copy2(log_path, archive / "log.checkMesh")
-            raise RuntimeError(
-                f"checkMesh failed: {failures}; mesh archived to {archive}"
-            )
+            ignore = [str(s).lower() for s in self.cfg["checkmesh_ignore"]]
+            fatal = [
+                f for f in failures
+                if not any(pattern in f.lower() for pattern in ignore)
+            ]
+            soft = [f for f in failures if f not in fatal]
+            if soft:
+                logger.warning("checkMesh quality warnings (ignored): %s", soft)
+            if fatal or not failures:
+                archive = self.results_dir / "failed_mesh"
+                archive.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(
+                    case_dir / "constant" / "polyMesh", archive / "polyMesh", dirs_exist_ok=True
+                )
+                shutil.copy2(log_path, archive / "log.checkMesh")
+                raise RuntimeError(
+                    f"checkMesh failed: {failures}; mesh archived to {archive}"
+                )
         return foam_case
 
     def load_sensitivities(

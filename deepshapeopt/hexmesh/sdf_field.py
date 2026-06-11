@@ -52,9 +52,14 @@ class PhysicalSDF:
         self._fn = sdf_norm_fn
         self._norm_fn = norm_fn
         self.device = torch.device(device)
-        self.design_domain = torch.as_tensor(
-            np.asarray(design_domain, dtype=np.float32), device=self.device
-        )
+        if isinstance(design_domain, torch.Tensor):
+            self.design_domain = design_domain.detach().to(
+                device=self.device, dtype=torch.float32
+            )
+        else:
+            self.design_domain = torch.as_tensor(
+                np.asarray(design_domain, dtype=np.float32), device=self.device
+            )
         self.dist_scale = float(dist_scale)
 
     # ------------------------------------------------------------------

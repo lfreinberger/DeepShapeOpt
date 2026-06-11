@@ -63,6 +63,9 @@ def snap_wall_points(
     h_local: np.ndarray,
     snap_iters: int = 4,
     max_disp_frac: float = 0.7,
+    smooth_iters: int = 0,
+    wall_edges: np.ndarray | None = None,
+    smooth_omega: float = 0.5,
     grad_eps: float = 1e-10,
 ) -> SnapHandle:
     """Project wall points onto the zero level set.
@@ -76,22 +79,59 @@ def snap_wall_points(
         displacement at ``max_disp_frac * h_local``.
     snap_iters : int
         Total Newton steps; the last one is the differentiable step.
+    smooth_iters : int
+        Tangential Laplacian smoothing passes after the Newton projection.
+        Redistributes wall points evenly over the surface, opening up
+        collapsed staircase faces (skewness); requires ``wall_edges``.
+        Tangential motion does not change the shape derivative to first
+        order, so the parameter gradient keeps its exact Hadamard form.
+    wall_edges : [E, 2] int64, optional
+        Unique wall-surface edges (local indices into ``x0_phys``).
     """
     device = sdf.device
     x0 = torch.as_tensor(np.asarray(x0_phys, dtype=np.float32), device=device)
     h = torch.as_tensor(np.asarray(h_local, dtype=np.float32), device=device)
     max_disp = max_disp_frac * h
 
+    def cap_to_x0(x_new: torch.Tensor) -> torch.Tensor:
+        disp = x_new - x0
+        disp_norm = disp.norm(dim=1).clamp_min(1e-30)
+        scale = torch.clamp(max_disp / disp_norm, max=1.0)
+        return x0 + scale[:, None] * disp
+
     x = x0.clone()
     with torch.no_grad():
         for _ in range(max(0, snap_iters - 1)):
             f, g = sdf.phi_and_grad(x)
             g_norm2 = (g * g).sum(dim=1).clamp_min(grad_eps)
-            x_new = x - (f / g_norm2)[:, None] * g
-            disp = x_new - x0
-            disp_norm = disp.norm(dim=1).clamp_min(1e-30)
-            scale = torch.clamp(max_disp / disp_norm, max=1.0)
-            x = x0 + scale[:, None] * disp
+            x = cap_to_x0(x - (f / g_norm2)[:, None] * g)
+
+        if smooth_iters > 0 and wall_edges is not None and len(wall_edges) > 0:
+            edges = torch.as_tensor(
+                np.asarray(wall_edges, dtype=np.int64), device=device
+            )
+            ones = torch.ones(len(edges), device=device, dtype=x.dtype)
+            for _ in range(smooth_iters):
+                # Neighbour average over the wall edge graph.
+                nbr_sum = torch.zeros_like(x)
+                nbr_cnt = torch.zeros(len(x), device=device, dtype=x.dtype)
+                nbr_sum.index_add_(0, edges[:, 0], x[edges[:, 1]])
+                nbr_sum.index_add_(0, edges[:, 1], x[edges[:, 0]])
+                nbr_cnt.index_add_(0, edges[:, 0], ones)
+                nbr_cnt.index_add_(0, edges[:, 1], ones)
+                avg = nbr_sum / nbr_cnt.clamp_min(1.0)[:, None]
+
+                # Tangential component of the smoothing displacement.
+                _, g = sdf.phi_and_grad(x)
+                n_hat = g / g.norm(dim=1, keepdim=True).clamp_min(np.sqrt(grad_eps))
+                delta = avg - x
+                delta = delta - (delta * n_hat).sum(dim=1, keepdim=True) * n_hat
+                x = cap_to_x0(x + smooth_omega * delta)
+
+                # Re-project onto the surface.
+                f, g = sdf.phi_and_grad(x)
+                g_norm2 = (g * g).sum(dim=1).clamp_min(grad_eps)
+                x = cap_to_x0(x - (f / g_norm2)[:, None] * g)
 
     x_d = x.detach()
     f_d, g_d = sdf.phi_and_grad(x_d)
