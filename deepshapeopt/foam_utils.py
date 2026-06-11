@@ -73,12 +73,37 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
     return adjoint_times
 
 
-def run_openfoam_case(case_dir: Path, verbose: bool = True):
+def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
+    """Activate the Allrun variant for the chosen mesh pipeline.
+
+    The template ships ``Allrun`` (snappy pipeline) and ``Allrun.<name>``
+    variants; for non-default pipelines the variant replaces ``Allrun`` in
+    the runtime copy (call after ``prepare_foam_runtime``).
+    """
+    if mesh_pipeline == "snappy":
+        return
+    variant = case_dir / f"Allrun.{mesh_pipeline}"
+    if not variant.exists():
+        raise FileNotFoundError(f"Missing Allrun variant for '{mesh_pipeline}': {variant}")
+    allrun = case_dir / "Allrun"
+    shutil.copy2(variant, allrun)
+    allrun.chmod(0o755)
+
+
+def run_openfoam_case(case_dir: Path, verbose: bool = True, clean: bool = True):
+    """Run the case's Allrun script.
+
+    With ``clean=False`` the case is not cleaned first -- used by the
+    ``sdf_hex`` pipeline, which cleans, then writes ``constant/polyMesh``
+    (which cleaning would delete), then runs.
+    """
     if not case_dir.exists():
         raise FileNotFoundError(f"Foam case path does not exist: {case_dir}")
 
     foam_case = FoamCase(case_dir)
-    if verbose:
+    if not clean:
+        pass
+    elif verbose:
         foam_case.clean()
     else:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

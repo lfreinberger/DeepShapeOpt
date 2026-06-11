@@ -53,6 +53,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXPERIMENT_PATH = PROJECT_ROOT / "experiments" / "drag_cube"
 
 
+def export_wall_stl(verts: torch.Tensor, faces: torch.Tensor, path: Path) -> None:
+    """Export the triangulated wall surface of the hex mesh as STL."""
+    import trimesh
+
+    trimesh.Trimesh(
+        vertices=verts.detach().cpu().numpy(),
+        faces=faces.detach().cpu().numpy(),
+        process=False,
+    ).export(path)
+
+
 def optimize_shape(experiment_path: Path, specs):
     rec_cfg = specs["reconstruction"]
     opt_cfg = specs["optimization"]
@@ -91,20 +102,32 @@ def optimize_shape(experiment_path: Path, specs):
         debug=debug,
     )
 
-    with torch.no_grad():
-        mesh_init, _ = generate_mesh(
-            lattice.lattice_struct,
-            opt_cfg,
-            rec_cfg,
-            model_setup.box_norm,
-            model_setup.scaling,
-            mesh_type="volume",
-            extend_bounds=True
+    mesh_pipeline = opt_cfg.get("mesh_pipeline", "snappy")
+    hex_pipeline = None
+    if mesh_pipeline == "sdf_hex":
+        from deepshapeopt.hexmesh import SdfHexMeshPipeline
+
+        hex_pipeline = SdfHexMeshPipeline(
+            lattice.lattice_struct, model_setup, opt_cfg, paths.optimization
         )
-        init_volume, initial_centroid = compute_tet_mesh_volume_centroid(
-            mesh_init.vertices,
-            mesh_init.volumes,
-        )
+        init_volume, initial_centroid = hex_pipeline.volume_centroid(no_grad=True)
+    elif mesh_pipeline == "snappy":
+        with torch.no_grad():
+            mesh_init, _ = generate_mesh(
+                lattice.lattice_struct,
+                opt_cfg,
+                rec_cfg,
+                model_setup.box_norm,
+                model_setup.scaling,
+                mesh_type="volume",
+                extend_bounds=True
+            )
+            init_volume, initial_centroid = compute_tet_mesh_volume_centroid(
+                mesh_init.vertices,
+                mesh_init.volumes,
+            )
+    else:
+        raise ValueError(f"Unknown mesh_pipeline: {mesh_pipeline!r}")
 
     LOGGER.info("Initial volume: %.6f", init_volume.item())
     LOGGER.info("Initial centroid: %s", initial_centroid)
@@ -130,6 +153,7 @@ def optimize_shape(experiment_path: Path, specs):
         )
 
     case_dir = foam_utils.prepare_foam_runtime(experiment_path / "foam_case", run_name=results_name)
+    foam_utils.select_allrun(case_dir, mesh_pipeline)
     snapshot_dir = paths.optimization / "snapshots"
     if debug:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -152,25 +176,76 @@ def optimize_shape(experiment_path: Path, specs):
         iter_start = time.time()
         logger.start_iteration(iteration)
 
-        mesh, derivative = generate_mesh(
-            lattice.lattice_struct,
-            opt_cfg,
-            rec_cfg,
-            model_setup.box_norm,
-            model_setup.scaling,
-            extend_bounds=True
-        )
-        verts, faces = mesh.vertices, mesh.faces
-        vol_mesh, _ = generate_mesh(
-            lattice.lattice_struct,
-            opt_cfg,
-            rec_cfg,
-            model_setup.box_norm,
-            model_setup.scaling,
-            mesh_type="volume",
-            extend_bounds=True
-        )
-        export_surface_mesh(paths.optimization / "current_shape.stl", mesh.to_gus(), derivative)
+        if mesh_pipeline == "sdf_hex":
+            hex_result = hex_pipeline.build()
+            verts = hex_result.surface_points
+            faces = hex_result.wall_tris_local.to(verts.device)
+            export_wall_stl(verts, faces, paths.optimization / "current_shape.stl")
+
+            volume, current_centroid = hex_pipeline.volume_centroid()
+            vol_constraint = float(init_volume.item()) - volume
+            dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
+
+            foam_case = hex_pipeline.run_case(case_dir, verbose=debug)
+            sens_on_orig, J_raw = hex_pipeline.load_sensitivities(
+                case_dir,
+                foam_case,
+                field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
+                objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
+            )
+            dJ = foam_utils.compute_shape_gradient(
+                opt_setup.param,
+                verts,
+                faces,
+                sens_on_orig,
+                integrated=True,
+            )
+        else:
+            mesh, derivative = generate_mesh(
+                lattice.lattice_struct,
+                opt_cfg,
+                rec_cfg,
+                model_setup.box_norm,
+                model_setup.scaling,
+                extend_bounds=True
+            )
+            verts, faces = mesh.vertices, mesh.faces
+            vol_mesh, _ = generate_mesh(
+                lattice.lattice_struct,
+                opt_cfg,
+                rec_cfg,
+                model_setup.box_norm,
+                model_setup.scaling,
+                mesh_type="volume",
+                extend_bounds=True
+            )
+            export_surface_mesh(paths.optimization / "current_shape.stl", mesh.to_gus(), derivative)
+
+            volume, current_centroid = compute_tet_mesh_volume_centroid(vol_mesh.vertices, vol_mesh.volumes)
+            vol_constraint = float(init_volume.item()) - volume
+            dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
+
+            foam_case = run_foam_case(case_dir, mesh, derivative, paths.optimization, plot_residuals=debug)
+            loading_method = sens_cfg.get("loading_method", "interpolate")
+            sens_on_orig, J_raw = load_sensitivities(
+                case_dir,
+                foam_case,
+                verts,
+                field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
+                objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
+                loading_method=loading_method,
+                patch_name=sens_cfg.get("patch_name", "dragObject"),
+                faces=faces,
+            )
+
+            dJ = foam_utils.compute_shape_gradient(
+                opt_setup.param,
+                verts,
+                faces,
+                sens_on_orig,
+                invert_normals=sens_cfg.get("invert_normals", True),
+                integrated=(loading_method == "conservative"),
+            )
 
         if debug:
             save_shape_snapshot(
@@ -181,23 +256,6 @@ def optimize_shape(experiment_path: Path, specs):
                 view_axis="z",
                 title=f"Iteration {iteration}",
             )
-
-        volume, current_centroid = compute_tet_mesh_volume_centroid(vol_mesh.vertices, vol_mesh.volumes)
-        vol_constraint = float(init_volume.item()) - volume
-        dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
-
-        foam_case = run_foam_case(case_dir, mesh, derivative, paths.optimization, plot_residuals=debug)
-        loading_method = sens_cfg.get("loading_method", "interpolate")
-        sens_on_orig, J_raw = load_sensitivities(
-            case_dir,
-            foam_case,
-            verts,
-            field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
-            objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
-            loading_method=loading_method,
-            patch_name=sens_cfg.get("patch_name", "dragObject"),
-            faces=faces,
-        )
 
         normals = foam_utils.compute_vertex_normals(verts, faces, invert_normals=True)
         sens_tensor = torch.as_tensor(sens_on_orig, dtype=verts.dtype, device=verts.device)
@@ -210,14 +268,6 @@ def optimize_shape(experiment_path: Path, specs):
                 paths.optimization / "check_original_mesh_with_sens.vtp",
             )
 
-        dJ = foam_utils.compute_shape_gradient(
-            opt_setup.param,
-            verts,
-            faces,
-            sens_on_orig,
-            invert_normals=sens_cfg.get("invert_normals", True),
-            integrated=(loading_method == "conservative"),
-        )
         J = torch.as_tensor(J_raw, device=rec_cfg["device"], dtype=opt_setup.param.dtype).view(-1, 1)
 
         grad_list = [dJ, dV]
