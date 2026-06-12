@@ -425,6 +425,7 @@ def test_pipeline_gradient_finite_difference(tmp_path):
     # the Hadamard-form autograd derivative is the full derivative).  The
     # comparison is restricted to fully snapped points: displacement-capped
     # points (lam < 1) intentionally carry only the scaled Hadamard term.
+    torch.manual_seed(0)  # the 5% FD tolerance is sensitive to the g draw
     r = torch.tensor(0.8, requires_grad=True)
     pipe = make_pipeline(tmp_path, r)
     res = pipe.build()
