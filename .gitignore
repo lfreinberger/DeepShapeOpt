@@ -38,6 +38,7 @@ flowRate/
 confidential/*
 tests/*
 !tests/test_hexmesh.py
+!tests/test_hexmesh_internal.py
 **/analysis/*
 **/analysis/**
 experiments/reconstruction/analysis/*
