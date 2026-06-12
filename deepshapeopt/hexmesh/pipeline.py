@@ -97,6 +97,56 @@ def resolve_sdf_hex_cfg(opt_cfg: dict, base_dir: Path) -> dict:
     return raw
 
 
+class _HangingCorrector:
+    """Applies hanging-node midpoint constraints (see
+    :meth:`SdfHexMeshPipeline._hanging_constraints`).
+
+    Works in the global point frame: lattice points stay bit-exact float64
+    in :meth:`full_points`; only wall points and corrected midpoints move.
+    """
+
+    def __init__(self, mid_ids, parents, wall_ids, points0, n_passes, device):
+        self.n_hanging = len(mid_ids)
+        self.wall_ids = wall_ids
+        self._mid_ids = mid_ids
+        if self.n_hanging == 0:
+            return
+        self.device = torch.device(device)
+        self.n_passes = n_passes
+        self._mid_t = torch.as_tensor(mid_ids, dtype=torch.long, device=device)
+        self._p0_t = torch.as_tensor(parents[:, 0], dtype=torch.long, device=device)
+        self._p1_t = torch.as_tensor(parents[:, 1], dtype=torch.long, device=device)
+        self._wall_t = torch.as_tensor(wall_ids, dtype=torch.long, device=device)
+        self._base = torch.as_tensor(points0, dtype=torch.float32, device=device)
+
+    def _global(self, x_wall: torch.Tensor) -> torch.Tensor:
+        xg = self._base.index_put((self._wall_t,), x_wall)
+        for _ in range(self.n_passes):
+            xg = xg.index_put(
+                (self._mid_t,), 0.5 * (xg[self._p0_t] + xg[self._p1_t])
+            )
+        return xg
+
+    def wall(self, x_wall: torch.Tensor) -> torch.Tensor:
+        """Corrected wall-local positions (differentiable)."""
+        if self.n_hanging == 0:
+            return x_wall
+        return self._global(x_wall)[self._wall_t]
+
+    def full_points(self, points0: np.ndarray, x_wall: torch.Tensor) -> np.ndarray:
+        """Global float64 point array: lattice points bit-exact from
+        ``points0``, wall points and corrected midpoints from the snap."""
+        pts = points0.copy()
+        if self.n_hanging == 0:
+            pts[self.wall_ids] = x_wall.detach().double().cpu().numpy()
+            return pts
+        with torch.no_grad():
+            xg = self._global(x_wall.detach()).double().cpu().numpy()
+        pts[self.wall_ids] = xg[self.wall_ids]
+        pts[self._mid_ids] = xg[self._mid_ids]
+        return pts
+
+
 @dataclasses.dataclass
 class HexMeshResult:
     mesh: PolyMeshData  # with snapped (detached) point coordinates
@@ -176,6 +226,7 @@ class SdfHexMeshPipeline:
         self._sign_checked = False
         self._shell_hash: str | None = None
         self._last_hash: str | None = None
+        self._last_hanging: tuple | None = None
         self._last_mesh: PolyMeshData | None = None
         self._last_castellation: Castellation | None = None
         self._last_result: HexMeshResult | None = None
@@ -466,6 +517,12 @@ class SdfHexMeshPipeline:
         if not np.any(lock_axes):
             lock_axes = None
 
+        if reused and self._last_hanging is not None:
+            corrector = self._last_hanging
+        else:
+            corrector = self._hanging_constraints(mesh, wall_ids, points0)
+        self._last_hanging = corrector
+
         handle = snap_wall_points(
             field,
             x0,
@@ -476,9 +533,11 @@ class SdfHexMeshPipeline:
             wall_edges=self._wall_edges_local(mesh, wall_ids),
             lock_axes=lock_axes,
         )
-        final_points, n_relaxed = self._quality_guard(mesh, points0, wall_ids, handle)
+        final_points, n_relaxed = self._quality_guard(
+            mesh, points0, wall_ids, handle, corrector
+        )
 
-        x_star = handle.x_star()
+        x_star = corrector.wall(handle.x_star())
         snapped_mesh = dataclasses.replace(mesh, points=final_points)
 
         wall_slice = mesh.wall_face_slice()
@@ -496,6 +555,7 @@ class SdfHexMeshPipeline:
                 "n_wall_faces": wall_slice.stop - wall_slice.start,
                 "n_wall_points": len(wall_ids),
                 "n_relaxed_points": n_relaxed,
+                "n_hanging_points": corrector.n_hanging,
                 "snap_residual_max": float(handle.residuals().max()),
                 "patch_faces": {p.name: p.n_faces for p in mesh.patches},
                 "build_seconds": time.time() - t0,
@@ -517,6 +577,54 @@ class SdfHexMeshPipeline:
         self._last_castellation = cast
         self._last_result = result
         return result
+
+    def _hanging_constraints(
+        self, mesh: PolyMeshData, wall_ids: np.ndarray, points0: np.ndarray
+    ) -> "_HangingCorrector":
+        """Midpoint constraints for hanging nodes near snapped walls.
+
+        At a 2:1 transition the fine faces introduce midpoints on the edges
+        of adjacent coarse faces.  Unsnapped, every midpoint lies exactly on
+        the straight edge, so the coarse cell is geometrically closed; once
+        snapping moves the midpoint or its edge endpoints, the midpoint
+        leaves the (new) line and the cell opens (checkMesh "open cells").
+        This happens wherever the wall crosses a level transition --
+        internal-flow margin rings, never the drag case (its wall sits
+        inside the uniform refinement band).
+
+        Fix, like hexRef8's point constraints: every hanging midpoint is
+        forced to the mean of its edge endpoints -- differentiably, so a
+        wall midpoint's shape gradient flows through both parents.  This
+        must cover midpoints that are not wall points themselves but whose
+        edge endpoints are snapped wall points (internal faces hanging off
+        a wall-face edge).
+        """
+        from .lattice import pack_keys, unpack_keys
+
+        edges = np.concatenate(
+            [mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]],
+             mesh.faces[:, [2, 3]], mesh.faces[:, [3, 0]]],
+            axis=0,
+        )
+        edges = np.unique(np.sort(edges, axis=1), axis=0)
+        key_xyz = unpack_keys(mesh.point_keys)
+        ksum = key_xyz[edges[:, 0]] + key_xyz[edges[:, 1]]
+        even = np.all(ksum % 2 == 0, axis=1)  # finest (length-1) edges drop out
+        edges = edges[even]
+        mid_keys = pack_keys(ksum[even] // 2)
+
+        pos = np.searchsorted(mesh.point_keys, mid_keys)
+        pos = np.minimum(pos, len(mesh.point_keys) - 1)
+        hit = mesh.point_keys[pos] == mid_keys
+        mid_ids = pos[hit]
+        parents = edges[hit]
+
+        # 2:1 balance limits hanging chains to one level per face pair; a
+        # few fixed-point passes resolve mid-of-mid dependencies.
+        n_passes = max(2, self.max_level - self.interface_level + 1)
+        return _HangingCorrector(
+            mid_ids, parents, wall_ids, points0, n_passes, self.device
+        )
 
     def _wall_h_local(self, mesh: PolyMeshData, wall_ids: np.ndarray) -> np.ndarray:
         """Per wall point: finest adjacent wall face size (physical)."""
@@ -557,6 +665,7 @@ class SdfHexMeshPipeline:
         points0: np.ndarray,
         wall_ids: np.ndarray,
         handle: SnapHandle,
+        corrector: "_HangingCorrector",
     ) -> tuple[np.ndarray, int]:
         """Scale back snap displacements that would degenerate cells."""
         ref_owner, ref_neigh = face_pyramid_volumes(mesh, points0)
@@ -566,8 +675,7 @@ class SdfHexMeshPipeline:
         relaxed_total = np.zeros(len(wall_ids), dtype=bool)
 
         for round_idx in range(int(self.cfg["quality_max_rounds"]) + 1):
-            pts = points0.copy()
-            pts[wall_ids] = handle.x_star().detach().double().cpu().numpy()
+            pts = corrector.full_points(points0, handle.x_star())
             pyr_o, pyr_n = face_pyramid_volumes(mesh, pts)
             bad_face = pyr_o < np.maximum(frac * ref_owner, floor)
             bad_face[:n_int] |= pyr_n < np.maximum(frac * ref_neigh, floor)
@@ -593,8 +701,7 @@ class SdfHexMeshPipeline:
                     int(mask.sum()),
                 )
 
-        pts = points0.copy()
-        pts[wall_ids] = handle.x_star().detach().double().cpu().numpy()
+        pts = corrector.full_points(points0, handle.x_star())
         return pts, int(relaxed_total.sum())
 
     # ------------------------------------------------------------------
