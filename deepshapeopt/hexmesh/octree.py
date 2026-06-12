@@ -493,6 +493,7 @@ def build_inner_castellation(
     phi_ext_np,
     beta: float = 1.0,
     regions: list[RefineRegion] | None = None,
+    band_max_level: int | None = None,
 ) -> Castellation:
     """SDF-driven octree of the mesh box interior, fluid cells only.
 
@@ -506,7 +507,15 @@ def build_inner_castellation(
     regions : list of :class:`RefineRegion`, optional
         User-specified refinement boxes (clamped by the grading cap, so
         they can never violate the frozen interface shell).
+    band_max_level : int, optional
+        Cap for the surface-band refinement (default ``max_level``).
+        Decouples the general design-surface resolution from refinement
+        regions: e.g. walls at level 2 while the outlet slab still
+        refines to level 3 (regions refine all their cells to their own
+        level regardless of this cap).
     """
+    if band_max_level is None:
+        band_max_level = max_level
     cells = root_cells(
         lattice,
         mask_fn=lambda anchors: np.all(
@@ -527,8 +536,9 @@ def build_inner_castellation(
 
         forced = at_level & touches & (cells.levels < interface_level)
         candidates = at_level & ~touches & (cells.levels < cap)
+        band_cand = candidates & (cells.levels < band_max_level)
         sdf_refine = np.zeros(len(cells), dtype=bool)
-        cand_idx = np.nonzero(candidates)[0]
+        cand_idx = np.nonzero(band_cand)[0]
         if len(cand_idx) > 0:
             sub = CellSet(cells.levels[cand_idx], cells.anchors[cand_idx])
             sdf_refine[cand_idx] = _near_surface(sub, lattice, phi_ext_np, beta)

@@ -71,6 +71,7 @@ _DEFAULTS = {
     # design-surface (sensitivity) patch names.  None -> drag default.
     "patches": None,
     "refinement_regions": [],
+    "band_max_level": None,  # design-surface band cap (default: max_level)
     "static_max_level": None,  # default: max_level
     "static_band_max_level": None,  # wall-band cap in the static region
     "static_refine_band_beta": None,  # default: refine_band_beta
@@ -485,6 +486,7 @@ class SdfHexMeshPipeline:
                 field.phi_ext_np,
                 beta=float(self.cfg["refine_band_beta"]),
                 regions=self.regions,
+                band_max_level=self.cfg["band_max_level"],
             )
             self._check_shell_frozen(cast)
 
