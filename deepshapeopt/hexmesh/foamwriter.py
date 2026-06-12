@@ -49,8 +49,13 @@ def _bulk_lines(array: np.ndarray, fmt: str) -> str:
     return buf.getvalue()
 
 
-def write_polymesh(mesh: PolyMeshData, case_dir: Path) -> Path:
-    """Write the full polyMesh into ``case_dir/constant/polyMesh``."""
+def write_polymesh(mesh: PolyMeshData, case_dir: Path, scale: float = 1.0) -> Path:
+    """Write the full polyMesh into ``case_dir/constant/polyMesh``.
+
+    ``scale`` multiplies the point coordinates on write (e.g. 0.001 for
+    configs in millimetres feeding a case that runs in metres -- the
+    blockMesh ``scale`` equivalent).
+    """
     out = Path(case_dir) / "constant" / "polyMesh"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -65,7 +70,7 @@ def write_polymesh(mesh: PolyMeshData, case_dir: Path) -> Path:
     with open(out / "points", "w") as f:
         f.write(_header("vectorField", "points"))
         f.write(f"{n_points}\n(\n")
-        f.write(_bulk_lines(mesh.points, "(%.16g %.16g %.16g)"))
+        f.write(_bulk_lines(mesh.points * scale, "(%.16g %.16g %.16g)"))
         f.write(")")
         f.write(_FOOTER)
 
@@ -109,7 +114,7 @@ def write_polymesh(mesh: PolyMeshData, case_dir: Path) -> Path:
     return out
 
 
-def write_points_only(mesh: PolyMeshData, case_dir: Path) -> Path:
+def write_points_only(mesh: PolyMeshData, case_dir: Path, scale: float = 1.0) -> Path:
     """Rewrite only the points file (fast path: unchanged connectivity)."""
     out = Path(case_dir) / "constant" / "polyMesh"
     if not (out / "faces").exists():
@@ -117,7 +122,7 @@ def write_points_only(mesh: PolyMeshData, case_dir: Path) -> Path:
     with open(out / "points", "w") as f:
         f.write(_header("vectorField", "points"))
         f.write(f"{len(mesh.points)}\n(\n")
-        f.write(_bulk_lines(mesh.points, "(%.16g %.16g %.16g)"))
+        f.write(_bulk_lines(mesh.points * scale, "(%.16g %.16g %.16g)"))
         f.write(")")
         f.write(_FOOTER)
     return out
