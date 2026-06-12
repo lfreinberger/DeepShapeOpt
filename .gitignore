@@ -34,6 +34,7 @@ tiling_results/
 results_tiling/
 flowRate/
 .vscode/*
+.claude/
 confidential/*
 tests/*
 **/analysis/*
