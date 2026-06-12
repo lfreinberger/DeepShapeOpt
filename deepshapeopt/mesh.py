@@ -151,7 +151,8 @@ def split_stl_into_patches(
     write_multi_region: bool = True,
     multi_region_name: str = "multi_region.stl",
     outlet_interior: dict[str, Any] | None = None,
-) -> Dict[str, int]:
+    section_partition: dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """
     Split an STL into patches according to a user-provided classify_face function.
 
@@ -170,8 +171,11 @@ def split_stl_into_patches(
 
     Returns
     -------
-    Dict[str, int]
-        Mapping patch_name -> number of faces in that patch.
+    Dict[str, Any]
+        ``face_counts`` maps ``patch_name -> n_faces``. When ``section_partition``
+        is active, ``section_areas`` maps section ``patch_name -> 2D area`` so the
+        caller can derive area-weighted target fractions for the flowRatePartition
+        objective. ``section_areas`` is ``None`` otherwise.
     """
 
     input_stl = Path(input_stl)
@@ -201,41 +205,83 @@ def split_stl_into_patches(
         name: tris for name, tris in patch_faces.items() if len(tris) > 0
     }
     debug_patch_names: list[str] = []
+    section_areas: dict[str, float] | None = None
 
-    if outlet_interior and outlet_interior.get("enabled", False):
+    if section_partition and section_partition.get("enabled", False):
+        if outlet_interior and outlet_interior.get("enabled", False):
+            logger.warning(
+                "section_partition is enabled — ignoring outlet_interior (mutually exclusive)."
+            )
+        source_patch = section_partition.get("source_patch", "outlet")
+        name_prefix = section_partition.get("name_prefix", "section_")
+        sections_cfg = section_partition.get("sections", [])
+        if source_patch not in patch_faces:
+            raise ValueError(
+                f"section_partition: source patch '{source_patch}' missing from classifier output."
+            )
+        debug_dir = (
+            output_dir / "debug_section_partition"
+            if section_partition.get("debug", True)
+            else None
+        )
+        region_triangles, section_areas = _build_section_partition_regions(
+            patch_faces[source_patch],
+            source_patch_name=source_patch,
+            sections=sections_cfg,
+            name_prefix=name_prefix,
+            triangulation_engine=str(section_partition.get("triangulation_engine", "triangle")),
+            debug_dir=debug_dir,
+        )
+        del patch_faces[source_patch]
+        for name, tris in region_triangles.items():
+            patch_faces[name] = tris
+
+        if section_partition.get("debug", True):
+            _write_patch_debug_stls(
+                output_dir,
+                patch_faces,
+                list(region_triangles.keys()),
+                debug_subdir="debug_section_partition",
+                combined_name="sections_split_debug.stl",
+            )
+
+    elif outlet_interior and outlet_interior.get("enabled", False):
         source_patch = outlet_interior.get("source_patch", "outlet")
         interior_patch = outlet_interior.get("patch_name", "outletInterior")
         debug_patch_names = [source_patch, interior_patch]
         if source_patch not in patch_faces:
             raise ValueError(f"Cannot create outlet interior patch: missing source patch '{source_patch}'.")
 
-        method = outlet_interior.get("method", "local_inset")
-        if method == "local_inset":
-            interior_regions = _build_local_inset_outlet_regions(
+        method = str(outlet_interior.get("method", "polygon_offset"))
+        debug_dir = (output_dir / "debug_outlet_interior") if outlet_interior.get("debug", True) else None
+        if method == "polygon_offset":
+            interior_regions = _build_polygon_offset_outlet_regions(
                 patch_faces[source_patch],
                 source_patch_name=source_patch,
                 interior_patch_name=interior_patch,
-                inset_distance=float(outlet_interior.get("inset_distance", 0.10)),
+                inset_distance=float(outlet_interior.get("inset_distance", 1.0)),
+                quad_segs=int(outlet_interior.get("quad_segs", 8)),
+                join_style=str(outlet_interior.get("join_style", "round")),
+                triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
+                debug_dir=debug_dir,
             )
-        elif method == "centerline_band":
-            interior_regions = _build_centerline_band_outlet_regions(
+        elif method == "medial_axis":
+            interior_regions = _build_medial_axis_outlet_regions(
                 patch_faces[source_patch],
                 source_patch_name=source_patch,
                 interior_patch_name=interior_patch,
-                exclusion_fraction=float(outlet_interior.get("inset_fraction", 0.20)),
-                station_count=int(outlet_interior.get("station_count", 240)),
-            )
-        elif method == "local_distance":
-            interior_regions = _build_local_distance_outlet_regions(
-                patch_faces[source_patch],
-                source_patch_name=source_patch,
-                interior_patch_name=interior_patch,
-                threshold=float(outlet_interior.get("inset_fraction", 0.10)),
-                grid_resolution=int(outlet_interior.get("grid_resolution", 180)),
-                ray_directions=int(outlet_interior.get("ray_directions", 16)),
+                boundary_sample_ds=float(outlet_interior.get("boundary_sample_ds", 0.05)),
+                strip_half_width=float(outlet_interior.get("strip_half_width", 0.1)),
+                min_dist_from_boundary=float(outlet_interior.get("min_dist_from_boundary", 0.3)),
+                prune_branch_len=float(outlet_interior.get("prune_branch_len", 1.0)),
+                triangulation_engine=str(outlet_interior.get("triangulation_engine", "triangle")),
+                debug_dir=debug_dir,
             )
         else:
-            raise ValueError(f"Unknown outlet_interior method: {method}")
+            raise ValueError(
+                f"Unknown outlet_interior.method '{method}' "
+                "(expected 'polygon_offset' or 'medial_axis')."
+            )
         patch_faces[source_patch] = interior_regions[source_patch]
         patch_faces[interior_patch] = interior_regions[interior_patch]
         logger.info(
@@ -276,7 +322,10 @@ def split_stl_into_patches(
         logger.debug("Saved multi-region STL to %s", multi_path)
 
     # Return stats in case you want to log/assert in tests
-    return {name: len(tris) for name, tris in patch_faces.items()}
+    return {
+        "face_counts": {name: len(tris) for name, tris in patch_faces.items()},
+        "section_areas": section_areas,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -311,8 +360,10 @@ def _write_patch_debug_stls(
     output_dir: Path,
     patch_faces: dict[str, list[np.ndarray]],
     patch_names: list[str],
+    debug_subdir: str = "debug_outlet_interior",
+    combined_name: str = "outlet_split_debug.stl",
 ) -> None:
-    debug_dir = output_dir / "debug_outlet_interior"
+    debug_dir = output_dir / debug_subdir
     debug_dir.mkdir(parents=True, exist_ok=True)
 
     for patch_name in patch_names:
@@ -322,7 +373,7 @@ def _write_patch_debug_stls(
         _write_ascii_stl(path, patch_name, patch_faces[patch_name])
         logger.debug("Saved outlet debug STL: %s", path)
 
-    combined_path = debug_dir / "outlet_split_debug.stl"
+    combined_path = debug_dir / combined_name
     with open(combined_path, "w") as f:
         for patch_name in patch_names:
             tris = patch_faces.get(patch_name)
@@ -340,144 +391,6 @@ def _write_patch_debug_stls(
                 f.write("  endfacet\n")
             f.write(f"endsolid {patch_name}\n")
     logger.debug("Saved outlet split debug STL: %s", combined_path)
-
-
-def _polygon_area_2d(points: np.ndarray) -> float:
-    x = points[:, 0]
-    y = points[:, 1]
-    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
-
-
-def _points_in_polygon_2d(points: np.ndarray, polygon: np.ndarray) -> np.ndarray:
-    x = points[:, 0]
-    y = points[:, 1]
-    inside = np.zeros(len(points), dtype=bool)
-    x0 = polygon[:, 0]
-    y0 = polygon[:, 1]
-    x1 = np.roll(x0, -1)
-    y1 = np.roll(y0, -1)
-    for ax, ay, bx, by in zip(x0, y0, x1, y1):
-        crosses = ((ay > y) != (by > y)) & (
-            x < (bx - ax) * (y - ay) / (by - ay + 1e-300) + ax
-        )
-        inside ^= crosses
-    return inside
-
-
-def _distance_to_polygon_segments_2d(points: np.ndarray, polygon: np.ndarray, chunk_size: int = 4096) -> np.ndarray:
-    seg_a = polygon
-    seg_b = np.roll(polygon, -1, axis=0)
-    seg = seg_b - seg_a
-    seg_len2 = np.einsum("ij,ij->i", seg, seg)
-    seg_len2 = np.where(seg_len2 < 1e-30, 1.0, seg_len2)
-
-    out = np.empty(len(points), dtype=float)
-    for start in range(0, len(points), chunk_size):
-        p = points[start:start + chunk_size]
-        ap = p[:, None, :] - seg_a[None, :, :]
-        t = np.clip(np.einsum("nsi,si->ns", ap, seg) / seg_len2[None, :], 0.0, 1.0)
-        closest = seg_a[None, :, :] + t[:, :, None] * seg[None, :, :]
-        dist2 = np.sum((p[:, None, :] - closest) ** 2, axis=2)
-        out[start:start + chunk_size] = np.sqrt(dist2.min(axis=1))
-    return out
-
-
-def _ray_polygon_distance_2d(point: np.ndarray, direction: np.ndarray, polygon: np.ndarray) -> float:
-    seg_a = polygon
-    seg_b = np.roll(polygon, -1, axis=0)
-    seg = seg_b - seg_a
-    cross = direction[0] * seg[:, 1] - direction[1] * seg[:, 0]
-    valid = np.abs(cross) > 1e-14
-    if not np.any(valid):
-        return np.inf
-
-    delta = seg_a - point
-    t = np.full(len(seg), np.inf, dtype=float)
-    u = np.full(len(seg), np.inf, dtype=float)
-    t[valid] = (
-        delta[valid, 0] * seg[valid, 1] - delta[valid, 1] * seg[valid, 0]
-    ) / cross[valid]
-    u[valid] = (
-        delta[valid, 0] * direction[1] - delta[valid, 1] * direction[0]
-    ) / cross[valid]
-    hits = (t > 1e-12) & (u >= -1e-12) & (u <= 1.0 + 1e-12)
-    if not np.any(hits):
-        return np.inf
-    return float(np.min(t[hits]))
-
-
-def _local_half_width_2d(points: np.ndarray, polygon: np.ndarray, n_directions: int) -> np.ndarray:
-    angles = np.linspace(0.0, np.pi, n_directions, endpoint=False)
-    directions = np.column_stack([np.cos(angles), np.sin(angles)])
-    half_width = np.empty(len(points), dtype=float)
-
-    for i, p in enumerate(points):
-        widths = []
-        for direction in directions:
-            d_pos = _ray_polygon_distance_2d(p, direction, polygon)
-            d_neg = _ray_polygon_distance_2d(p, -direction, polygon)
-            if np.isfinite(d_pos) and np.isfinite(d_neg):
-                widths.append(0.5 * (d_pos + d_neg))
-        half_width[i] = min(widths) if widths else np.nan
-    return half_width
-
-
-def _order_boundary_loop_from_triangles(triangles: np.ndarray, tol: float = 1e-8) -> np.ndarray:
-    vertex_ids: dict[tuple[int, int, int], int] = {}
-    vertices: list[np.ndarray] = []
-
-    def vid(point: np.ndarray) -> int:
-        key = tuple(np.round(point / tol).astype(np.int64))
-        if key not in vertex_ids:
-            vertex_ids[key] = len(vertices)
-            vertices.append(np.asarray(point, dtype=float))
-        return vertex_ids[key]
-
-    edge_counts: dict[tuple[int, int], int] = defaultdict(int)
-    for tri in triangles:
-        ids = [vid(p) for p in tri]
-        for a, b in ((ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])):
-            edge_counts[tuple(sorted((a, b)))] += 1
-
-    adjacency: dict[int, list[int]] = defaultdict(list)
-    for (a, b), count in edge_counts.items():
-        if count == 1:
-            adjacency[a].append(b)
-            adjacency[b].append(a)
-
-    if not adjacency:
-        raise ValueError("Outlet patch has no boundary edges.")
-
-    loops: list[list[int]] = []
-    visited_edges: set[tuple[int, int]] = set()
-    for start in adjacency:
-        for first_next in adjacency[start]:
-            edge = tuple(sorted((start, first_next)))
-            if edge in visited_edges:
-                continue
-            loop = [start]
-            prev, curr = start, first_next
-            while True:
-                visited_edges.add(tuple(sorted((prev, curr))))
-                loop.append(curr)
-                candidates = [n for n in adjacency[curr] if n != prev]
-                if not candidates:
-                    break
-                next_id = candidates[0]
-                if next_id == start:
-                    visited_edges.add(tuple(sorted((curr, next_id))))
-                    break
-                prev, curr = curr, next_id
-                if len(loop) > len(adjacency) + 2:
-                    raise ValueError("Could not order outlet boundary loop.")
-            if len(loop) >= 3:
-                loops.append(loop)
-
-    if not loops:
-        raise ValueError("Could not find a closed outlet boundary loop.")
-
-    verts = np.asarray(vertices)
-    return verts[max(loops, key=len)]
 
 
 def _make_plane_basis(points: np.ndarray, triangles: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -522,556 +435,1006 @@ def _orient_triangle(tri: np.ndarray, normal: np.ndarray) -> np.ndarray:
     return tri
 
 
-def _clip_scalar_polygon(
-    points: list[np.ndarray],
-    values: list[float],
-    keep_positive: bool,
-) -> tuple[list[np.ndarray], list[float]]:
-    if not points:
-        return [], []
+def _all_boundary_loops_from_triangles(triangles: np.ndarray, tol: float = 1e-8) -> list[np.ndarray]:
+    """Return every closed boundary loop of the given triangle set as a 3D point array.
 
-    out_points: list[np.ndarray] = []
-    out_values: list[float] = []
+    Unlike _order_boundary_loop_from_triangles (which returns only the longest loop),
+    this preserves disconnected outlet components — required for multi-channel cross
+    sections where each channel has its own perimeter.
+    """
+    vertex_ids: dict[tuple[int, int, int], int] = {}
+    vertices: list[np.ndarray] = []
 
-    def keep(value: float) -> bool:
-        return value >= 0.0 if keep_positive else value <= 0.0
+    def vid(point: np.ndarray) -> int:
+        key = tuple(np.round(point / tol).astype(np.int64))
+        if key not in vertex_ids:
+            vertex_ids[key] = len(vertices)
+            vertices.append(np.asarray(point, dtype=float))
+        return vertex_ids[key]
 
-    for i, curr_point in enumerate(points):
-        prev_point = points[i - 1]
-        curr_value = values[i]
-        prev_value = values[i - 1]
-        curr_keep = keep(curr_value)
-        prev_keep = keep(prev_value)
+    edge_counts: dict[tuple[int, int], int] = defaultdict(int)
+    for tri in triangles:
+        ids = [vid(p) for p in tri]
+        for a, b in ((ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])):
+            edge_counts[tuple(sorted((a, b)))] += 1
 
-        if curr_keep != prev_keep:
-            denom = prev_value - curr_value
-            t = 0.5 if abs(denom) < 1e-30 else prev_value / denom
-            t = float(np.clip(t, 0.0, 1.0))
-            out_points.append(prev_point + t * (curr_point - prev_point))
-            out_values.append(0.0)
-        if curr_keep:
-            out_points.append(curr_point)
-            out_values.append(curr_value)
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for (a, b), count in edge_counts.items():
+        if count == 1:
+            adjacency[a].append(b)
+            adjacency[b].append(a)
 
-    return out_points, out_values
+    if not adjacency:
+        raise ValueError("Outlet patch has no boundary edges.")
+
+    verts = np.asarray(vertices)
+    loops: list[np.ndarray] = []
+    visited_edges: set[tuple[int, int]] = set()
+    for start in list(adjacency.keys()):
+        for first_next in adjacency[start]:
+            edge = tuple(sorted((start, first_next)))
+            if edge in visited_edges:
+                continue
+            loop_ids = [start]
+            prev, curr = start, first_next
+            closed = False
+            while True:
+                visited_edges.add(tuple(sorted((prev, curr))))
+                loop_ids.append(curr)
+                candidates = [n for n in adjacency[curr] if n != prev and tuple(sorted((curr, n))) not in visited_edges]
+                if not candidates:
+                    # Try to close on start if possible
+                    if start in adjacency[curr]:
+                        visited_edges.add(tuple(sorted((curr, start))))
+                        closed = True
+                    break
+                next_id = candidates[0]
+                if next_id == start:
+                    visited_edges.add(tuple(sorted((curr, next_id))))
+                    closed = True
+                    break
+                prev, curr = curr, next_id
+                if len(loop_ids) > len(adjacency) + 2:
+                    raise ValueError("Could not chain outlet boundary loop.")
+            if closed and len(loop_ids) >= 3:
+                loops.append(verts[loop_ids])
+
+    if not loops:
+        raise ValueError("Could not find any closed outlet boundary loop.")
+    return loops
 
 
-def _triangulate_planar_polygon(points_3d: list[np.ndarray], normal: np.ndarray) -> list[np.ndarray]:
-    if len(points_3d) < 3:
+def _build_shapely_multipolygon(loops_2d: list[np.ndarray]):
+    """Build a shapely (Multi)Polygon from a list of 2D loops, classifying outer rings vs holes by containment depth.
+
+    Even depth (0, 2, ...) -> outer ring of a new polygon; odd depth -> hole of the enclosing ring.
+    All input loops must be closed (first != last is acceptable; shapely closes implicitly).
+    """
+    from shapely.geometry import Polygon, MultiPolygon
+    from shapely.geometry.polygon import orient
+
+    rings = [np.asarray(l, dtype=float) for l in loops_2d]
+    polys_test = [Polygon(r) for r in rings]
+    # Containment graph: ring i is enclosed by ring j iff a vertex of ring i is
+    # inside ring j's polygon. A vertex of ring i can never coincide with the
+    # interior of ring i itself (so witness is unambiguous), and rings cannot
+    # cross (well-formed boundary), so any single vertex suffices.
+    from shapely.geometry import Point
+    depth = [0] * len(rings)
+    parent = [-1] * len(rings)
+    for i, ri in enumerate(rings):
+        witness = Point(ri[0, 0], ri[0, 1])
+        candidates = []
+        for j, pj in enumerate(polys_test):
+            if i == j:
+                continue
+            if pj.contains(witness):
+                candidates.append(j)
+        depth[i] = len(candidates)
+        if candidates:
+            # Direct parent = smallest enclosing polygon by area.
+            parent[i] = min(candidates, key=lambda j: polys_test[j].area)
+
+    # Assemble: outer rings have even depth. Each outer ring's holes are
+    # children (parent == this ring) with odd depth.
+    outer_indices = [i for i, d in enumerate(depth) if d % 2 == 0]
+    polygons = []
+    for oi in outer_indices:
+        holes = [rings[j].tolist() for j in range(len(rings)) if parent[j] == oi and depth[j] % 2 == 1]
+        poly = Polygon(rings[oi].tolist(), holes=holes)
+        polygons.append(orient(poly, sign=1.0))  # CCW exterior, CW holes
+
+    if not polygons:
+        raise ValueError("polygon_offset: no outer rings detected after containment classification.")
+    if len(polygons) == 1:
+        return polygons[0]
+    return MultiPolygon(polygons)
+
+
+def _triangulate_shapely_to_2d(poly, engine: str = "triangle") -> list[tuple[np.ndarray, np.ndarray]]:
+    """Triangulate a shapely Polygon or MultiPolygon (with optional holes) into 2D triangles.
+
+    Returns a list of (vertices_2d, faces) tuples, one per polygon component. faces indexes vertices_2d.
+    Empty geometries return an empty list.
+    """
+    from shapely.geometry import MultiPolygon, Polygon
+    from trimesh.creation import triangulate_polygon
+
+    if poly.is_empty:
         return []
-    p0 = points_3d[0]
-    triangles = []
-    for i in range(1, len(points_3d) - 1):
-        tri = np.array([p0, points_3d[i], points_3d[i + 1]])
-        triangles.append(_orient_triangle(tri, normal))
-    return triangles
-
-
-def _triangulate_polygon_2d(points: np.ndarray) -> np.ndarray:
-    order = list(range(len(points)))
-    if _polygon_area_2d(points) < 0:
-        order = list(reversed(order))
-        points = points[order]
-
-    def cross2(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
-        ab = b - a
-        ac = c - a
-        return float(ab[0] * ac[1] - ab[1] * ac[0])
-
-    def point_in_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> bool:
-        v0 = c - a
-        v1 = b - a
-        v2 = p - a
-        den = v0[0] * v1[1] - v1[0] * v0[1]
-        if abs(den) < 1e-20:
-            return False
-        u = (v2[0] * v1[1] - v1[0] * v2[1]) / den
-        v = (v0[0] * v2[1] - v2[0] * v0[1]) / den
-        return u > 1e-12 and v > 1e-12 and (u + v) < 1.0 - 1e-12
-
-    remaining = list(range(len(points)))
-    triangles: list[list[int]] = []
-    guard = 0
-    while len(remaining) > 3:
-        clipped = False
-        for pos, idx in enumerate(remaining):
-            prev_idx = remaining[(pos - 1) % len(remaining)]
-            next_idx = remaining[(pos + 1) % len(remaining)]
-            a, b, c = points[prev_idx], points[idx], points[next_idx]
-            if cross2(a, b, c) <= 1e-14:
-                continue
-            if any(
-                point_in_triangle(points[other], a, b, c)
-                for other in remaining
-                if other not in (prev_idx, idx, next_idx)
-            ):
-                continue
-            triangles.append([order[prev_idx], order[idx], order[next_idx]])
-            del remaining[pos]
-            clipped = True
-            break
-        guard += 1
-        if not clipped or guard > len(points) * len(points):
-            raise ValueError("Ear clipping failed to triangulate inset outlet polygon.")
-    triangles.append([order[idx] for idx in remaining])
-    return np.asarray(triangles, dtype=np.int64)
-
-
-def _inward_vertex_directions_2d(polygon: np.ndarray) -> np.ndarray:
-    if _polygon_area_2d(polygon) < 0:
-        polygon = polygon[::-1]
-    dirs = []
-    centroid = polygon.mean(axis=0)
-    for i in range(len(polygon)):
-        prev_p = polygon[(i - 1) % len(polygon)]
-        curr_p = polygon[i]
-        next_p = polygon[(i + 1) % len(polygon)]
-        prev_dir = curr_p - prev_p
-        next_dir = next_p - curr_p
-        prev_dir = prev_dir / max(np.linalg.norm(prev_dir), 1e-30)
-        next_dir = next_dir / max(np.linalg.norm(next_dir), 1e-30)
-        n_prev = np.array([-prev_dir[1], prev_dir[0]])
-        n_next = np.array([-next_dir[1], next_dir[0]])
-        candidates = [
-            centroid - curr_p,
-            n_prev + n_next,
-            n_prev,
-            n_next,
-            0.5 * (prev_p + next_p) - curr_p,
-        ]
-        scale = max(np.ptp(polygon[:, 0]), np.ptp(polygon[:, 1]), 1.0)
-        direction = None
-        for candidate in candidates:
-            if np.linalg.norm(candidate) < 1e-14:
-                continue
-            cand = candidate / np.linalg.norm(candidate)
-            if _points_in_polygon_2d((curr_p + 1e-6 * scale * cand)[None, :], polygon)[0]:
-                direction = cand
-                break
-        if direction is None:
-            best_dir = None
-            best_dist = -np.inf
-            for angle in np.linspace(0.0, 2.0 * np.pi, 64, endpoint=False):
-                cand = np.array([np.cos(angle), np.sin(angle)])
-                if not _points_in_polygon_2d((curr_p + 1e-6 * scale * cand)[None, :], polygon)[0]:
-                    continue
-                dist = _ray_polygon_distance_2d(curr_p + 1e-6 * scale * cand, cand, polygon)
-                if np.isfinite(dist) and dist > best_dist:
-                    best_dist = dist
-                    best_dir = cand
-            direction = best_dir
-        if direction is None:
-            direction = candidates[0] / max(np.linalg.norm(candidates[0]), 1e-30)
-        dirs.append(direction)
-    return np.asarray(dirs)
-
-
-def _smooth_periodic(values: np.ndarray, passes: int = 2) -> np.ndarray:
-    out = values.astype(float).copy()
-    for _ in range(passes):
-        padded = np.r_[out[-2:], out, out[:2]]
-        out = np.array([
-            np.median(padded[i:i + 5])
-            for i in range(len(out))
-        ])
-    return out
-
-
-def _resample_closed_polyline(points: np.ndarray, n_samples: int) -> np.ndarray:
-    edges = np.roll(points, -1, axis=0) - points
-    lengths = np.linalg.norm(edges, axis=1)
-    perimeter = float(lengths.sum())
-    if perimeter <= 1e-30:
-        raise ValueError("Cannot resample degenerate outlet boundary.")
-
-    cumulative = np.r_[0.0, np.cumsum(lengths)]
-    samples = np.linspace(0.0, perimeter, int(n_samples), endpoint=False)
-    out = np.empty((len(samples), points.shape[1]), dtype=float)
-    edge_idx = np.searchsorted(cumulative, samples, side="right") - 1
-    edge_idx = np.clip(edge_idx, 0, len(points) - 1)
-    local = samples - cumulative[edge_idx]
-    t = local / np.maximum(lengths[edge_idx], 1e-30)
-    out = points[edge_idx] + t[:, None] * edges[edge_idx]
-    return out
-
-
-def _smooth_closed_points(points: np.ndarray, passes: int, keep_inside: np.ndarray | None = None) -> np.ndarray:
-    out = points.copy()
-    for _ in range(passes):
-        candidate = (
-            0.25 * np.roll(out, 1, axis=0)
-            + 0.5 * out
-            + 0.25 * np.roll(out, -1, axis=0)
-        )
-        if keep_inside is not None:
-            inside = _points_in_polygon_2d(candidate, keep_inside)
-            candidate = np.where(inside[:, None], candidate, out)
-        out = candidate
-    return out
-
-
-def _build_local_inset_outlet_regions(
-    outlet_triangles: list[np.ndarray],
-    source_patch_name: str,
-    interior_patch_name: str,
-    inset_distance: float,
-) -> dict[str, list[np.ndarray]]:
-    triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
-
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
-        outer_3d = outer_3d[::-1]
-
-    sample_count = max(160, min(800, len(outer_2d) * 8))
-    outer_sample_2d = _resample_closed_polyline(outer_2d, sample_count)
-    outer_sample_3d = _unproject_from_plane(outer_sample_2d, origin, axis_u, axis_v)
-
-    extent = max(float(np.ptp(outer_sample_2d[:, 0])), float(np.ptp(outer_sample_2d[:, 1])))
-    eps = max(extent * 1e-8, 1e-12)
-    directions = _inward_vertex_directions_2d(outer_sample_2d)
-    inset_distance = max(float(inset_distance), eps)
-    outer_area = abs(_polygon_area_2d(outer_2d))
-    last_error: Exception | None = None
-    for scale in (1.0, 0.75, 0.5, 0.35, 0.25, 0.15, 0.1):
-        margins = np.full(len(outer_sample_2d), scale * inset_distance, dtype=float)
-        inner_2d = outer_sample_2d + margins[:, None] * directions
-
-        try:
-            for i in range(len(inner_2d)):
-                if _points_in_polygon_2d(inner_2d[i:i + 1], outer_2d)[0]:
-                    continue
-                margin = margins[i]
-                while margin > eps:
-                    margin *= 0.5
-                    candidate = outer_sample_2d[i] + margin * directions[i]
-                    if _points_in_polygon_2d(candidate[None, :], outer_2d)[0]:
-                        inner_2d[i] = candidate
-                        margins[i] = margin
-                        break
-                else:
-                    inner_2d[i] = outer_sample_2d[i] + eps * directions[i]
-                    margins[i] = eps
-
-            inner_2d = _smooth_closed_points(inner_2d, passes=4, keep_inside=outer_2d)
-            inner_area = abs(_polygon_area_2d(inner_2d))
-            if inner_area <= 1e-20 or inner_area >= outer_area:
-                raise ValueError("Local inset outlet polygon has invalid area.")
-            inner_tri_idx = _triangulate_polygon_2d(inner_2d)
-            break
-        except Exception as exc:
-            last_error = exc
+    if isinstance(poly, MultiPolygon):
+        components = list(poly.geoms)
+    elif isinstance(poly, Polygon):
+        components = [poly]
     else:
-        raise ValueError(f"Could not create valid local inset outlet polygon: {last_error}")
+        # GeometryCollection: keep only polygonal pieces
+        components = [g for g in getattr(poly, "geoms", []) if isinstance(g, Polygon) and not g.is_empty]
 
-    inner_3d = _unproject_from_plane(inner_2d, origin, axis_u, axis_v)
-    interior_tris = [
-        _orient_triangle(inner_3d[idx], normal)
-        for idx in inner_tri_idx
-    ]
-
-    rim_tris: list[np.ndarray] = []
-    for i in range(len(outer_sample_3d)):
-        j = (i + 1) % len(outer_sample_3d)
-        rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], outer_sample_3d[j], inner_3d[j]]), normal))
-        rim_tris.append(_orient_triangle(np.array([outer_sample_3d[i], inner_3d[j], inner_3d[i]]), normal))
-
-    logger.info(
-        "Created %s with local inset: inset_distance=%.6e, applied_scale=%.2f, "
-        "margin_range=[%.6e, %.6e], samples=%d, outer_area=%.6e, inner_area=%.6e, "
-        "interior_tris=%d, %s_rim_tris=%d",
-        interior_patch_name,
-        inset_distance,
-        scale,
-        margins.min(),
-        margins.max(),
-        sample_count,
-        outer_area,
-        inner_area,
-        len(interior_tris),
-        source_patch_name,
-        len(rim_tris),
-    )
-    return {
-        source_patch_name: rim_tris,
-        interior_patch_name: interior_tris,
-    }
-
-
-def _build_local_distance_outlet_regions(
-    outlet_triangles: list[np.ndarray],
-    source_patch_name: str,
-    interior_patch_name: str,
-    threshold: float,
-    grid_resolution: int = 180,
-    ray_directions: int = 16,
-) -> dict[str, list[np.ndarray]]:
-    triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
-
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
-
-    bbox_min = outer_2d.min(axis=0)
-    bbox_max = outer_2d.max(axis=0)
-    span = bbox_max - bbox_min
-    max_span = float(np.max(span))
-    if max_span <= 0.0:
-        raise ValueError("Outlet boundary has invalid 2D extent.")
-
-    cell_size = max_span / int(grid_resolution)
-    nx = max(1, int(np.ceil(span[0] / cell_size)))
-    ny = max(1, int(np.ceil(span[1] / cell_size)))
-    x0 = bbox_min[0]
-    y0 = bbox_min[1]
-
-    xs = x0 + (np.arange(nx) + 0.5) * cell_size
-    ys = y0 + (np.arange(ny) + 0.5) * cell_size
-    xx, yy = np.meshgrid(xs, ys, indexing="ij")
-    centers = np.column_stack([xx.ravel(), yy.ravel()])
-    inside = _points_in_polygon_2d(centers, outer_2d)
-    inside_flat_ids = np.flatnonzero(inside)
-    if len(inside_flat_ids) == 0:
-        raise ValueError("Rasterized outlet has no cells inside the boundary.")
-
-    grid_x = x0 + np.arange(nx + 1) * cell_size
-    grid_y = y0 + np.arange(ny + 1) * cell_size
-    gx, gy = np.meshgrid(grid_x, grid_y, indexing="ij")
-    grid_points = np.column_stack([gx.ravel(), gy.ravel()])
-    grid_inside = _points_in_polygon_2d(grid_points, outer_2d)
-    inside_points = grid_points[grid_inside]
-    if len(inside_points) == 0:
-        raise ValueError("Rasterized outlet has no grid vertices inside the boundary.")
-
-    d_wall = _distance_to_polygon_segments_2d(inside_points, outer_2d)
-    local_half_width = _local_half_width_2d(
-        inside_points,
-        outer_2d,
-        n_directions=int(ray_directions),
-    )
-    finite = np.isfinite(local_half_width) & (local_half_width > 0.0)
-    fallback = np.nanmedian(local_half_width[finite]) if np.any(finite) else np.nan
-    if not np.isfinite(fallback) or fallback <= 0.0:
-        fallback = max(float(np.nanmax(d_wall)), cell_size)
-    local_half_width = np.where(finite, local_half_width, fallback)
-
-    normalized_grid = np.full(len(grid_points), -np.inf, dtype=float)
-    normalized_grid[grid_inside] = d_wall / np.maximum(local_half_width, 1e-30)
-    phi_grid = normalized_grid.reshape((nx + 1, ny + 1)) - float(threshold)
-
-    def point_3d(i: int, j: int) -> np.ndarray:
-        p2 = np.array([x0 + i * cell_size, y0 + j * cell_size])
-        return _unproject_from_plane(p2[None, :], origin, axis_u, axis_v)[0]
-
-    source_tris: list[np.ndarray] = []
-    interior_tris: list[np.ndarray] = []
-    interior_cells = 0
-    rim_cells = 0
-    mixed_cells = 0
-    for flat_id in inside_flat_ids:
-        i = flat_id // ny
-        j = flat_id % ny
-        cell_points = [
-            point_3d(i, j),
-            point_3d(i + 1, j),
-            point_3d(i + 1, j + 1),
-            point_3d(i, j + 1),
-        ]
-        cell_phi = [
-            float(phi_grid[i, j]),
-            float(phi_grid[i + 1, j]),
-            float(phi_grid[i + 1, j + 1]),
-            float(phi_grid[i, j + 1]),
-        ]
-
-        interior_poly, _ = _clip_scalar_polygon(cell_points, cell_phi, keep_positive=True)
-        rim_poly, _ = _clip_scalar_polygon(cell_points, cell_phi, keep_positive=False)
-
-        if len(interior_poly) >= 3:
-            interior_cells += 1
-            interior_tris.extend(_triangulate_planar_polygon(interior_poly, normal))
-        if len(rim_poly) >= 3:
-            rim_cells += 1
-            source_tris.extend(_triangulate_planar_polygon(rim_poly, normal))
-        if len(interior_poly) >= 3 and len(rim_poly) >= 3:
-            mixed_cells += 1
-
-    if not interior_tris:
-        raise ValueError(
-            f"No outletInterior triangles for normalized threshold {threshold}. "
-            "Lower outlet_interior.inset_fraction or increase grid_resolution."
-        )
-    if not source_tris:
-        raise ValueError(
-            f"No outlet rim triangles for normalized threshold {threshold}. "
-            "Increase outlet_interior.inset_fraction."
-        )
-
-    logger.info(
-        "Created %s with local distance split: threshold=%.3f, grid=%dx%d, "
-        "cell_size=%.6e, %s_cells=%d, %s_rim_cells=%d, mixed_cells=%d",
-        interior_patch_name,
-        threshold,
-        nx,
-        ny,
-        cell_size,
-        interior_patch_name,
-        interior_cells,
-        source_patch_name,
-        rim_cells,
-        mixed_cells,
-    )
-
-    return {
-        source_patch_name: source_tris,
-        interior_patch_name: interior_tris,
-    }
-
-
-def _scanline_intervals_2d(polygon: np.ndarray, axis: int, value: float) -> list[tuple[float, float]]:
-    cross_axis = 1 - axis
-    coords = []
-    for a, b in zip(polygon, np.roll(polygon, -1, axis=0)):
-        av = a[axis]
-        bv = b[axis]
-        if abs(av - bv) < 1e-14:
+    out: list[tuple[np.ndarray, np.ndarray]] = []
+    for comp in components:
+        if comp.is_empty or comp.area <= 1e-12:
             continue
-        if (av <= value < bv) or (bv <= value < av):
-            t = (value - av) / (bv - av)
-            coords.append(float(a[cross_axis] + t * (b[cross_axis] - a[cross_axis])))
-
-    coords = sorted(coords)
-    intervals = []
-    for i in range(0, len(coords) - 1, 2):
-        lo, hi = coords[i], coords[i + 1]
-        if hi - lo > 1e-12:
-            intervals.append((lo, hi))
-    return intervals
-
-
-def _station_point_3d(
-    station: float,
-    transverse: float,
-    axis: int,
-    origin: np.ndarray,
-    axis_u: np.ndarray,
-    axis_v: np.ndarray,
-) -> np.ndarray:
-    p2 = np.zeros(2)
-    p2[axis] = station
-    p2[1 - axis] = transverse
-    return _unproject_from_plane(p2[None, :], origin, axis_u, axis_v)[0]
+        try:
+            verts_2d, faces = triangulate_polygon(comp, engine=engine)
+        except ValueError as exc:
+            # Trimesh's triangulate_polygon dedups coordinates and then requires
+            # at least 4 in the cleaned ring; a clipped polygon can collapse to a
+            # near-collinear sliver here even though comp.area > 0. Skip and log.
+            n_coords = len(comp.exterior.coords) if hasattr(comp, "exterior") else 0
+            logger.warning(
+                "_triangulate_shapely_to_2d: skipping component (area=%.3e, "
+                "exterior_coords=%d): %s",
+                comp.area, n_coords, exc,
+            )
+            continue
+        if len(faces) == 0:
+            continue
+        out.append((np.asarray(verts_2d, dtype=float), np.asarray(faces, dtype=np.int64)))
+    return out
 
 
-def _add_scanline_quad(
-    target: list[np.ndarray],
-    s0: float,
-    s1: float,
-    a0: float,
-    b0: float,
-    a1: float,
-    b1: float,
-    axis: int,
+def _lift_2d_triangles_to_3d(
+    triangulations: list[tuple[np.ndarray, np.ndarray]],
     origin: np.ndarray,
     axis_u: np.ndarray,
     axis_v: np.ndarray,
     normal: np.ndarray,
-) -> None:
-    if min(abs(b0 - a0), abs(b1 - a1), abs(s1 - s0)) < 1e-12:
-        return
-    p00 = _station_point_3d(s0, a0, axis, origin, axis_u, axis_v)
-    p01 = _station_point_3d(s0, b0, axis, origin, axis_u, axis_v)
-    p11 = _station_point_3d(s1, b1, axis, origin, axis_u, axis_v)
-    p10 = _station_point_3d(s1, a1, axis, origin, axis_u, axis_v)
-    target.append(_orient_triangle(np.array([p00, p10, p11]), normal))
-    target.append(_orient_triangle(np.array([p00, p11, p01]), normal))
+) -> list[np.ndarray]:
+    """Convert per-component 2D triangulations into a flat list of oriented 3D triangles."""
+    out: list[np.ndarray] = []
+    for verts_2d, faces in triangulations:
+        verts_3d = _unproject_from_plane(verts_2d, origin, axis_u, axis_v)
+        for tri in verts_3d[faces]:
+            out.append(_orient_triangle(tri, normal))
+    return out
 
 
-def _build_centerline_band_outlet_regions(
+def _build_polygon_offset_outlet_regions(
     outlet_triangles: list[np.ndarray],
     source_patch_name: str,
     interior_patch_name: str,
-    exclusion_fraction: float,
-    station_count: int = 240,
+    inset_distance: float,
+    quad_segs: int = 8,
+    join_style: str = "round",
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
 ) -> dict[str, list[np.ndarray]]:
+    """Split the outlet into a smooth interior patch and a wall-margin rim using a true 2D Minkowski offset.
+
+    The outlet boundary is extracted as one or more 2D loops in the outlet plane, assembled into a
+    shapely (Multi)Polygon, and shrunk inward via ``buffer(-inset_distance, ...)``. Both the inset
+    polygon and its ring complement are re-triangulated so the resulting STL patch boundary is the
+    smooth offset curve itself, not the original triangle edges nearest to it. Channels narrower than
+    ``2 * inset_distance`` collapse cleanly to empty interior — which is the correct geometric result.
+    """
+    import shapely  # local import: keeps shapely optional for users not invoking this method
+
+    join_style_map = {"round": "round", "mitre": "mitre", "bevel": "bevel"}
+    if join_style not in join_style_map:
+        raise ValueError(f"polygon_offset: unknown join_style '{join_style}' (expected one of {sorted(join_style_map)}).")
+    if inset_distance <= 0:
+        raise ValueError(f"polygon_offset: inset_distance must be positive, got {inset_distance}.")
+
     triangles = np.asarray(outlet_triangles, dtype=float)
-    outer_3d = _order_boundary_loop_from_triangles(triangles)
-    origin, normal, axis_u, axis_v = _make_plane_basis(outer_3d, triangles)
-    outer_2d = _project_to_plane(outer_3d, origin, axis_u, axis_v)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
 
-    if _polygon_area_2d(outer_2d) < 0:
-        outer_2d = outer_2d[::-1]
+    all_loop_pts = np.vstack(loops_3d)
+    origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
 
-    span = outer_2d.max(axis=0) - outer_2d.min(axis=0)
-    axis = int(np.argmax(span))
-    axis_min = float(outer_2d[:, axis].min())
-    axis_max = float(outer_2d[:, axis].max())
-    if axis_max <= axis_min:
-        raise ValueError("Outlet boundary has invalid 2D extent.")
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+    poly_in = poly_outlet.buffer(
+        -float(inset_distance),
+        quad_segs=int(quad_segs),
+        join_style=join_style_map[join_style],
+    )
+    if poly_in.is_empty or poly_in.area <= 0:
+        raise ValueError(
+            f"polygon_offset: inset_distance={inset_distance} erased the entire outlet; reduce it."
+        )
+    poly_ring = poly_outlet.difference(poly_in)
 
-    exclusion_fraction = float(np.clip(exclusion_fraction, 0.0, 0.49))
-    band_fraction = 1.0 - 2.0 * exclusion_fraction
-    if band_fraction <= 0.0:
-        raise ValueError("Centerline band is empty. Lower outlet_interior.inset_fraction.")
-
-    eps = 1e-9 * (axis_max - axis_min)
-    stations = np.linspace(axis_min + eps, axis_max - eps, int(station_count))
-    station_intervals = [_scanline_intervals_2d(outer_2d, axis, s) for s in stations]
-
-    source_tris: list[np.ndarray] = []
-    interior_tris: list[np.ndarray] = []
-    skipped = 0
-    strips = 0
-
-    for k in range(len(stations) - 1):
-        intervals0 = station_intervals[k]
-        intervals1 = station_intervals[k + 1]
-        if not intervals0 or not intervals1:
-            continue
-        if len(intervals0) != len(intervals1):
-            skipped += 1
-            continue
-
-        s0 = float(stations[k])
-        s1 = float(stations[k + 1])
-        for (lo0, hi0), (lo1, hi1) in zip(intervals0, intervals1):
-            c0 = 0.5 * (lo0 + hi0)
-            c1 = 0.5 * (lo1 + hi1)
-            h0 = 0.5 * (hi0 - lo0) * band_fraction
-            h1 = 0.5 * (hi1 - lo1) * band_fraction
-            blo0, bhi0 = c0 - h0, c0 + h0
-            blo1, bhi1 = c1 - h1, c1 + h1
-
-            _add_scanline_quad(source_tris, s0, s1, lo0, blo0, lo1, blo1, axis, origin, axis_u, axis_v, normal)
-            _add_scanline_quad(interior_tris, s0, s1, blo0, bhi0, blo1, bhi1, axis, origin, axis_u, axis_v, normal)
-            _add_scanline_quad(source_tris, s0, s1, bhi0, hi0, bhi1, hi1, axis, origin, axis_u, axis_v, normal)
-            strips += 1
-
-    if not interior_tris:
-        raise ValueError("Centerline outletInterior produced no triangles.")
-    if not source_tris:
-        raise ValueError("Centerline outlet rim produced no triangles.")
-
-    logger.info(
-        "Created %s with centerline band: axis=%s, exclusion_fraction=%.3f, "
-        "band_fraction=%.3f, stations=%d, strips=%d, skipped_branch_transitions=%d",
-        interior_patch_name,
-        "uv"[axis],
-        exclusion_fraction,
-        band_fraction,
-        len(stations),
-        strips,
-        skipped,
+    interior_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(poly_in, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+    rim_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(poly_ring, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
     )
 
+    logger.info(
+        "Created %s via polygon_offset: inset_distance=%.6e, loops=%d, "
+        "outlet_area=%.6e, inset_area=%.6e (%.1f%%), ring_area=%.6e, "
+        "%s_tris=%d, %s_tris=%d",
+        interior_patch_name,
+        inset_distance,
+        len(loops_2d),
+        poly_outlet.area,
+        poly_in.area,
+        100.0 * poly_in.area / poly_outlet.area,
+        poly_ring.area,
+        interior_patch_name,
+        len(interior_tris_3d),
+        source_patch_name,
+        len(rim_tris_3d),
+    )
+
+    if debug_dir is not None:
+        _write_polygon_offset_debug(
+            debug_dir, loops_2d, poly_outlet, poly_in, poly_ring,
+            origin, axis_u, axis_v, inset_distance=float(inset_distance),
+        )
+
     return {
-        source_patch_name: source_tris,
-        interior_patch_name: interior_tris,
+        source_patch_name: rim_tris_3d,
+        interior_patch_name: interior_tris_3d,
     }
+
+
+def _write_polygon_offset_debug(
+    debug_dir: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    poly_in,
+    poly_ring,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    inset_distance: float,
+) -> None:
+    """Write 2D-in-3D polyline OBJs for each stage of the polygon offset; small format, ParaView-readable."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def collect_rings(geom) -> list[np.ndarray]:
+        rings: list[np.ndarray] = []
+        if geom.is_empty:
+            return rings
+        if isinstance(geom, MultiPolygon):
+            for g in geom.geoms:
+                rings.extend(collect_rings(g))
+            return rings
+        if isinstance(geom, Polygon):
+            rings.append(np.asarray(geom.exterior.coords, dtype=float)[:, :2])
+            for hole in geom.interiors:
+                rings.append(np.asarray(hole.coords, dtype=float)[:, :2])
+            return rings
+        for g in getattr(geom, "geoms", []):
+            if isinstance(g, Polygon):
+                rings.extend(collect_rings(g))
+        return rings
+
+    def write_obj(path: Path, rings: list[np.ndarray]) -> None:
+        with open(path, "w") as f:
+            v_offset = 1
+            for ring in rings:
+                if len(ring) == 0:
+                    continue
+                ring_3d = _unproject_from_plane(np.asarray(ring, dtype=float), origin, axis_u, axis_v)
+                for v in ring_3d:
+                    f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+                idxs = list(range(v_offset, v_offset + len(ring_3d)))
+                f.write("l " + " ".join(str(i) for i in idxs) + f" {v_offset}\n")
+                v_offset += len(ring_3d)
+
+    write_obj(debug_dir / "polygon_offset_outlet_boundary.obj", [r for r in loops_2d])
+    write_obj(debug_dir / "polygon_offset_inset.obj", collect_rings(poly_in))
+    write_obj(debug_dir / "polygon_offset_ring.obj", collect_rings(poly_ring))
+    _render_polygon_offset_png(
+        debug_dir / "polygon_offset.png",
+        poly_outlet, poly_in, poly_ring,
+        origin=origin, axis_u=axis_u, axis_v=axis_v,
+        inset_distance=float(inset_distance),
+    )
+    logger.debug("Wrote polygon_offset debug curves to %s", debug_dir)
+
+
+def _render_polygon_offset_png(
+    path: Path,
+    poly_outlet,
+    poly_in,
+    poly_ring,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    inset_distance: float,
+) -> None:
+    """Render overview of the polygon-offset outlet split in world (y, z) with z up, y to the left."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import PathPatch
+        from matplotlib.path import Path as MplPath
+    except ImportError:
+        logger.warning("matplotlib not available; skipping polygon_offset.png debug render.")
+        return
+
+    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
+        """Lift 2D plane coords to 3D world, then drop x → return (-y, z) so that z is up, y points left."""
+        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
+        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
+
+    def polygon_to_patch(p, **kw):
+        verts, codes = [], []
+        def add_ring(coords):
+            cs = list(to_world_yz(np.asarray(coords)))
+            verts.extend(cs)
+            codes.append(MplPath.MOVETO)
+            codes.extend([MplPath.LINETO] * (len(cs) - 2))
+            codes.append(MplPath.CLOSEPOLY)
+        polys = list(p.geoms) if p.geom_type == "MultiPolygon" else [p]
+        for q in polys:
+            if q.is_empty:
+                continue
+            add_ring(q.exterior.coords)
+            for h in q.interiors:
+                add_ring(h.coords)
+        if not verts:
+            return None
+        return PathPatch(MplPath(verts, codes), **kw)
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ring_patch = polygon_to_patch(
+        poly_ring, facecolor="#dddddd", edgecolor="none", zorder=0, label="outlet",
+    )
+    if ring_patch is not None:
+        ax.add_patch(ring_patch)
+    in_patch = polygon_to_patch(
+        poly_in, facecolor="#ffc8a8", edgecolor="#d2691e",
+        lw=0.6, zorder=1, label="outletInterior",
+    )
+    if in_patch is not None:
+        ax.add_patch(in_patch)
+    polys = list(poly_outlet.geoms) if poly_outlet.geom_type == "MultiPolygon" else [poly_outlet]
+    for q in polys:
+        ex = to_world_yz(np.asarray(q.exterior.coords))
+        ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8)
+        for h in q.interiors:
+            hc = to_world_yz(np.asarray(h.coords))
+            ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8)
+    in_polys = list(poly_in.geoms) if poly_in.geom_type == "MultiPolygon" else [poly_in]
+    for q in in_polys:
+        if q.is_empty:
+            continue
+        ex = to_world_yz(np.asarray(q.exterior.coords))
+        ax.plot(ex[:, 0], ex[:, 1], "-", color="#d62728", lw=1.0)
+        for h in q.interiors:
+            hc = to_world_yz(np.asarray(h.coords))
+            ax.plot(hc[:, 0], hc[:, 1], "-", color="#d62728", lw=1.0)
+
+    handles, labels = ax.get_legend_handles_labels()
+    seen = {}
+    for h, l in zip(handles, labels):
+        seen.setdefault(l, h)
+    ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
+    ax.set_aspect("equal")
+    ax.set_title(f"offset = {inset_distance:g} mm", fontsize=10)
+    ax.set_xlabel("y [mm]")
+    ax.set_ylabel("z [mm]")
+
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Section partitioning (for flowRatePartition objective)
+# ---------------------------------------------------------------------------
+
+def _world_aligned_outlet_basis(
+    triangles: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Plane basis with (u, v) pinned to world (y, z) for an outlet ~perpendicular to world x.
+
+    Unlike _make_plane_basis, which chooses an arbitrary in-plane direction from the first
+    boundary edge, this fixes the basis so that user-specified polygons in (y, z) world
+    coordinates project directly into the (u, v) plane. The plane origin lies on the outlet
+    at world (y=0, z=0), so projection of any point on the outlet returns its world (y, z).
+    """
+    normal_acc = np.zeros(3, dtype=float)
+    for tri in triangles:
+        normal_acc += np.cross(tri[1] - tri[0], tri[2] - tri[0])
+    n_norm = np.linalg.norm(normal_acc)
+    if n_norm < 1e-14:
+        raise ValueError(
+            "section_partition: degenerate outlet triangle set; cannot determine plane normal."
+        )
+    normal = normal_acc / n_norm
+
+    if abs(normal[0]) < np.cos(np.deg2rad(30.0)):
+        raise ValueError(
+            f"section_partition: outlet normal {tuple(float(v) for v in normal)} is not "
+            "aligned with world-x. This feature currently assumes axial extrusion along "
+            "world-x so that user polygons can be given in world (y, z) coordinates."
+        )
+
+    pts = triangles.reshape(-1, 3)
+    mean_x = float(pts[:, 0].mean())
+    origin = np.array([mean_x, 0.0, 0.0])
+    axis_u = np.array([0.0, 1.0, 0.0])
+    axis_v = np.array([0.0, 0.0, 1.0])
+    return origin, normal, axis_u, axis_v
+
+
+def _build_section_partition_regions(
+    outlet_triangles: list[np.ndarray],
+    source_patch_name: str,
+    sections: list[dict[str, Any]],
+    name_prefix: str = "section_",
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
+) -> tuple[dict[str, list[np.ndarray]], dict[str, float]]:
+    """Subdivide a planar outlet patch into N section sub-patches via 2D shapely intersection.
+
+    Each section in ``sections`` provides a 2D polygon in world (y, z) coordinates; the
+    intersection with the projected outlet polygon is re-triangulated and lifted back to 3D
+    using the world-aligned plane basis. Section areas are returned so the caller can derive
+    area-weighted target fractions (equal-mean-velocity targets) for the flowRatePartition
+    adjoint objective.
+    """
+    from shapely.geometry import Polygon
+    from shapely.validation import make_valid
+
+    if not sections:
+        raise ValueError("section_partition: 'sections' list is empty.")
+
+    triangles = np.asarray(outlet_triangles, dtype=float)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
+    if not loops_3d:
+        raise ValueError("section_partition: no boundary loops found on outlet patch.")
+
+    origin, normal, axis_u, axis_v = _world_aligned_outlet_basis(triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+    outlet_area = float(poly_outlet.area)
+
+    region_triangles: dict[str, list[np.ndarray]] = {}
+    region_areas: dict[str, float] = {}
+    debug_polys: list[tuple[str, Any]] = []
+    used_names: set[str] = set()
+
+    for idx, sec in enumerate(sections):
+        name = sec.get("name") or f"{name_prefix}{idx + 1:02d}"
+        if name in used_names:
+            raise ValueError(f"section_partition: duplicate section name '{name}'.")
+        used_names.add(name)
+        if "polygon" not in sec:
+            raise ValueError(f"section_partition: section '{name}' is missing 'polygon' key.")
+        poly_arr = np.asarray(sec["polygon"], dtype=float)
+        if poly_arr.ndim != 2 or poly_arr.shape[1] != 2:
+            raise ValueError(
+                f"section_partition: section '{name}' polygon must be a list of [y, z] pairs."
+            )
+        sec_poly = Polygon(poly_arr)
+        if not sec_poly.is_valid:
+            sec_poly = make_valid(sec_poly)
+        clipped = poly_outlet.intersection(sec_poly)
+        if clipped.is_empty or clipped.area <= 0:
+            raise ValueError(
+                f"section_partition: section '{name}' has empty intersection with outlet "
+                "(check polygon coordinates against outlet bbox)."
+            )
+
+        tris_2d = _triangulate_shapely_to_2d(clipped, engine=triangulation_engine)
+        tris_3d = _lift_2d_triangles_to_3d(tris_2d, origin, axis_u, axis_v, normal)
+        if not tris_3d:
+            raise ValueError(
+                f"section_partition: section '{name}' produced no triangles after lifting."
+            )
+        region_triangles[name] = tris_3d
+        region_areas[name] = float(clipped.area)
+        debug_polys.append((name, clipped))
+
+    sum_area = sum(region_areas.values())
+    coverage = sum_area / max(outlet_area, 1e-30)
+    if abs(coverage - 1.0) > 0.05:
+        # >5% gap or overlap between section sum and outlet — likely a polygon spec bug.
+        logger.warning(
+            "section_partition: section areas cover %.1f%% of outlet (sum=%.4e, outlet=%.4e). "
+            "Sections should tile the outlet for the area-weighted target-fraction objective.",
+            100.0 * coverage,
+            sum_area,
+            outlet_area,
+        )
+
+    logger.info(
+        "section_partition: split %s into %d sections (%s)",
+        source_patch_name,
+        len(region_triangles),
+        ", ".join(f"{n} area={a:.4e}" for n, a in region_areas.items()),
+    )
+
+    if debug_dir is not None:
+        _write_section_partition_debug(
+            debug_dir, loops_2d, poly_outlet, debug_polys, origin, axis_u, axis_v
+        )
+
+    return region_triangles, region_areas
+
+
+def _write_section_partition_debug(
+    debug_dir: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    section_polys: list[tuple[str, Any]],
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+) -> None:
+    """Write per-section polyline OBJs (lifted to 3D) for ParaView inspection."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    def collect_rings(geom) -> list[np.ndarray]:
+        rings: list[np.ndarray] = []
+        if geom.is_empty:
+            return rings
+        if isinstance(geom, MultiPolygon):
+            for g in geom.geoms:
+                rings.extend(collect_rings(g))
+            return rings
+        if isinstance(geom, Polygon):
+            rings.append(np.asarray(geom.exterior.coords, dtype=float)[:, :2])
+            for hole in geom.interiors:
+                rings.append(np.asarray(hole.coords, dtype=float)[:, :2])
+            return rings
+        for g in getattr(geom, "geoms", []):
+            if isinstance(g, Polygon):
+                rings.extend(collect_rings(g))
+        return rings
+
+    def write_obj(path: Path, rings: list[np.ndarray]) -> None:
+        with open(path, "w") as f:
+            v_offset = 1
+            for ring in rings:
+                if len(ring) == 0:
+                    continue
+                ring_3d = _unproject_from_plane(np.asarray(ring, dtype=float), origin, axis_u, axis_v)
+                for v in ring_3d:
+                    f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+                idxs = list(range(v_offset, v_offset + len(ring_3d)))
+                f.write("l " + " ".join(str(i) for i in idxs) + f" {v_offset}\n")
+                v_offset += len(ring_3d)
+
+    write_obj(debug_dir / "outlet_boundary.obj", [r for r in loops_2d])
+    write_obj(debug_dir / "outlet_polygon.obj", collect_rings(poly_outlet))
+    for name, sec_poly in section_polys:
+        write_obj(debug_dir / f"section_{name}.obj", collect_rings(sec_poly))
+
+    try:
+        _write_section_partition_2d_png(
+            debug_dir / "sections_2d.png", loops_2d, poly_outlet, section_polys
+        )
+    except Exception as exc:
+        # matplotlib failures shouldn't abort the optimization run
+        logger.warning("Failed to write sections_2d.png: %s", exc)
+
+    logger.debug("Wrote section_partition debug curves to %s", debug_dir)
+
+
+def _write_section_partition_2d_png(
+    path: Path,
+    loops_2d: list[np.ndarray],
+    poly_outlet,
+    section_polys: list[tuple[str, Any]],
+) -> None:
+    """Plot outlet boundary, user-section bounding polygons, and clipped sections in 2D."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon as MplPolygon
+    from shapely.geometry import MultiPolygon, Polygon
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    # Outlet boundary (the raw triangle perimeter)
+    for loop in loops_2d:
+        ax.plot(loop[:, 0], loop[:, 1], color="black", lw=1.5, label="_outlet_boundary")
+    ax.plot([], [], color="black", lw=1.5, label="outlet boundary")
+
+    # Clipped section polygons, filled, color-coded
+    cmap = plt.get_cmap("tab10")
+    for i, (name, sec_geom) in enumerate(section_polys):
+        color = cmap(i % 10)
+        comps = (
+            list(sec_geom.geoms) if isinstance(sec_geom, MultiPolygon) else [sec_geom]
+        )
+        for comp in comps:
+            if not isinstance(comp, Polygon) or comp.is_empty:
+                continue
+            verts = np.asarray(comp.exterior.coords, dtype=float)[:, :2]
+            ax.add_patch(
+                MplPolygon(verts, closed=True, facecolor=color, edgecolor=color,
+                           alpha=0.35, lw=1.0)
+            )
+        # Label at centroid
+        c = sec_geom.centroid
+        if not sec_geom.is_empty:
+            ax.text(c.x, c.y, f"{name}\nA={sec_geom.area:.3g}", color=color,
+                    ha="center", va="center", fontsize=9, fontweight="bold")
+
+    ax.set_aspect("equal", "box")
+    ax.set_xlabel("world y")
+    ax.set_ylabel("world z")
+    ax.set_title("section_partition: outlet (black) + clipped sections")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.grid(True, ls=":", alpha=0.4)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Medial-axis outlet split
+# ---------------------------------------------------------------------------
+
+def _resample_loop_2d(loop_2d: np.ndarray, ds: float) -> np.ndarray:
+    """Uniformly resample a closed 2D polyline at spacing ~ds (min 16 points)."""
+    pts = np.asarray(loop_2d, float)
+    if not np.allclose(pts[0], pts[-1]):
+        pts = np.vstack([pts, pts[0:1]])
+    seg_len = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg_len)])
+    n = max(int(round(s[-1] / ds)), 16)
+    s_new = np.linspace(0.0, s[-1], n, endpoint=False)
+    xs = np.interp(s_new, s, pts[:, 0])
+    ys = np.interp(s_new, s, pts[:, 1])
+    return np.column_stack([xs, ys])
+
+
+def _voronoi_medial_axis(poly, ds: float, min_dist: float):
+    """Compute a Voronoi-based medial axis of a shapely (Multi)Polygon.
+
+    Dense-samples the boundary at spacing ``ds``, builds the Voronoi diagram,
+    keeps edges interior to ``poly`` whose endpoints are at least ``min_dist``
+    from the boundary (drops the dense same-side fringe), and merges into one
+    or more polylines. Returns a shapely MultiLineString (possibly empty).
+    """
+    import shapely
+    from shapely.geometry import LineString, MultiLineString, MultiPoint, Point
+    from shapely.ops import linemerge, unary_union, voronoi_diagram
+
+    polys = list(poly.geoms) if isinstance(poly, shapely.MultiPolygon) else [poly]
+    sample_pts: list[np.ndarray] = []
+    for p in polys:
+        for ring in [p.exterior, *p.interiors]:
+            coords = np.asarray(ring.coords, float)[:, :2]
+            sample_pts.append(_resample_loop_2d(coords, ds))
+    if not sample_pts:
+        return MultiLineString()
+    all_pts = np.vstack(sample_pts)
+    mp = MultiPoint([(x, y) for x, y in all_pts])
+
+    vd = voronoi_diagram(mp, envelope=poly.envelope, edges=True)
+    # shapely returns a GeometryCollection containing a single MultiLineString
+    # of all Voronoi edges; clip it to the polygon directly.
+    clipped = vd.intersection(poly)
+    if clipped.is_empty:
+        return MultiLineString()
+    if isinstance(clipped, LineString):
+        inside = [clipped]
+    elif isinstance(clipped, MultiLineString):
+        inside = list(clipped.geoms)
+    else:
+        inside = [g for g in getattr(clipped, "geoms", []) if isinstance(g, LineString)]
+    if not inside:
+        return MultiLineString()
+
+    # Fringe filter: keep only edges whose endpoints are well inside the polygon.
+    boundary = poly.boundary
+    kept = [
+        ls for ls in inside
+        if all(boundary.distance(Point(c)) >= min_dist for c in ls.coords)
+    ]
+    if not kept:
+        return MultiLineString()
+
+    merged = linemerge(unary_union(kept))
+    if isinstance(merged, LineString):
+        merged = MultiLineString([merged])
+    return merged
+
+
+def _prune_short_polylines(ml, min_len: float):
+    """Drop polylines shorter than min_len (returns empty MultiLineString if all removed)."""
+    from shapely.geometry import MultiLineString
+
+    if ml.is_empty:
+        return ml
+    kept = [g for g in ml.geoms if g.length >= min_len]
+    return MultiLineString(kept)
+
+
+def _build_medial_axis_outlet_regions(
+    outlet_triangles: list[np.ndarray],
+    source_patch_name: str,
+    interior_patch_name: str,
+    boundary_sample_ds: float,
+    strip_half_width: float,
+    min_dist_from_boundary: float,
+    prune_branch_len: float = 1.0,
+    triangulation_engine: str = "triangle",
+    debug_dir: Path | None = None,
+) -> dict[str, list[np.ndarray]]:
+    """Split the outlet using a buffered medial-axis strip as the interior patch.
+
+    The medial axis (Voronoi-based) of the outlet polygon is extracted, pruned,
+    buffered by ``strip_half_width`` and clipped to the outlet to form the
+    interior patch; the rim is the outlet minus the strip. Both regions are
+    re-triangulated to the smooth strip boundary.
+
+    Use ``min_dist_from_boundary`` slightly below the channel's narrowest local
+    half-width (otherwise the medial line gets cut into disconnected pieces).
+    """
+    import shapely
+
+    if strip_half_width <= 0:
+        raise ValueError(f"medial_axis: strip_half_width must be positive, got {strip_half_width}.")
+    if boundary_sample_ds <= 0:
+        raise ValueError(f"medial_axis: boundary_sample_ds must be positive, got {boundary_sample_ds}.")
+    if min_dist_from_boundary <= 0:
+        raise ValueError(f"medial_axis: min_dist_from_boundary must be positive, got {min_dist_from_boundary}.")
+
+    triangles = np.asarray(outlet_triangles, dtype=float)
+    loops_3d = _all_boundary_loops_from_triangles(triangles)
+    if not loops_3d:
+        raise ValueError("medial_axis: no boundary loops on outlet patch.")
+
+    all_loop_pts = np.vstack(loops_3d)
+    origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
+    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+    poly_outlet = _build_shapely_multipolygon(loops_2d)
+
+    medial = _voronoi_medial_axis(poly_outlet, ds=boundary_sample_ds, min_dist=min_dist_from_boundary)
+    medial = _prune_short_polylines(medial, prune_branch_len)
+    if medial.is_empty:
+        raise ValueError(
+            f"medial_axis: extraction produced an empty medial axis "
+            f"(min_dist_from_boundary={min_dist_from_boundary} too large, or channel too narrow)."
+        )
+
+    strip_2d = medial.buffer(strip_half_width, join_style="round", cap_style="round")
+    strip_2d = strip_2d.intersection(poly_outlet)
+    if strip_2d.is_empty or strip_2d.area <= 0:
+        raise ValueError(
+            f"medial_axis: buffered strip is empty (strip_half_width={strip_half_width})."
+        )
+    ring_2d = poly_outlet.difference(strip_2d)
+
+    interior_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(strip_2d, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+    rim_tris_3d = _lift_2d_triangles_to_3d(
+        _triangulate_shapely_to_2d(ring_2d, engine=triangulation_engine),
+        origin, axis_u, axis_v, normal,
+    )
+
+    total_medial_len = sum(g.length for g in medial.geoms)
+    try:
+        clearance = float(strip_2d.boundary.distance(poly_outlet.boundary))
+    except Exception:
+        clearance = float("nan")
+    logger.info(
+        "Created %s via medial_axis: medial polylines=%d (len=%.3e), "
+        "outlet_area=%.6e, strip_area=%.6e (%.1f%%), rim_area=%.6e, "
+        "wall_clearance=%.4e, %s_tris=%d, %s_tris=%d",
+        interior_patch_name,
+        len(medial.geoms),
+        total_medial_len,
+        poly_outlet.area,
+        strip_2d.area,
+        100.0 * strip_2d.area / poly_outlet.area,
+        ring_2d.area,
+        clearance,
+        interior_patch_name,
+        len(interior_tris_3d),
+        source_patch_name,
+        len(rim_tris_3d),
+    )
+
+    if debug_dir is not None:
+        _write_medial_axis_debug(
+            debug_dir, poly_outlet, medial, strip_2d,
+            origin, axis_u, axis_v,
+            params=dict(
+                boundary_sample_ds=boundary_sample_ds,
+                strip_half_width=strip_half_width,
+                min_dist_from_boundary=min_dist_from_boundary,
+                prune_branch_len=prune_branch_len,
+            ),
+            clearance=clearance,
+            medial_length=total_medial_len,
+        )
+
+    return {
+        source_patch_name: rim_tris_3d,
+        interior_patch_name: interior_tris_3d,
+    }
+
+
+def _write_medial_axis_debug(
+    debug_dir: Path,
+    poly_outlet,
+    medial,
+    strip_2d,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    params: dict[str, float],
+    clearance: float,
+    medial_length: float,
+) -> None:
+    """Write the medial-axis polyline (OBJ in 3D) and a PNG overview+zoom."""
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    # Medial axis as a 3D OBJ polyline
+    obj_path = debug_dir / "medial_axis.obj"
+    with open(obj_path, "w") as f:
+        v_offset = 1
+        for g in medial.geoms:
+            coords_2d = np.asarray(g.coords, dtype=float)
+            pts_3d = _unproject_from_plane(coords_2d, origin, axis_u, axis_v)
+            for v in pts_3d:
+                f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+            for i in range(len(pts_3d) - 1):
+                f.write(f"l {v_offset + i} {v_offset + i + 1}\n")
+            v_offset += len(pts_3d)
+
+    _render_medial_axis_pngs(
+        debug_dir,
+        poly_outlet, medial, strip_2d,
+        origin=origin, axis_u=axis_u, axis_v=axis_v,
+        strip_half_width=float(params["strip_half_width"]),
+    )
+
+
+def _render_medial_axis_pngs(
+    debug_dir: Path,
+    poly,
+    medial,
+    strip,
+    origin: np.ndarray,
+    axis_u: np.ndarray,
+    axis_v: np.ndarray,
+    strip_half_width: float,
+) -> None:
+    """Render three PNGs (outlet-only, medial-axis-only, combined) in world (y, z), z up, y left."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import PathPatch
+        from matplotlib.path import Path as MplPath
+    except ImportError:
+        logger.warning("matplotlib not available; skipping medial_axis PNG debug renders.")
+        return
+
+    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
+        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
+        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
+
+    def polygon_to_patch(p, **kw):
+        verts, codes = [], []
+        def add_ring(coords):
+            cs = list(to_world_yz(np.asarray(coords)))
+            verts.extend(cs)
+            codes.append(MplPath.MOVETO)
+            codes.extend([MplPath.LINETO] * (len(cs) - 2))
+            codes.append(MplPath.CLOSEPOLY)
+        polys = list(p.geoms) if p.geom_type == "MultiPolygon" else [p]
+        for q in polys:
+            if q.is_empty:
+                continue
+            add_ring(q.exterior.coords)
+            for h in q.interiors:
+                add_ring(h.coords)
+        if not verts:
+            return None
+        return PathPatch(MplPath(verts, codes), **kw)
+
+    def draw_outlet(ax) -> None:
+        rim_patch = polygon_to_patch(
+            poly, facecolor="#dddddd", edgecolor="none", zorder=0, label="outlet",
+        )
+        if rim_patch is not None:
+            ax.add_patch(rim_patch)
+        polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+        for q in polys:
+            ex = to_world_yz(np.asarray(q.exterior.coords))
+            ax.plot(ex[:, 0], ex[:, 1], "-", color="#1f77b4", lw=0.8)
+            for h in q.interiors:
+                hc = to_world_yz(np.asarray(h.coords))
+                ax.plot(hc[:, 0], hc[:, 1], "-", color="#2ca02c", lw=0.8)
+
+    def draw_medial(ax) -> None:
+        first = True
+        for g in medial.geoms:
+            c = to_world_yz(np.asarray(g.coords))
+            ax.plot(
+                c[:, 0], c[:, 1], "-", color="#d62728", lw=1.2,
+                label="medial axis" if first else None,
+            )
+            first = False
+
+    def draw_strip(ax) -> None:
+        strip_patch = polygon_to_patch(
+            strip, facecolor="#ffc8a8", edgecolor="#d2691e",
+            lw=0.6, zorder=1, label="outletInterior",
+        )
+        if strip_patch is not None:
+            ax.add_patch(strip_patch)
+
+    # Shared frame: bounds and decoration applied to every figure.
+    polys = list(poly.geoms) if poly.geom_type == "MultiPolygon" else [poly]
+    outlet_pts = np.vstack([to_world_yz(np.asarray(q.exterior.coords)) for q in polys])
+    xmin, ymin = outlet_pts.min(axis=0)
+    xmax, ymax = outlet_pts.max(axis=0)
+    pad = 0.02 * max(xmax - xmin, ymax - ymin, 1e-9)
+
+    def finalize(fig, ax, title: str, out: Path) -> None:
+        handles, labels = ax.get_legend_handles_labels()
+        seen = {}
+        for h, l in zip(handles, labels):
+            seen.setdefault(l, h)
+        if seen:
+            ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
+        ax.set_aspect("equal")
+        ax.set_xlim(xmin - pad, xmax + pad)
+        ax.set_ylim(ymin - pad, ymax + pad)
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel("y [mm]")
+        ax.set_ylabel("z [mm]")
+        fig.tight_layout()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    title = f"strip half width = {strip_half_width:g} mm"
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    finalize(fig, ax, "outlet", debug_dir / "medial_axis_outlet.png")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    draw_medial(ax)
+    finalize(fig, ax, "medial axis", debug_dir / "medial_axis_only.png")
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    draw_outlet(ax)
+    draw_strip(ax)
+    draw_medial(ax)
+    finalize(fig, ax, title, debug_dir / "medial_axis.png")
 
 
 def _remove_box_caps(
@@ -1087,12 +1450,9 @@ def _remove_box_caps(
     for axis in range(3):
         for val in [box_min[axis], box_max[axis]]:
             on_plane = np.all(np.abs(face_verts[:, :, axis] - val) < tol, axis=1)
-            n = on_plane.sum()
-            if n > 0:
-                logger.debug("_remove_box_caps axis=%d val=%.4f: %d cap faces (tol=%s)", axis, val, n, tol)
             is_cap |= on_plane
 
-    logger.debug("_remove_box_caps removed %d / %d faces", is_cap.sum(), len(mesh.faces))
+    logger.debug("_remove_box_caps removed %d / %d faces (tol=%s)", is_cap.sum(), len(mesh.faces), tol)
     if is_cap.any():
         mesh = mesh.copy()
         mesh.update_faces(~is_cap)
@@ -1110,8 +1470,6 @@ both loops forward -- advancing whichever cursor produces the shorter new
 bridge edge -- emitting one triangle per step. Handles loops with
 different vertex counts and makes no assumption about a shared axis.
 """
-
-
 
 
 def _get_boundary_edges(mesh: trimesh.Trimesh) -> np.ndarray:

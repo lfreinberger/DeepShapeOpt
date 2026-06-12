@@ -28,7 +28,11 @@ def prepare_foam_runtime(template_dir: Path, run_name: str) -> Path:
     return runtime_dir
 
 
-def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str, str]:
+def configure_foam_runtime(
+    case_dir: Path,
+    constraint_enabled: bool,
+    section_patches: list[tuple[str, float]] | None = None,
+) -> dict[str, str]:
     """Derive adjoint-time directories from optimisationDict and patch the runtime case.
 
     Reads primal/adjoint ``nIters`` from ``system/optimisationDict`` and computes the
@@ -39,6 +43,15 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
       - ``optimisationDict``: sets ``am1.as2.active`` to ``constraint_enabled``
       - ``controlDict``: forces ``purgeWrite = 0`` so no needed time dir is purged
       - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the derived times
+
+    When ``section_patches`` is provided (list of ``(patch_name, target_fraction)`` pairs),
+    additionally:
+      - ``optimisationDict``: replaces the ``as1`` objectiveNames block with a single
+        ``flowBalance`` objective of type ``flowRatePartition`` over the listed sections.
+      - ``snappyHexMeshDict``: removes ``outlet``/``outletInterior`` region entries from
+        ``geometry.shape.stl.regions`` and ``castellatedMeshControls.refinementSurfaces.
+        extrusion_die.regions``, replacing them with one entry per section (inheriting
+        the prior outlet refinement level).
 
     Should be called once after ``prepare_foam_runtime`` copies the template.
     Operating on the template directly would dirty the git-tracked files.
@@ -55,6 +68,9 @@ def configure_foam_runtime(case_dir: Path, constraint_enabled: bool) -> dict[str
     as2_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls", "nIters"])
 
     opt["adjointManagers", "am1", "adjointSolvers", "as2", "active"] = bool(constraint_enabled)
+
+    if section_patches is not None:
+        _inject_section_partition_into_runtime(case_dir, opt, section_patches)
 
     t_as1 = p_n + as1_n
     adjoint_times = {"as1": str(t_as1)}
@@ -88,6 +104,62 @@ def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
     allrun = case_dir / "Allrun"
     shutil.copy2(variant, allrun)
     allrun.chmod(0o755)
+
+
+def _inject_section_partition_into_runtime(
+    case_dir: Path,
+    opt: FoamFile,
+    section_patches: list[tuple[str, float]],
+) -> None:
+    """Rewrite optimisationDict objectives and snappyHexMeshDict regions for section_partition."""
+    if not section_patches:
+        raise ValueError("section_patches must contain at least one (name, fraction) entry.")
+    names = [name for name, _ in section_patches]
+    fractions = [float(f) for _, f in section_patches]
+
+    # optimisationDict: replace the as1 objectiveNames block with a single flowBalance objective.
+    # The objective key 'flowBalance' + adjoint solver name 'as1' produces the output file
+    # name 'flowBalanceas1' that load_metric_sensitivities then reads.
+    opt["adjointManagers", "am1", "adjointSolvers", "as1", "objectives", "objectiveNames"] = {
+        "flowBalance": {
+            "weight": 1.0,
+            "type": "flowRatePartition",
+            "inletPatches": ["inlet"],
+            "outletPatches": names,
+            "targetFractions": fractions,
+            "normalise": True,
+        }
+    }
+
+    # snappyHexMeshDict: rewrite both the geometry.regions block and the refinementSurfaces
+    # regions block. Sections inherit the refinement level from the prior outlet entry, since
+    # they are geometric subdivisions of that patch.
+    snap_path = case_dir / "system" / "snappyHexMeshDict"
+    snap = FoamFile(snap_path)
+
+    geom_regions_path = ("geometry", "shape.stl", "regions")
+    refine_regions_path = (
+        "castellatedMeshControls", "refinementSurfaces", "extrusion_die", "regions",
+    )
+
+    # Capture the outlet refinement level (if present) so sections inherit it.
+    outlet_level = None
+    try:
+        outlet_level = snap[(*refine_regions_path, "outlet", "level")]
+    except KeyError:
+        pass
+
+    for stale in ("outlet", "outletInterior"):
+        for parent_path in (geom_regions_path, refine_regions_path):
+            try:
+                del snap[(*parent_path, stale)]
+            except KeyError:
+                pass
+
+    for name in names:
+        snap[(*geom_regions_path, name)] = {"name": name}
+        if outlet_level is not None:
+            snap[(*refine_regions_path, name)] = {"level": outlet_level}
 
 
 def run_openfoam_case(case_dir: Path, verbose: bool = True, clean: bool = True):
@@ -289,33 +361,40 @@ def load_boundary_patch_faces(case_dir, patch_name="dragObject"):
 
     start_face = int(patch_info["startFace"])
     n_faces = int(patch_info["nFaces"])
+    end_face = start_face + n_faces
 
-    # --- parse only the needed face lines from the faces file ---
-    # The file has a header, then a count line, then '(', then face lines.
-    # Face i corresponds to the i-th face line after '('.
-    face_pattern = re.compile(r"\d+\(([^)]+)\)")
+    # Stream face records of the form `N(v0 v1 ... vN-1)` from the faces file.
+    # High-vertex polyhedral faces (e.g. at snappyHexMesh refinement transitions)
+    # can wrap across multiple lines, so we cannot parse one face per line —
+    # instead we buffer chunks and consume complete records as they appear.
+    face_pattern = re.compile(r"\s*(\d+)\s*\(([^)]*)\)")
 
     patch_faces_raw = []
     with open(faces_path, "r") as f:
-        # Skip header until we find the opening '('
-        line_idx = -1
         for line in f:
-            line = line.strip()
-            if line == "(":
-                line_idx = 0
+            if line.strip() == "(":
                 break
 
-        # Now read face lines, only keep those in [start_face, start_face + n_faces)
-        end_face = start_face + n_faces
-        for line in f:
-            if line_idx >= end_face:
-                break
-            if line_idx >= start_face:
-                m = face_pattern.match(line.strip())
-                if m:
-                    verts = [int(x) for x in m.group(1).split()]
+        buf = ""
+        face_idx = 0
+        chunk_size = 65536
+        done = False
+        while not done and face_idx < end_face:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                done = True
+            buf += chunk
+            pos = 0
+            while face_idx < end_face:
+                m = face_pattern.match(buf, pos)
+                if not m:
+                    break
+                if face_idx >= start_face:
+                    verts = [int(x) for x in m.group(2).split()]
                     patch_faces_raw.append(verts)
-            line_idx += 1
+                face_idx += 1
+                pos = m.end()
+            buf = buf[pos:]
 
     if len(patch_faces_raw) != n_faces:
         raise RuntimeError(
