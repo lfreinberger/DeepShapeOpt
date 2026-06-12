@@ -67,6 +67,7 @@ def snap_wall_points(
     wall_edges: np.ndarray | None = None,
     smooth_omega: float = 0.5,
     grad_eps: float = 1e-10,
+    lock_axes: np.ndarray | None = None,
 ) -> SnapHandle:
     """Project wall points onto the zero level set.
 
@@ -87,11 +88,29 @@ def snap_wall_points(
         order, so the parameter gradient keeps its exact Hadamard form.
     wall_edges : [E, 2] int64, optional
         Unique wall-surface edges (local indices into ``x0_phys``).
+    lock_axes : [P, 3] bool, optional
+        Per-point locked coordinate axes: those displacement components are
+        zeroed in every Newton/smoothing step and in the differentiable
+        final step.  Used for wall points on a domain boundary plane (the
+        inlet/outlet rim of internal-flow cases), which must slide within
+        that plane only; the parameter gradient becomes the in-plane
+        component of the Hadamard form, which is exact for in-plane motion.
     """
     device = sdf.device
     x0 = torch.as_tensor(np.asarray(x0_phys, dtype=np.float32), device=device)
     h = torch.as_tensor(np.asarray(h_local, dtype=np.float32), device=device)
     max_disp = max_disp_frac * h
+
+    lock_t = None
+    if lock_axes is not None and np.any(lock_axes):
+        lock_t = torch.as_tensor(
+            np.asarray(lock_axes, dtype=bool), device=device, dtype=torch.bool
+        )
+
+    def project_lock(disp: torch.Tensor) -> torch.Tensor:
+        if lock_t is None:
+            return disp
+        return torch.where(lock_t, torch.zeros_like(disp), disp)
 
     def cap_to_x0(x_new: torch.Tensor) -> torch.Tensor:
         disp = x_new - x0
@@ -104,7 +123,7 @@ def snap_wall_points(
         for _ in range(max(0, snap_iters - 1)):
             f, g = sdf.phi_and_grad(x)
             g_norm2 = (g * g).sum(dim=1).clamp_min(grad_eps)
-            x = cap_to_x0(x - (f / g_norm2)[:, None] * g)
+            x = cap_to_x0(x - project_lock((f / g_norm2)[:, None] * g))
 
         if smooth_iters > 0 and wall_edges is not None and len(wall_edges) > 0:
             edges = torch.as_tensor(
@@ -126,18 +145,18 @@ def snap_wall_points(
                 n_hat = g / g.norm(dim=1, keepdim=True).clamp_min(np.sqrt(grad_eps))
                 delta = avg - x
                 delta = delta - (delta * n_hat).sum(dim=1, keepdim=True) * n_hat
-                x = cap_to_x0(x + smooth_omega * delta)
+                x = cap_to_x0(x + smooth_omega * project_lock(delta))
 
                 # Re-project onto the surface.
                 f, g = sdf.phi_and_grad(x)
                 g_norm2 = (g * g).sum(dim=1).clamp_min(grad_eps)
-                x = cap_to_x0(x - (f / g_norm2)[:, None] * g)
+                x = cap_to_x0(x - project_lock((f / g_norm2)[:, None] * g))
 
     x_d = x.detach()
     f_d, g_d = sdf.phi_and_grad(x_d)
     g_norm = g_d.norm(dim=1).clamp_min(np.sqrt(grad_eps))
     # n_hat / |grad phi| == grad phi / |grad phi|^2
-    dir_vec = (g_d / (g_norm**2)[:, None]).detach()
+    dir_vec = project_lock(g_d / (g_norm**2)[:, None]).detach()
 
     # Differentiable phi at the detached evaluation points.
     f_param = sdf.phi_ext(x_d)
