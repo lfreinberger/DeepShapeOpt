@@ -111,6 +111,7 @@ class _HangingCorrector:
         self._mid_ids = mid_ids
         if self.n_hanging == 0:
             return
+        self._parents = parents
         self.device = torch.device(device)
         self.n_passes = n_passes
         self._mid_t = torch.as_tensor(mid_ids, dtype=torch.long, device=device)
@@ -135,15 +136,16 @@ class _HangingCorrector:
 
     def full_points(self, points0: np.ndarray, x_wall: torch.Tensor) -> np.ndarray:
         """Global float64 point array: lattice points bit-exact from
-        ``points0``, wall points and corrected midpoints from the snap."""
+        ``points0``, wall points from the snap, midpoints re-averaged in
+        float64 (checkMesh's cell-openness tolerance is below float32
+        round-off for large domains)."""
         pts = points0.copy()
+        pts[self.wall_ids] = x_wall.detach().double().cpu().numpy()
         if self.n_hanging == 0:
-            pts[self.wall_ids] = x_wall.detach().double().cpu().numpy()
             return pts
-        with torch.no_grad():
-            xg = self._global(x_wall.detach()).double().cpu().numpy()
-        pts[self.wall_ids] = xg[self.wall_ids]
-        pts[self._mid_ids] = xg[self._mid_ids]
+        mid, p0, p1 = self._mid_ids, self._parents[:, 0], self._parents[:, 1]
+        for _ in range(self.n_passes):
+            pts[mid] = 0.5 * (pts[p0] + pts[p1])
         return pts
 
 
