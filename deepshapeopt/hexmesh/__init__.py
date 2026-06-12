@@ -5,6 +5,6 @@ SDF (octree castellation + differentiable snap), with a fixed mesh outside
 the design-space box and direct index-based sensitivity transfer.
 """
 
-from .pipeline import HexMeshResult, SdfHexMeshPipeline
+from .pipeline import HexMeshResult, SdfHexMeshPipeline, resolve_sdf_hex_cfg
 
-__all__ = ["HexMeshResult", "SdfHexMeshPipeline"]
+__all__ = ["HexMeshResult", "SdfHexMeshPipeline", "resolve_sdf_hex_cfg"]
