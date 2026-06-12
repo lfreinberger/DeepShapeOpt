@@ -110,6 +110,7 @@ def optimize_shape(experiment_path: Path, specs):
         hex_pipeline = SdfHexMeshPipeline(
             lattice.lattice_struct, model_setup, opt_cfg, paths.optimization
         )
+        hex_pipeline.build()
         init_volume, initial_centroid = hex_pipeline.volume_centroid(no_grad=True)
     elif mesh_pipeline == "snappy":
         with torch.no_grad():
@@ -378,7 +379,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_EXPERIMENT_PATH / "config_latent_cube.json"),
+        default=str(DEFAULT_EXPERIMENT_PATH / "config_sdfhex_validation.json"),
         help="Path to an experiment JSON config.",
     )
     args = parser.parse_args()

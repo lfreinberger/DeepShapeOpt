@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .constraints import volume_centroid_from_sdf
+from .constraints import volume_centroid_from_wall
 from .foamwriter import checkmesh_log_ok, write_polymesh
 from .lattice import CellSet, Lattice
 from .octree import (
@@ -49,8 +49,6 @@ _DEFAULTS = {
     "smooth_iters": 2,
     "min_pyr_frac": 0.02,
     "quality_max_rounds": 5,
-    "volume_grid_res": 64,
-    "heaviside_eps_cells": 1.5,
     "enable_fast_path": True,
     "check_sign": True,
     "sign_probe_point": None,
@@ -366,20 +364,19 @@ class SdfHexMeshPipeline:
     # ------------------------------------------------------------------
 
     def volume_centroid(self, no_grad: bool = False):
-        """Differentiable solid volume and centroid from the SDF."""
+        """Volume and centroid of the meshed body, differentiable through the snap.
 
-        def _compute():
-            sdf = self._make_sdf()
-            return volume_centroid_from_sdf(
-                sdf,
-                grid_res=int(self.cfg["volume_grid_res"]),
-                eps_cells=float(self.cfg["heaviside_eps_cells"]),
-            )
-
+        Divergence theorem over the snapped wall triangulation of the last
+        :meth:`build` — measures exactly the body the CFD sees.
+        """
+        if self._last_result is None:
+            raise RuntimeError("build() must be called before volume_centroid()")
+        points = self._last_result.surface_points
+        tris = self._last_result.wall_tris_local
         if no_grad:
             with torch.no_grad():
-                return self._with_float32(_compute)
-        return self._with_float32(_compute)
+                return volume_centroid_from_wall(points.detach(), tris)
+        return volume_centroid_from_wall(points, tris)
 
     # ------------------------------------------------------------------
     # OpenFOAM coupling

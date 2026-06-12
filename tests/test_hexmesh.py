@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 
-from deepshapeopt.hexmesh.constraints import volume_centroid_from_sdf
+from deepshapeopt.hexmesh.constraints import volume_centroid_from_wall
 from deepshapeopt.hexmesh.foamwriter import checkmesh_log_ok, write_polymesh
 from deepshapeopt.hexmesh.lattice import (
     CellIndex,
@@ -345,17 +345,27 @@ def test_checkmesh_log_parse():
 # Constraints
 # ---------------------------------------------------------------------------
 
-def test_volume_centroid_sphere():
-    r = torch.tensor(0.8, requires_grad=True)
-    sdf, _ = make_sphere_sdf(r)
-    V, C = volume_centroid_from_sdf(sdf, grid_res=64, eps_cells=1.5)
-    V_exact = 4.0 / 3.0 * np.pi * 0.8**3
-    assert abs(V.item() - V_exact) / V_exact < 0.01
-    assert torch.allclose(C, torch.zeros(3), atol=0.01)
+def test_volume_centroid_wall_cube():
+    import trimesh
 
-    # dV/dr = 4 pi r^2
-    (dV,) = torch.autograd.grad(V, r)
-    assert abs(dV.item() - 4 * np.pi * 0.8**2) / (4 * np.pi * 0.8**2) < 0.02
+    box = trimesh.creation.box(extents=[1.0, 1.0, 1.0])
+    shift = torch.tensor([0.5, -0.25, 0.0])
+    tris = torch.as_tensor(box.faces, dtype=torch.long)
+
+    s = torch.tensor(1.2, requires_grad=True)
+    points = (torch.as_tensor(box.vertices, dtype=torch.float32) + shift) * s
+    V, C = volume_centroid_from_wall(points, tris)
+
+    assert abs(V.item() - 1.2**3) < 1e-5
+    assert torch.allclose(C, shift * 1.2, atol=1e-5)
+
+    # dV/ds = 3 s^2 for a unit cube scaled by s.
+    (dV,) = torch.autograd.grad(V, s)
+    assert abs(dV.item() - 3 * 1.2**2) < 1e-4
+
+    # Orientation-agnostic: flipped triangles give the same result.
+    V_flip, C_flip = volume_centroid_from_wall(points.detach(), tris.flip(1))
+    assert torch.allclose(V_flip, V.detach()) and torch.allclose(C_flip, C.detach(), atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
