@@ -38,6 +38,9 @@ class PhysicalSDF:
     dist_scale : float
         Factor converting physical distances to SDF value units (the
         normalization scale, ``2 / L``).  Used by the clamped extension.
+    sign : float
+        Multiplies the raw SDF values; ``-1`` flips the convention for
+        shapes whose interior is the fluid (internal flow channels).
     device : torch device for SDF evaluation.
     """
 
@@ -47,10 +50,12 @@ class PhysicalSDF:
         norm_fn: Callable,
         design_domain,
         dist_scale: float = 1.0,
+        sign: float = 1.0,
         device: str | torch.device = "cpu",
     ):
         self._fn = sdf_norm_fn
         self._norm_fn = norm_fn
+        self.sign = float(sign)
         self.device = torch.device(device)
         if isinstance(design_domain, torch.Tensor):
             self.design_domain = design_domain.detach().to(
@@ -70,7 +75,7 @@ class PhysicalSDF:
         """SDF at physical points [N, 3] -> [N].  Differentiable."""
         x_norm = self._norm_fn(x_phys)
         out = self._fn(x_norm)
-        return out.reshape(-1)
+        return self.sign * out.reshape(-1)
 
     def phi_ext(self, x_phys: torch.Tensor) -> torch.Tensor:
         """SDF extended outside the design domain.
@@ -116,18 +121,104 @@ class PhysicalSDF:
     # Sanity checks
     # ------------------------------------------------------------------
 
-    def check_sign_convention(self, probe_point) -> None:
-        """Assert that the SDF is negative (solid) at a known interior point."""
+    def check_sign_convention(self, probe_point, expect: str = "solid") -> None:
+        """Assert the SDF sign at a known probe point.
+
+        ``expect="solid"`` requires ``phi < 0`` (probe inside the solid);
+        ``expect="fluid"`` requires ``phi > 0`` (probe in the flow region).
+        """
+        if expect not in ("solid", "fluid"):
+            raise ValueError(f"expect must be 'solid' or 'fluid', got {expect!r}")
         x = torch.as_tensor(
             np.asarray(probe_point, dtype=np.float32).reshape(1, 3), device=self.device
         )
         with torch.no_grad():
             val = float(self.phi(x).item())
-        if not val < 0.0:
+        ok = val < 0.0 if expect == "solid" else val > 0.0
+        if not ok:
+            want = "< 0 (solid)" if expect == "solid" else "> 0 (fluid)"
             raise RuntimeError(
                 f"SDF sign convention check failed: phi({probe_point}) = {val:.4e} "
-                "expected < 0 (solid). The hex mesh pipeline assumes phi > 0 in "
+                f"expected {want}. The hex mesh pipeline assumes phi > 0 in "
                 "the fluid. Set sdf_hex.sign_probe_point to a point inside the "
-                "solid, or disable the check with sdf_hex.check_sign: false."
+                f"{expect}, check sdf_hex.fluid_side, or disable the check "
+                "with sdf_hex.check_sign: false."
             )
-        logger.debug("SDF sign convention OK: phi(%s) = %.4e < 0", probe_point, val)
+        logger.debug(
+            "SDF sign convention OK: phi(%s) = %.4e (%s)", probe_point, val, expect
+        )
+
+
+class CompositeSDF:
+    """DeepSDF inside the design domain, fixed geometry outside.
+
+    Pointwise routing for internal-flow cases: queries inside the design
+    domain go to the differentiable :class:`PhysicalSDF` (the autograd
+    graph to the lattice parameters is preserved); queries in the margin
+    ring between design domain and mesh box go to the static outer
+    geometry (e.g. :class:`~deepshapeopt.hexmesh.trimesh_sdf.TriMeshSDF`)
+    and are constants.  Parameter gradients therefore flow exclusively
+    from points snapped against the DeepSDF.
+
+    Same query interface as :class:`PhysicalSDF` (``phi_ext``,
+    ``phi_and_grad``, ``phi_ext_np``); routing is by the *current* point
+    position, so Newton iterates re-route if they cross the seam.
+    """
+
+    def __init__(self, inner: PhysicalSDF, outer, design_domain=None):
+        self.inner = inner
+        self.outer = outer
+        self.device = inner.device
+        dd = inner.design_domain if design_domain is None else design_domain
+        if isinstance(dd, torch.Tensor):
+            self.design_domain = dd.detach().to(device=self.device, dtype=torch.float32)
+        else:
+            self.design_domain = torch.as_tensor(
+                np.asarray(dd, dtype=np.float32), device=self.device
+            )
+        self._dd_np = self.design_domain.cpu().numpy().astype(np.float64)
+
+    def _inside(self, x_phys: torch.Tensor) -> torch.Tensor:
+        lo = self.design_domain[0][None, :]
+        hi = self.design_domain[1][None, :]
+        return torch.all((x_phys >= lo) & (x_phys <= hi), dim=1)
+
+    def phi_ext(self, x_phys: torch.Tensor) -> torch.Tensor:
+        mask = self._inside(x_phys.detach())
+        out = torch.zeros(len(x_phys), dtype=x_phys.dtype, device=x_phys.device)
+        if torch.any(mask):
+            out = out.index_put((mask.nonzero(as_tuple=True)[0],),
+                                self.inner.phi_ext(x_phys[mask]))
+        if torch.any(~mask):
+            with torch.no_grad():
+                vals = self.outer.phi(x_phys[~mask])
+            out = out.index_put(((~mask).nonzero(as_tuple=True)[0],), vals)
+        return out
+
+    def phi_and_grad(self, x_phys: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Value and spatial gradient, routed per point (both detached)."""
+        mask = self._inside(x_phys.detach())
+        f = torch.zeros(len(x_phys), dtype=x_phys.dtype, device=x_phys.device)
+        g = torch.zeros_like(x_phys)
+        if torch.any(mask):
+            f_i, g_i = self.inner.phi_and_grad(x_phys[mask])
+            f[mask] = f_i
+            g[mask] = g_i
+        if torch.any(~mask):
+            f_o, g_o = self.outer.phi_and_grad(x_phys[~mask])
+            f[~mask] = f_o
+            g[~mask] = g_o
+        return f, g
+
+    def phi_ext_np(self, points: np.ndarray, chunk: int = 65536) -> np.ndarray:
+        points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        mask = np.all(
+            (points >= self._dd_np[0][None, :]) & (points <= self._dd_np[1][None, :]),
+            axis=1,
+        )
+        out = np.empty(len(points), dtype=np.float64)
+        if np.any(mask):
+            out[mask] = self.inner.phi_ext_np(points[mask], chunk=chunk)
+        if np.any(~mask):
+            out[~mask] = self.outer.phi_ext_np(points[~mask])
+        return out
