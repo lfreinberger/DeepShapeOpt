@@ -659,6 +659,20 @@ def save_mesh_with_sensitivities(verts, faces, sens_on_orig, out_path: Path):
     mesh_orig.point_data["sens"] = sens_on_orig
     mesh_orig.save(out_path)
 
+
+def save_points_with_vectors(points, vectors, out_path: Path, scalars=None):
+    """Write a point-cloud VTP carrying a vector field (+ optional scalars) for ParaView.
+
+    Useful for glyphing per-face quantities: pass face centroids as ``points`` and the
+    associated vectors (e.g. surface normals) as ``vectors``; in ParaView apply a Glyph
+    filter oriented by the vector array. ``scalars`` is an optional ``{name: array}`` dict.
+    """
+    cloud = pv.PolyData(np.asarray(points, dtype=float))
+    cloud["vector"] = np.asarray(vectors, dtype=float)
+    for name, arr in (scalars or {}).items():
+        cloud[name] = np.asarray(arr, dtype=float)
+    cloud.save(out_path)
+
 def read_objective(case_path: Path, objective_path):
     path = case_path / objective_path
     data = np.loadtxt(path, comments="#")
