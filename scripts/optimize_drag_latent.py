@@ -100,6 +100,7 @@ def optimize_shape(experiment_path: Path, specs):
         model_setup.scaling,
         opt_cfg,
         debug=debug,
+        heavy_data=paths.heavy_data,
     )
 
     mesh_pipeline = opt_cfg.get("mesh_pipeline", "snappy")
@@ -379,7 +380,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default=str(DEFAULT_EXPERIMENT_PATH / "config_sdfhex_validation.json"),
+        default=str(DEFAULT_EXPERIMENT_PATH / "config_latent_cube.json"),
         help="Path to an experiment JSON config.",
     )
     args = parser.parse_args()

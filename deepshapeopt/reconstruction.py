@@ -107,6 +107,7 @@ def fit_lattice_to_sdf(
     mlflow_metric_prefix: str | None = None,
     mlflow_log_every_n_steps: int = 10,
     box_constrained: bool = True,
+    samples_series_dir: Path | None = None,
 ):
     """Core fit step: sample ground-truth SDF, fit the lattice, export VTPs.
 
@@ -142,6 +143,13 @@ def fit_lattice_to_sdf(
         How often to log reconstruction loss to MLflow.
     box_constrained : bool
         If True, clamp surface samples to bounds before fitting.
+    samples_series_dir : Path or None
+        If set and ``rec_cfg["export_rec_samples_series"]`` is truthy, export a
+        contiguously numbered ``rec_sdf_samples_{frame:04d}.vtp`` series here
+        (frame 0000 = initial field). By default one frame per epoch; set
+        ``rec_cfg["export_rec_samples_fine_until_epoch"]`` > 0 to also export
+        between batch steps for those first epochs (every
+        ``export_rec_samples_fine_every`` batches, default 1).
 
     Returns
     -------
@@ -150,6 +158,12 @@ def fit_lattice_to_sdf(
     """
     from DeepSDFStruct.deep_sdf.reconstruction import reconstruct_from_samples
     from DeepSDFStruct.sampling import save_points_to_vtp
+
+    def _export_rec_samples(samples_ps, path):
+        """Evaluate the fitted lattice at ``samples_ps`` and write a points VTP."""
+        rec_dist = lattice_struct(samples_ps)
+        rec_points = torch.hstack((samples_ps, rec_dist.detach()))
+        save_points_to_vtp(path, rec_points)
 
     device = rec_cfg.get("device", "cuda")
     stds = rec_cfg.get("samples_surface_stds", [0.025, 0.0001])
@@ -183,6 +197,44 @@ def fit_lattice_to_sdf(
         )
         save_points_to_vtp(output_dir / "gt_sdf_samples.vtp", gt_points_all)
 
+    # --- Per-epoch reconstructed-sample series (heavy debug, off by default) ---
+    export_series = (
+        bool(rec_cfg.get("export_rec_samples_series", False))
+        and samples_series_dir is not None
+    )
+    step_callback = None
+    if export_series:
+        samples_series_dir = Path(samples_series_dir)
+        samples_series_dir.mkdir(parents=True, exist_ok=True)
+        series_samples = sdf_samples.samples.detach()
+        # Fine (per-batch) export for the first ``fine_until_epoch`` epochs, then
+        # coarse (per-epoch) afterwards. Frames are numbered contiguously so the
+        # series loads as a single ParaView time sequence.
+        fine_until_epoch = int(rec_cfg.get("export_rec_samples_fine_until_epoch", 0))
+        fine_every = max(1, int(rec_cfg.get("export_rec_samples_fine_every", 1)))
+        frame = 0
+
+        def _write_frame():
+            nonlocal frame
+            with torch.no_grad():
+                _export_rec_samples(
+                    series_samples,
+                    samples_series_dir / f"rec_sdf_samples_{frame:04d}.vtp",
+                )
+            frame += 1
+
+        # Frame 0000: the initial field, before any fitting step.
+        _write_frame()
+
+        def step_callback(e, batch_idx, n_batches):
+            is_epoch_end = batch_idx == n_batches - 1
+            if e < fine_until_epoch:
+                do_export = (batch_idx % fine_every == 0) or is_epoch_end
+            else:
+                do_export = is_epoch_end
+            if do_export:
+                _write_frame()
+
     # --- Run fitting ---
     recon_result = reconstruct_from_samples(
         lattice_struct,
@@ -203,14 +255,14 @@ def fit_lattice_to_sdf(
         code_bound=code_bound,
         grad_clip=grad_clip,
         eikonal_lambda=eikonal_lambda,
+        step_callback=step_callback,
     )
 
     # --- Export reconstructed SDF samples ---
     if save_vtp:
-        samples_ps = sdf_samples.samples.detach()
-        rec_dist = lattice_struct(samples_ps)
-        rec_points = torch.hstack((samples_ps, rec_dist.detach()))
-        save_points_to_vtp(output_dir / "rec_sdf_samples.vtp", rec_points)
+        _export_rec_samples(
+            sdf_samples.samples.detach(), output_dir / "rec_sdf_samples.vtp"
+        )
 
     return recon_result
 
@@ -603,9 +655,11 @@ def reconstruct_shape(
         export_control_lattice_paramspace,
     )
     from deepshapeopt.config import make_experiment_paths, ensure_experiment_dirs
+    from deepshapeopt.runtime import is_debug_enabled
 
     experiment_path = Path(experiment_path).resolve()
     rec_cfg = specs["reconstruction"]
+    debug = is_debug_enabled(specs)
 
     # --- Config fields ---
     device = rec_cfg.get("device", "cuda")
@@ -695,7 +749,7 @@ def reconstruct_shape(
         bounds=np.stack([mins, maxs]),
     )
 
-    if verbose:
+    if debug:
         export_knot_grid_paramspace(
             param_spline_sp, filename=str(heavy_dir / "knot_grid.vtp")
         )
@@ -727,6 +781,7 @@ def reconstruct_shape(
         mlflow_metric_prefix=metric_prefix,
         mlflow_log_every_n_steps=mlflow_log_every_n_steps,
         box_constrained=False,
+        samples_series_dir=heavy_dir / "rec_sdf_samples_series",
     )
 
     lattice_struct.parametrization.set_param(recon_result["params"][0])

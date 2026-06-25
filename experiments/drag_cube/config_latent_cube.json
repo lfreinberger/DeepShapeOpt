@@ -17,10 +17,13 @@
     "grad_clip": 1.0,
     "eikonal_lambda": 0.0,
     "device": "cuda",
-    "reuse_parameter": false
+    "reuse_parameter": false,
+    "export_rec_samples_series": false,
+    "export_rec_samples_fine_until_epoch": 1,
+    "export_rec_samples_fine_every": 3
   },
   "optimization": {
-    "debug": false,
+    "debug": true,
     "num_iter": 60,
     "mesh_resolution": 48,
     "mesh_pipeline": "sdf_hex",

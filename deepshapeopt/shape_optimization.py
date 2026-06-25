@@ -149,6 +149,7 @@ def run_reconstruction(
     opt_cfg: dict,
     extend_bounds: bool = True,
     debug: bool = False,
+    heavy_data: Path | None = None,
 ):
     """Run or load reconstruction, export visualization files, return parameters."""
     use_parameter = rec_cfg["reuse_parameter"]
@@ -177,6 +178,11 @@ def run_reconstruction(
             output_dir=rec_results_path,
             save_vtp=debug,
             box_constrained=True,
+            samples_series_dir=(
+                heavy_data / "reconstruction" / "rec_sdf_samples_series"
+                if heavy_data is not None
+                else None
+            ),
         )
 
         recon_param = recon_result["params"]

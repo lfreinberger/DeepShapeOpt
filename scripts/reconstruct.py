@@ -8,12 +8,15 @@ from pathlib import Path
 from deepshapeopt.config import ExperimentSpecifications
 from deepshapeopt.reconstruction import reconstruct_shape
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_EXPERIMENT_PATH = PROJECT_ROOT / "experiments" / "reconstruction" / "primitives" / "config.json"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        required=True,
+        default=str(DEFAULT_EXPERIMENT_PATH),
         help="Path to an experiment JSON config.",
     )
     args = parser.parse_args()
