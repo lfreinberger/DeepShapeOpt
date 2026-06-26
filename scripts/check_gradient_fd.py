@@ -86,10 +86,10 @@ def main() -> None:
 
     # --- setup identical to the optimization script -----------------------
     model_setup = setup_model_and_domain(rec_cfg, paths.reconstruction)
-    lattice = build_lattice(rec_cfg, model_setup.model, model_setup.sdf, model_setup.box_norm)
+    lattice = build_lattice(rec_cfg, model_setup.model, model_setup.sdf, model_setup.frame)
     run_reconstruction(
-        lattice.lattice_struct, model_setup.mesh_norm, model_setup.box_norm,
-        rec_cfg, paths.reconstruction, model_setup.model, model_setup.scaling, opt_cfg,
+        lattice.lattice_struct, model_setup.frame, model_setup.mesh_orig,
+        rec_cfg, paths.reconstruction, model_setup.model, opt_cfg,
     )
     param = next(lattice.lattice_struct.parametrization.parameters())
     hex_pipeline = SdfHexMeshPipeline(

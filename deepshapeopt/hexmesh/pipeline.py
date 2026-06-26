@@ -412,11 +412,8 @@ class SdfHexMeshPipeline:
         return cells
 
     def _make_sdf(self) -> PhysicalSDF:
-        sdf = PhysicalSDF(
-            sdf_norm_fn=self.lattice_struct,
-            norm_fn=self.model_setup.norm_fn,
-            design_domain=self.model_setup.design_domain.detach(),
-            dist_scale=1.0 / float(self.model_setup.scale),
+        sdf = self.model_setup.frame.physical_sdf(
+            self.lattice_struct,
             sign=-1.0 if self.cfg["fluid_side"] == "inside" else 1.0,
             device=self.device,
         )
@@ -435,7 +432,7 @@ class SdfHexMeshPipeline:
     def _with_float32(self, fn):
         from deepshapeopt.reconstruction import with_float32_lattice
 
-        return with_float32_lattice(self.lattice_struct, self.model_setup.box_norm, lambda _b: fn())
+        return with_float32_lattice(self.lattice_struct, self.model_setup.frame.box_norm, lambda _b: fn())
 
     # ------------------------------------------------------------------
     # Per-iteration build

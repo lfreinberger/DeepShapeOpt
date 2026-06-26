@@ -88,16 +88,15 @@ def optimize_shape(experiment_path: Path, specs):
 
     use_center_constraint = opt_cfg.get("use_center_constraint", False)
     model_setup = setup_model_and_domain(rec_cfg, paths.reconstruction)
-    lattice = build_lattice(rec_cfg, model_setup.model, model_setup.sdf, model_setup.box_norm)
+    lattice = build_lattice(rec_cfg, model_setup.model, model_setup.sdf, model_setup.frame)
 
     run_reconstruction(
         lattice.lattice_struct,
-        model_setup.mesh_norm,
-        model_setup.box_norm,
+        model_setup.frame,
+        model_setup.mesh_orig,
         rec_cfg,
         paths.reconstruction,
         model_setup.model,
-        model_setup.scaling,
         opt_cfg,
         debug=debug,
         heavy_data=paths.heavy_data,
@@ -119,8 +118,7 @@ def optimize_shape(experiment_path: Path, specs):
                 lattice.lattice_struct,
                 opt_cfg,
                 rec_cfg,
-                model_setup.box_norm,
-                model_setup.scaling,
+                model_setup.frame,
                 mesh_type="volume",
                 extend_bounds=True
             )
@@ -207,8 +205,7 @@ def optimize_shape(experiment_path: Path, specs):
                 lattice.lattice_struct,
                 opt_cfg,
                 rec_cfg,
-                model_setup.box_norm,
-                model_setup.scaling,
+                model_setup.frame,
                 extend_bounds=True
             )
             verts, faces = mesh.vertices, mesh.faces
@@ -216,8 +213,7 @@ def optimize_shape(experiment_path: Path, specs):
                 lattice.lattice_struct,
                 opt_cfg,
                 rec_cfg,
-                model_setup.box_norm,
-                model_setup.scaling,
+                model_setup.frame,
                 mesh_type="volume",
                 extend_bounds=True
             )
