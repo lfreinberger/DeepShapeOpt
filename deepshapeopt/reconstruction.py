@@ -706,7 +706,16 @@ def reconstruct_shape(
         )
 
     param_spline = SplineParametrization(param_spline_sp, device=model.device)
-    init_spline_parameters(param_spline, mean=0.0, std=0.001)
+    # Initialize every lattice control point to the mean of the trained latent
+    # vectors. The decoder is only well-conditioned inside the learned latent
+    # manifold; starting from ~0 lands in a flat/degenerate region where the
+    # inference-time code optimization stalls (pronounced at small latent dims).
+    control_points = param_spline.torch_spline.control_points
+    trained_codes = torch.stack(list(model._trained_latent_vectors), dim=0)
+    mean_code = trained_codes.mean(dim=0).to(
+        device=control_points.device, dtype=control_points.dtype
+    )
+    param_spline.set_param(mean_code.expand(control_points.shape))
 
     lattice_struct = LatticeSDFStruct(
         tiling=tiling, microtile=sdf, parametrization=param_spline, bounds=bounds
