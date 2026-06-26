@@ -89,6 +89,23 @@ def configure_foam_runtime(
     return adjoint_times
 
 
+def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
+    """Activate the Allrun variant for the chosen mesh pipeline.
+
+    The template ships ``Allrun`` (snappy pipeline) and ``Allrun.<name>``
+    variants; for non-default pipelines the variant replaces ``Allrun`` in
+    the runtime copy (call after ``prepare_foam_runtime``).
+    """
+    if mesh_pipeline == "snappy":
+        return
+    variant = case_dir / f"Allrun.{mesh_pipeline}"
+    if not variant.exists():
+        raise FileNotFoundError(f"Missing Allrun variant for '{mesh_pipeline}': {variant}")
+    allrun = case_dir / "Allrun"
+    shutil.copy2(variant, allrun)
+    allrun.chmod(0o755)
+
+
 def _inject_section_partition_into_runtime(
     case_dir: Path,
     opt: FoamFile,
@@ -145,12 +162,20 @@ def _inject_section_partition_into_runtime(
             snap[(*refine_regions_path, name)] = {"level": outlet_level}
 
 
-def run_openfoam_case(case_dir: Path, verbose: bool = True):
+def run_openfoam_case(case_dir: Path, verbose: bool = True, clean: bool = True):
+    """Run the case's Allrun script.
+
+    With ``clean=False`` the case is not cleaned first -- used by the
+    ``sdf_hex`` pipeline, which cleans, then writes ``constant/polyMesh``
+    (which cleaning would delete), then runs.
+    """
     if not case_dir.exists():
         raise FileNotFoundError(f"Foam case path does not exist: {case_dir}")
 
     foam_case = FoamCase(case_dir)
-    if verbose:
+    if not clean:
+        pass
+    elif verbose:
         foam_case.clean()
     else:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -633,6 +658,20 @@ def save_mesh_with_sensitivities(verts, faces, sens_on_orig, out_path: Path):
     mesh_orig = pv.PolyData(verts_np, faces_pv)
     mesh_orig.point_data["sens"] = sens_on_orig
     mesh_orig.save(out_path)
+
+
+def save_points_with_vectors(points, vectors, out_path: Path, scalars=None):
+    """Write a point-cloud VTP carrying a vector field (+ optional scalars) for ParaView.
+
+    Useful for glyphing per-face quantities: pass face centroids as ``points`` and the
+    associated vectors (e.g. surface normals) as ``vectors``; in ParaView apply a Glyph
+    filter oriented by the vector array. ``scalars`` is an optional ``{name: array}`` dict.
+    """
+    cloud = pv.PolyData(np.asarray(points, dtype=float))
+    cloud["vector"] = np.asarray(vectors, dtype=float)
+    for name, arr in (scalars or {}).items():
+        cloud[name] = np.asarray(arr, dtype=float)
+    cloud.save(out_path)
 
 def read_objective(case_path: Path, objective_path):
     path = case_path / objective_path

@@ -17,16 +17,16 @@ import torch
 import trimesh
 
 from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-from DeepSDFStruct.mesh import TorchScaling, create_3D_mesh, export_surface_mesh
+from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh
 from DeepSDFStruct.parametrization import SplineParametrization
 from DeepSDFStruct.pretrained_models import get_model
 from DeepSDFStruct.SDF import SDFfromDeepSDF
 
+from deepshapeopt.domain_frame import DomainFrame
 from deepshapeopt.parameters import locked_indices_from_bboxes, make_locked_masks
 from deepshapeopt.reconstruction import (
     build_parameter_spline,
     export_reconstructed_artifacts,
-    fit_box_to_unit_cube,
     fit_lattice_to_sdf,
     init_spline_parameters,
     with_float32_lattice,
@@ -43,52 +43,36 @@ logger = logging.getLogger(__name__)
 class ModelSetup:
     model: Any
     sdf: Any
-    design_domain: torch.Tensor
-    scaling: TorchScaling
-    scale: torch.Tensor
-    center: torch.Tensor
-    norm_fn: Any
-    denorm_fn: Any
-    box_norm: torch.Tensor
+    frame: DomainFrame
     mesh_orig: trimesh.Trimesh
-    mesh_norm: trimesh.Trimesh
+
+    @property
+    def design_domain(self) -> torch.Tensor:
+        """Physical design-domain box (kept for callers that read it directly)."""
+        return self.frame.design_domain
 
 
 def setup_model_and_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
-    """Load DeepSDF model, normalize the design domain, prepare reference mesh."""
+    """Load DeepSDF model, build the domain frame, prepare reference mesh."""
     model = get_model(
         model=rec_cfg["model_path"],
         checkpoint=rec_cfg["model_checkpoint"],
         device=rec_cfg["device"],
     )
 
-    dtype = torch.float32
-    design_domain = torch.tensor(rec_cfg["design_domain"], device=rec_cfg["device"], dtype=dtype)
-    scale, center, norm_fn, denorm_fn, box_norm = fit_box_to_unit_cube(design_domain)
-
-    logger.debug("Scale: %s", scale.item())
-    logger.debug("Center: %s", center)
-    logger.debug("Normalized design box: %s", box_norm)
-
-    scaling = TorchScaling(
-        scale_factors=scale, translation=center, bounds=design_domain, device=rec_cfg["device"]
+    frame = DomainFrame.from_design_domain(
+        rec_cfg["design_domain"], device=rec_cfg["device"]
     )
+    logger.debug("Scale (phys->norm): %s", frame.scale.item())
+    logger.debug("Center: %s", frame.center)
+    logger.debug("Normalized design box: %s", frame.box_norm)
 
     mesh_orig = trimesh.load(rec_cfg["mesh_path"])
-    V = torch.from_numpy(mesh_orig.vertices).to(device=model.device, dtype=dtype)
-    V_norm = norm_fn(V)
-    mesh_norm = mesh_orig.copy()
-    mesh_norm.vertices = V_norm.detach().cpu().numpy()
-    mesh_norm.export(rec_results_path / "gt_mesh_normalized.stl")
+    frame.normalize_mesh(mesh_orig).export(rec_results_path / "gt_mesh_normalized.stl")
 
     sdf = SDFfromDeepSDF(model)
 
-    return ModelSetup(
-        model=model, sdf=sdf, design_domain=design_domain,
-        scaling=scaling, scale=scale, center=center,
-        norm_fn=norm_fn, denorm_fn=denorm_fn, box_norm=box_norm,
-        mesh_orig=mesh_orig, mesh_norm=mesh_norm,
-    )
+    return ModelSetup(model=model, sdf=sdf, frame=frame, mesh_orig=mesh_orig)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +86,10 @@ class LatticeSetup:
     param_spline: SplineParametrization
 
 
-def build_lattice(rec_cfg: dict, model, sdf, box_norm: torch.Tensor) -> LatticeSetup:
+def build_lattice(rec_cfg: dict, model, sdf, frame: DomainFrame) -> LatticeSetup:
     """Build the B-spline parametrization and LatticeSDFStruct."""
 
+    box_norm = frame.box_norm
     mins = box_norm[0].detach().cpu().numpy()
     maxs = box_norm[1].detach().cpu().numpy()
     degree = rec_cfg["spline_degree"]
@@ -140,17 +125,21 @@ def build_lattice(rec_cfg: dict, model, sdf, box_norm: torch.Tensor) -> LatticeS
 
 def run_reconstruction(
     lattice_struct: LatticeSDFStruct,
-    mesh_norm: trimesh.Trimesh,
-    box_norm: torch.Tensor,
+    frame: DomainFrame,
+    mesh_orig: trimesh.Trimesh,
     rec_cfg: dict,
     rec_results_path: Path,
     model,
-    scaling: TorchScaling,
     opt_cfg: dict,
     extend_bounds: bool = True,
     debug: bool = False,
+    heavy_data: Path | None = None,
 ):
     """Run or load reconstruction, export visualization files, return parameters."""
+    mesh_norm = frame.normalize_mesh(mesh_orig)
+    box_norm = frame.box_norm
+    scaling = frame.torch_scaling(rec_cfg["device"])
+
     use_parameter = rec_cfg["reuse_parameter"]
     recon_parameter_file = rec_results_path / "rec_parameters.pt"
 
@@ -177,6 +166,11 @@ def run_reconstruction(
             output_dir=rec_results_path,
             save_vtp=debug,
             box_constrained=True,
+            samples_series_dir=(
+                heavy_data / "reconstruction" / "rec_sdf_samples_series"
+                if heavy_data is not None
+                else None
+            ),
         )
 
         recon_param = recon_result["params"]
@@ -267,7 +261,7 @@ def setup_optimizer(
 # Phase 5: Optimization loop helpers
 # ---------------------------------------------------------------------------
 
-def generate_mesh(lattice_struct, opt_cfg, rec_cfg, box_norm, scaling, mesh_type="surface", extend_bounds=True):
+def generate_mesh(lattice_struct, opt_cfg, rec_cfg, frame: DomainFrame, mesh_type="surface", extend_bounds=True):
     """Generate a mesh from lattice parameters.
 
     Temporarily casts the lattice parametrization to float32 because the
@@ -279,6 +273,9 @@ def generate_mesh(lattice_struct, opt_cfg, rec_cfg, box_norm, scaling, mesh_type
     mesh_type : str
         ``"surface"`` for triangle mesh or ``"volume"`` for tet mesh.
     """
+    box_norm = frame.box_norm
+    scaling = frame.torch_scaling(rec_cfg["device"])
+
     def _create(bounds_f32):
         return create_3D_mesh(
             lattice_struct, opt_cfg["mesh_resolution"],

@@ -29,92 +29,67 @@ def to_numpy(x):
 
 
 _EXTRA_COLORS = ["tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:olive"]
+_CON_COLORS = ["tab:orange", "tab:cyan", "tab:olive", "tab:gray", "tab:pink"]
 
 
 def _plot_obj_con_axes(
     ax1,
     iterations,
     history_obj,
-    history_con,
-    limit_con,
+    constraints,
     obj_label="Objective",
-    con_label="Constraint",
     history_obj_total=None,
     obj_total_label="Objective (total)",
     extra_series=None,
 ):
-    """Plot objective on left axis and constraint/volume on right axis.
+    """Plot objective on the left axis and one or more constraints on a shared right axis.
 
-    If ``history_obj_total`` is given, a second curve (e.g. objective + penalties)
-    is overlaid on the same left axis so it shares the objective's scale.
-    ``extra_series`` is an optional list of ``(label, values)`` (e.g. individual
-    penalty contributions) plotted on the same left axis with distinct colors.
+    ``constraints`` is a list of ``(label, values, limit)`` tuples (``limit`` may be None);
+    each is drawn on the same twin axis with a distinct color and its own limit line.
+    ``history_obj_total`` (objective + penalties) and ``extra_series`` (list of
+    ``(label, values)``, e.g. individual penalty contributions) are overlaid on the left axis.
     """
-    l1, = ax1.plot(
-        iterations,
-        history_obj,
-        marker="o",
-        color="tab:blue",
-        label=obj_label,
-    )
-
+    l1, = ax1.plot(iterations, history_obj, marker="o", color="tab:blue", label=obj_label)
     ax1.set_ylabel(obj_label, color="tab:blue")
     ax1.tick_params(axis="y", labelcolor="tab:blue")
     ax1.grid(True, linestyle="--", alpha=0.4)
-
     lines = [l1]
 
     if history_obj_total is not None:
         lt, = ax1.plot(
-            iterations,
-            history_obj_total,
-            marker="^",
-            linestyle="--",
-            color="tab:green",
-            label=obj_total_label,
+            iterations, history_obj_total,
+            marker="^", linestyle="--", color="tab:green", label=obj_total_label,
         )
         lines.append(lt)
 
     for i, (label, values) in enumerate(extra_series or []):
         le, = ax1.plot(
-            iterations,
-            values,
-            marker=".",
-            linestyle=":",
-            color=_EXTRA_COLORS[i % len(_EXTRA_COLORS)],
-            label=label,
+            iterations, values,
+            marker=".", linestyle=":", color=_EXTRA_COLORS[i % len(_EXTRA_COLORS)], label=label,
         )
         lines.append(le)
 
-    if history_con is not None and not np.all(np.isnan(history_con)):
+    active = [
+        (label, np.asarray(values, dtype=float), limit)
+        for label, values, limit in (constraints or [])
+        if values is not None and not np.all(np.isnan(np.asarray(values, dtype=float)))
+    ]
+    if active:
         ax2 = ax1.twinx()
-
-        l2, = ax2.plot(
-            iterations,
-            history_con,
-            marker="s",
-            color="tab:orange",
-            label=con_label,
-        )
-
-        ax2.set_ylabel(con_label, color="tab:orange")
+        ax2.set_ylabel("Constraint(s)", color="tab:orange")
         ax2.tick_params(axis="y", labelcolor="tab:orange")
-        finite_con = history_con[np.isfinite(history_con)]
-        finite_limit = np.asarray([limit_con], dtype=float) if limit_con is not None else np.asarray([])
-        finite_values = np.concatenate([finite_con, finite_limit[np.isfinite(finite_limit)]])
-        if finite_values.size and np.nanmin(finite_values) >= 0:
+        finite_values = []
+        for i, (label, values, limit) in enumerate(active):
+            color = _CON_COLORS[i % len(_CON_COLORS)]
+            lc, = ax2.plot(iterations, values, marker="s", color=color, label=label)
+            lines.append(lc)
+            finite_values.append(values[np.isfinite(values)])
+            if limit is not None:
+                ax2.axhline(limit, linestyle=":", color=color, alpha=0.7, label=f"{label} limit")
+                finite_values.append(np.asarray([limit], dtype=float))
+        allv = np.concatenate(finite_values) if finite_values else np.asarray([])
+        if allv.size and np.nanmin(allv) >= 0:
             ax2.set_ylim(bottom=0)
-
-        if limit_con is not None:
-            ax2.axhline(
-                limit_con,
-                linestyle=":",
-                color="tab:orange",
-                alpha=0.7,
-                label=f"{con_label} limit",
-            )
-
-        lines.append(l2)
 
     labels = [line.get_label() for line in lines]
     ax1.legend(lines, labels, loc="best")
@@ -130,13 +105,20 @@ def plot_optimization_history(
     history_obj_total=None,
     obj_total_label="Objective (total)",
     extra_series=None,
+    constraints=None,
 ):
+    """Plot objective (+ optional total / penalty curves) and one or more constraints.
+
+    ``constraints`` is a list of ``(label, values, limit)`` tuples for multiple constraints.
+    For backward compatibility, the single ``history_con`` / ``limit_con`` / ``con_label``
+    arguments are accepted and wrapped into a one-element ``constraints`` list.
+    """
     plt = _get_pyplot()
 
     history_obj = np.asarray(to_numpy(history_obj), dtype=float)
 
-    if history_con is not None:
-        history_con = np.asarray(to_numpy(history_con), dtype=float)
+    if constraints is None:
+        constraints = [(con_label, history_con, limit_con)] if history_con is not None else []
 
     if history_obj_total is not None:
         history_obj_total = np.asarray(to_numpy(history_obj_total), dtype=float)
@@ -146,17 +128,22 @@ def plot_optimization_history(
         for label, values in (extra_series or [])
     ]
 
-    if limit_con is not None:
-        limit_con = float(to_numpy(limit_con))
+    # Normalize each constraint by its own initial value (limit included), so curves with
+    # different physical scales are comparable on the shared normalized axis.
+    con_abs, con_norm = [], []
+    for label, values, limit in constraints:
+        if values is None:
+            continue
+        v = np.asarray(to_numpy(values), dtype=float)
+        lim = None if limit is None else float(to_numpy(limit))
+        con_abs.append((label, v, lim))
+        finite = v[np.isfinite(v)]
+        c0 = finite[0] if finite.size and finite[0] != 0 else 1.0
+        con_norm.append((f"{label} / initial", v / c0, None if lim is None else lim / c0))
 
     iterations = np.arange(len(history_obj))
 
-    has_con = history_con is not None and not np.all(np.isnan(history_con))
-
     obj_abs = history_obj.copy()
-    con_abs = history_con.copy() if has_con else None
-    limit_abs = limit_con
-
     obj0 = history_obj[0] if history_obj[0] != 0 else 1.0
     obj_norm = history_obj / obj0
 
@@ -168,20 +155,11 @@ def plot_optimization_history(
     extra_abs = [(label, values) for label, values in extra_series]
     extra_norm = [(label, values / obj0) for label, values in extra_series]
 
-    con_norm = None
-    limit_norm = None
-    if has_con:
-        con0 = history_con[0] if history_con[0] != 0 else 1.0
-        con_norm = history_con / con0
-        if limit_con is not None:
-            limit_norm = limit_con / con0
-
     fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
 
     _plot_obj_con_axes(
-        ax_top, iterations, obj_abs, con_abs, limit_abs,
+        ax_top, iterations, obj_abs, con_abs,
         obj_label=obj_label,
-        con_label=con_label,
         history_obj_total=obj_total_abs,
         obj_total_label=obj_total_label,
         extra_series=extra_abs,
@@ -189,9 +167,8 @@ def plot_optimization_history(
     ax_top.set_title("Absolute values")
 
     _plot_obj_con_axes(
-        ax_bot, iterations, obj_norm, con_norm, limit_norm,
+        ax_bot, iterations, obj_norm, con_norm,
         obj_label="Objective (J/J\u2080)",
-        con_label=f"{con_label} / initial",
         history_obj_total=obj_total_norm,
         obj_total_label=f"{obj_total_label} / J\u2080",
         extra_series=extra_norm,

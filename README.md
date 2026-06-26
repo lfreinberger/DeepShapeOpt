@@ -84,6 +84,26 @@ experiments/drag_cube/config_latent_cube_with_cylinders.json
 experiments/drag_cube/config_latent_cube_with_holes.json
 ```
 
+#### Mesh pipelines
+
+The latent workflow supports two mesh pipelines, selected via
+`optimization.mesh_pipeline` in the config:
+
+- `"snappy"` (default): per iteration, FlexiCubes extracts an STL from the
+  SDF and snappyHexMesh builds the CFD mesh from it; adjoint sensitivities
+  are projected back onto the STL vertices.
+- `"sdf_hex"`: the body-fitted hex mesh is generated in Python directly from
+  the SDF (`deepshapeopt/hexmesh/`) — octree castellation inside a
+  design-space `mesh_box` plus a differentiable snap of the wall points onto
+  the SDF zero level set. No STL and no snappyHexMesh in the loop; the mesh
+  outside `mesh_box` is built once and identical across all iterations;
+  OpenFOAM point sensitivities are read back by index (no projection) and
+  flow through the snap step into the latent parameters. Shape topology
+  changes are supported (the castellation is rebuilt per iteration; when it
+  is unchanged, connectivity is reused automatically). Tuning knobs live in
+  the `optimization.sdf_hex` config block (`mesh_box`, `interface_level`,
+  `max_level`, `snap_iters`, `max_disp_frac`, ...).
+
 ### FFD Drag Optimization
 
 The FFD workflow optimizes a free-form deformation of the input mesh directly.

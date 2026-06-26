@@ -902,11 +902,13 @@ dependencies = [
     { name = "embreex" },
     { name = "foamlib" },
     { name = "gmsh" },
+    { name = "libigl" },
     { name = "manifold3d" },
     { name = "mlflow" },
     { name = "numpy-stl" },
     { name = "shapely" },
     { name = "torchmesh" },
+    { name = "trimesh" },
 ]
 
 [package.metadata]
@@ -915,11 +917,13 @@ requires-dist = [
     { name = "embreex", specifier = ">=4.4.0" },
     { name = "foamlib", specifier = ">=1.3.13" },
     { name = "gmsh", specifier = ">=4.15.0" },
+    { name = "libigl", specifier = ">=2.6.0" },
     { name = "manifold3d", specifier = ">=3.3.2" },
     { name = "mlflow", specifier = ">=3.6.0" },
     { name = "numpy-stl", specifier = ">=3.2.0" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "torchmesh", specifier = ">=0.1.0" },
+    { name = "trimesh", specifier = ">=4.0" },
 ]
 
 [[package]]

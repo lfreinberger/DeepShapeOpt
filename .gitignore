@@ -37,6 +37,8 @@ flowRate/
 .claude/
 confidential/*
 tests/*
+!tests/test_hexmesh.py
+!tests/test_hexmesh_internal.py
 **/analysis/*
 **/analysis/**
 experiments/reconstruction/analysis/*
@@ -51,6 +53,7 @@ experiments/reconstruction/analysis/*
 !**/foam_case/system/**
 !**/foam_case/Allclean
 !**/foam_case/Allrun
+!**/foam_case/Allrun.*
 
 # Within constant: ignore these subfolders
 **/foam_case/constant/extendedFeatureEdgeMesh/

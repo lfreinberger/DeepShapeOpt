@@ -50,6 +50,11 @@ def configure_logging(debug: bool, log_file: Path | None = None) -> None:
         root.addHandler(h)
     root.setLevel(level)
 
+    # Matplotlib's font_manager logs a findfont score line per installed
+    # font at DEBUG; keep third-party debug chatter out even in debug mode.
+    for noisy in ("matplotlib", "PIL"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     for name, lg in list(logging.Logger.manager.loggerDict.items()):
         if not isinstance(lg, logging.Logger) or not lg.handlers:
             continue

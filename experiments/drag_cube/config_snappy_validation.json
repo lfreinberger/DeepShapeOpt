@@ -1,44 +1,85 @@
 {
-  "results_name": "results_cube_sdf_hex",
+  "results_name": "results_snappy_validation",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
     "model_checkpoint": "latest",
-    "tiling": [2, 2, 2],
-    "spline_degree": [1, 1, 1],
-    "design_domain": [[-1.5, -0.8, -0.8], [1.5, 0.8, 0.8]],
+    "tiling": [
+      2,
+      2,
+      2
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -1.5,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.5,
+        0.8,
+        0.8
+      ]
+    ],
     "n_uniform_samples": 100000,
     "n_surface_samples": 500000,
-    "lr": 5e-3,
-    "num_iterations": 15,
+    "lr": 0.005,
+    "num_iterations": 25,
     "batch_size": 4096,
     "code_reg_lambda": 0.0,
     "code_bound": 1.0,
     "grad_clip": 1.0,
     "eikonal_lambda": 0.0,
     "device": "cuda",
-    "reuse_parameter": false,
-    "export_rec_samples_series": false,
-    "export_rec_samples_fine_until_epoch": 1,
-    "export_rec_samples_fine_every": 3
+    "reuse_parameter": true
   },
   "optimization": {
-    "debug": true,
-    "num_iter": 60,
+    "debug": false,
+    "num_iter": 1,
     "mesh_resolution": 48,
-    "mesh_pipeline": "sdf_hex",
+    "mesh_pipeline": "snappy",
     "sdf_hex": {
-      "domain": [[-5.0, -5.0, -5.0], [15.0, 5.0, 5.0]],
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
       "base_cell_size": 1.0,
-      "mesh_box": [[-2.0, -2.0, -2.0], [2.0, 2.0, 2.0]],
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
       "interface_level": 2,
       "max_level": 5,
       "snap_iters": 4,
       "max_disp_frac": 0.7,
       "enable_fast_path": true
     },
-    "max_step": 0.02,
-    "bounds": [-2.0, 2.0],
+    "max_step": 0.05,
+    "bounds": [
+      -2.0,
+      2.0
+    ],
     "use_center_constraint": true,
     "center_tol": 0.05,
     "convergence_obj_tol": 0.0002,
