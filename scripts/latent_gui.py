@@ -49,6 +49,20 @@ def main() -> None:
         help="Require a saved rec_parameters.pt instead of fitting on launch.",
     )
     parser.add_argument(
+        "--source",
+        choices=("reconstruction", "optimization"),
+        default="reconstruction",
+        help="reconstruction: fit/show the whole input mesh (default). optimization: "
+        "rebuild the optimizer's design-domain lattice and load that run's saved "
+        "latents (updated_parameters.pt, else rec_parameters.pt); errors if none exist.",
+    )
+    parser.add_argument(
+        "--params-file",
+        default=None,
+        help="Explicit .pt latent file to load (optimization source). Overrides the "
+        "default updated_parameters.pt / rec_parameters.pt lookup.",
+    )
+    parser.add_argument(
         "--smoke",
         action="store_true",
         help="Load, edit one code, re-mesh, print counts and exit (no server).",
@@ -64,6 +78,8 @@ def main() -> None:
         device=args.device,
         fit_if_missing=not args.no_fit,
         mesh_n=args.mesh_n,
+        source=args.source,
+        params_file=args.params_file,
     )
 
     if args.smoke:

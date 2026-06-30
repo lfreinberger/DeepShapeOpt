@@ -107,26 +107,26 @@ class LatentEditSession:
         device: str | None = None,
         fit_if_missing: bool = True,
         mesh_n: int | None = None,
+        source: str = "reconstruction",
+        params_file: str | Path | None = None,
     ):
+        if source not in ("reconstruction", "optimization"):
+            raise ValueError(
+                f"Unknown latent-GUI source {source!r}; use 'reconstruction' or 'optimization'."
+            )
         self.config_path = Path(config_path).resolve()
         self.experiment_path = self.config_path.parent
         self.specs = ExperimentSpecifications(str(self.config_path))
         self.rec_cfg = self.specs["reconstruction"]
+        self.source = source
+        self.params_file = Path(params_file).resolve() if params_file else None
         self._lock = threading.RLock()
 
-        logger.info("Building lattice for %s", self.config_path)
-        built = build_reconstruction_lattice(self.specs, device=device)
-        self.lattice_struct = built["lattice_struct"]
-        self.param_spline = built["param_spline"]
-        self.param_spline_sp = built["param_spline_sp"]
-        self.bounds = built["bounds"]
-        self.mesh_norm = built["mesh_norm"]
-        self.latent_dim = int(built["latent_dim"])
-        self.tiling = built["tiling"]
-        self.create_mesh_N = int(built["create_mesh_N"])
-        self.device = built["device"]
-        self.mesh_path = built["mesh_path"]
-        self.code_bound = float(self.rec_cfg.get("code_bound", 1.0))
+        logger.info("Building %s lattice for %s", source, self.config_path)
+        if source == "optimization":
+            self._build_optimization_lattice(device=device)
+        else:
+            self._build_reconstruction_lattice(device=device)
 
         # FlexiCubes meshes a lattice on an ``N_base * tiling`` grid, so the
         # reconstruction's ``create_mesh_N`` can blow up for heavily-tiled
@@ -144,10 +144,105 @@ class LatentEditSession:
         self._knot_positions = positions.astype(float)
         self._knot_ijk = ijk.astype(int)
 
-        self._load_or_fit_codes(fit_if_missing=fit_if_missing)
+        if source == "optimization":
+            self._load_optimization_codes()
+        else:
+            self._load_or_fit_codes(fit_if_missing=fit_if_missing)
         self._original_codes = self._control_points.detach().clone()
 
+    # -- lattice construction ---------------------------------------------
+    def _build_reconstruction_lattice(self, device: str | None = None) -> None:
+        """Whole-input-mesh reconstruction lattice (the default GUI source)."""
+        built = build_reconstruction_lattice(self.specs, device=device)
+        self.lattice_struct = built["lattice_struct"]
+        self.param_spline = built["param_spline"]
+        self.param_spline_sp = built["param_spline_sp"]
+        self.bounds = built["bounds"]
+        self.mesh_norm = built["mesh_norm"]
+        self.latent_dim = int(built["latent_dim"])
+        self.tiling = built["tiling"]
+        self.create_mesh_N = int(built["create_mesh_N"])
+        self.device = built["device"]
+        self.mesh_path = built["mesh_path"]
+        self.code_bound = float(self.rec_cfg.get("code_bound", 1.0))
+
+    def _build_optimization_lattice(self, device: str | None = None) -> None:
+        """Rebuild the *optimization* design-domain lattice exactly as the optimizer
+        does: a B-spline of latent codes over the physical ``design_domain`` normalized
+        by the DomainFrame, rather than over the whole input mesh. The meshed surface is
+        therefore only the inner design region the optimizer actually moves."""
+        from deepshapeopt.config import ensure_experiment_dirs, make_experiment_paths
+        from deepshapeopt.shape_optimization import build_lattice, setup_model_and_domain
+
+        if device is not None:
+            self.rec_cfg = {**self.rec_cfg, "device": device}
+        opt_cfg = self.specs.get("optimization", {})
+        self._paths = make_experiment_paths(
+            self.experiment_path,
+            results_name=self.specs.get("results_name", "results"),
+            heavy_data_output_path=opt_cfg.get("heavy_data_output_path"),
+        )
+        ensure_experiment_dirs(self._paths)
+
+        ms = setup_model_and_domain(self.rec_cfg, self._paths.reconstruction)
+        ls = build_lattice(self.rec_cfg, ms.model, ms.sdf, ms.frame)
+        self.frame = ms.frame
+        self.lattice_struct = ls.lattice_struct
+        self.param_spline = ls.param_spline
+        self.param_spline_sp = ls.param_spline_sp
+        self.bounds = ms.frame.box_norm
+        self.mesh_norm = None
+        self.latent_dim = int(ms.model._trained_latent_vectors[0].shape[0])
+        self.tiling = self.rec_cfg["tiling"]
+        self.create_mesh_N = int(
+            self.rec_cfg.get("create_mesh_N", opt_cfg.get("mesh_resolution", 32))
+        )
+        self.device = self.rec_cfg["device"]
+        self.mesh_path = Path(self.rec_cfg["mesh_path"]).resolve()
+        # Slider range: use the optimizer's design-variable bounds when present.
+        opt_bounds = opt_cfg.get("bounds")
+        self.code_bound = (
+            float(max(abs(float(b)) for b in opt_bounds))
+            if opt_bounds
+            else float(self.rec_cfg.get("code_bound", 1.0))
+        )
+
     # -- loading ----------------------------------------------------------
+    def _load_optimization_codes(self) -> None:
+        """Load an optimization run's saved latent control points and adopt them as
+        the editable shape. Never fits: in optimization mode the GUI inspects an
+        *existing* optimized design, so a missing parameter file is an error."""
+        expected = tuple(self._control_points.shape)
+        if self.params_file is not None:
+            candidates = [self.params_file]
+        else:
+            candidates = [
+                self._paths.optimization / "updated_parameters.pt",
+                self._paths.reconstruction / "rec_parameters.pt",
+            ]
+        for f in candidates:
+            if f.exists():
+                data = torch.load(f, map_location=self.device)
+                codes = data[0] if isinstance(data, (list, tuple)) else data
+                if tuple(codes.shape) != expected:
+                    raise ValueError(
+                        f"Saved latents at {f} have shape {tuple(codes.shape)} but this "
+                        f"configuration expects {expected}. The config's tiling/model must "
+                        f"match the run that produced the parameters."
+                    )
+                self.param_spline.set_param(
+                    codes.to(device=self._control_points.device, dtype=self._control_points.dtype)
+                )
+                logger.info("Loaded optimization latents from %s", f)
+                return
+        searched = "\n  ".join(str(c) for c in candidates)
+        raise FileNotFoundError(
+            "No optimization latent parameters found to load (optimization-mode GUI does "
+            "not fit on the fly). Run the optimization for this experiment first, or pass "
+            "--params-file explicitly. Looked for:\n  " + searched
+        )
+
+    # -- reconstruction loading ------------------------------------------
     def _load_or_fit_codes(self, fit_if_missing: bool) -> None:
         param_file = _resolve_param_file(
             self.experiment_path, self.specs, self.mesh_path, self.tiling
