@@ -9,7 +9,7 @@ from deepshapeopt.config import ExperimentSpecifications
 from deepshapeopt.reconstruction import reconstruct_shape
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EXPERIMENT_PATH = PROJECT_ROOT / "experiments" / "reconstruction" / "primitives" / "config.json"
+DEFAULT_EXPERIMENT_PATH = PROJECT_ROOT / "experiments" / "reconstruction" / "feed_channel" / "config.json"
 
 
 def main() -> None:

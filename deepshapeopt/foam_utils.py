@@ -19,9 +19,24 @@ from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
 logger = logging.getLogger(__name__)
 
 
-def prepare_foam_runtime(template_dir: Path, run_name: str) -> Path:
-    """Copy foam_case template to an isolated runtime directory for concurrent execution."""
-    runtime_dir = template_dir.parent / f"foam_run_{run_name}"
+def prepare_foam_runtime(
+    template_dir: Path, run_name: str, runtime_root: Path | None = None
+) -> Path:
+    """Copy foam_case template to an isolated runtime directory for concurrent execution.
+
+    By default the runtime case is created next to the template
+    (``template_dir.parent / foam_run_<run_name>``). Pass ``runtime_root`` to place
+    it elsewhere -- e.g. node-local scratch (``/work``) instead of the backed-up
+    file server -- which keeps the per-iteration decomposePar/solver/reconstructPar
+    I/O off NFS. The root is created if missing; only the transient case moves, all
+    callers reference the returned ``case_dir`` directly.
+    """
+    if runtime_root is not None:
+        runtime_root = Path(runtime_root)
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        runtime_dir = runtime_root / f"foam_run_{run_name}"
+    else:
+        runtime_dir = template_dir.parent / f"foam_run_{run_name}"
     if runtime_dir.exists():
         shutil.rmtree(runtime_dir)
     shutil.copytree(template_dir, runtime_dir)

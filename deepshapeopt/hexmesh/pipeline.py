@@ -209,8 +209,15 @@ class SdfHexMeshPipeline:
         self.flow = str(self.cfg["flow"])
         if self.flow not in ("external", "internal"):
             raise ValueError(f"sdf_hex.flow must be 'external' or 'internal', got {self.flow!r}")
+        dd = self.model_setup.design_domain.detach().cpu().numpy().astype(np.float64)
         self.regions = parse_refine_regions(
-            self.cfg["refinement_regions"], self.lattice, self.max_level
+            self.cfg["refinement_regions"],
+            self.lattice,
+            self.max_level,
+            named_boxes={
+                "sensitivity": dd,
+                "mesh_box": np.asarray(self.cfg["mesh_box"], dtype=np.float64),
+            },
         )
         self.geom = None
         self.patch_plan: PatchPlan | None = None
