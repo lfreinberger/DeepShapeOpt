@@ -618,6 +618,119 @@ def _log_reconstruction_to_mlflow(
 # Standalone reconstruction pipeline
 # ---------------------------------------------------------------------------
 
+def build_reconstruction_lattice(specs: ExperimentSpecifications, device=None):
+    """Build the DeepSDF lattice for a reconstruction experiment.
+
+    Loads the pretrained model and input mesh, normalizes the mesh to the unit
+    cube, builds the parametrized B-spline whose control points are the local
+    latent codes, and initializes every control point to the mean trained
+    latent vector (the same well-conditioned starting point used by the
+    standalone reconstruction). This is the shared construction step used by
+    both :func:`reconstruct_shape` and the interactive latent-edit GUI, so the
+    two always agree on tiling, bounds, and ordering.
+
+    Parameters
+    ----------
+    specs : ExperimentSpecifications
+        Experiment configuration with a nested ``reconstruction`` section.
+    device : str or torch.device, optional
+        Override for the compute device. Defaults to ``reconstruction.device``.
+
+    Returns
+    -------
+    dict
+        Keys: ``lattice_struct``, ``param_spline`` (SplineParametrization),
+        ``param_spline_sp`` (splinepy.BSpline), ``scaling`` (TorchScaling),
+        ``bounds``, ``model``, ``sdf``, ``mesh_orig``, ``mesh_norm``,
+        ``scale``, ``shift``, ``latent_dim``, ``tiling``, ``spline_degree``,
+        ``create_mesh_N``, ``mesh_path``, ``device``.
+    """
+    import trimesh
+    from DeepSDFStruct.pretrained_models import get_model
+    from DeepSDFStruct.SDF import SDFfromDeepSDF, normalize_mesh_to_unit_cube
+    from DeepSDFStruct.lattice_structure import LatticeSDFStruct
+    from DeepSDFStruct.parametrization import SplineParametrization
+    from DeepSDFStruct.torch_spline import TorchScaling
+
+    rec_cfg = specs["reconstruction"]
+    device = device if device is not None else rec_cfg.get("device", "cuda")
+    tiling = rec_cfg["tiling"]
+    spline_degree = rec_cfg.get("spline_degree", [1, 1, 1])
+    create_mesh_N = int(rec_cfg["create_mesh_N"])
+    mesh_path = Path(rec_cfg["mesh_path"]).resolve()
+    model_path = str(rec_cfg["model_path"])
+    checkpoint = str(rec_cfg.get("model_checkpoint", "latest"))
+
+    if "cuda" in str(device) and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA requested in config, but torch.cuda.is_available() is False."
+        )
+
+    # --- Load and normalize mesh ---
+    mesh_orig = trimesh.load_mesh(str(mesh_path))
+    mesh_norm, scale, shift = normalize_mesh_to_unit_cube(mesh_orig.copy())
+
+    bounds = torch.tensor(mesh_norm.bounds, device=device, dtype=torch.float32)
+    scaling = TorchScaling(
+        scale_factors=scale,
+        translation=shift,
+        bounds=bounds,
+        device=device,
+    )
+
+    # --- Load model ---
+    model = get_model(model_path, checkpoint=checkpoint, device=device)
+    sdf = SDFfromDeepSDF(model)
+
+    # --- Build spline of latent codes ---
+    mins = bounds[0].detach().cpu().numpy()
+    maxs = bounds[1].detach().cpu().numpy()
+    latent_dim = model._trained_latent_vectors[0].shape[0]
+
+    param_spline_sp = build_parameter_spline(
+        spline_degrees=spline_degree,
+        tiling=tiling,
+        latent_dim=latent_dim,
+        bounds=np.stack([mins, maxs]),
+    )
+
+    param_spline = SplineParametrization(param_spline_sp, device=model.device)
+    # Initialize every lattice control point to the mean of the trained latent
+    # vectors. The decoder is only well-conditioned inside the learned latent
+    # manifold; starting from ~0 lands in a flat/degenerate region where the
+    # inference-time code optimization stalls (pronounced at small latent dims).
+    control_points = param_spline.torch_spline.control_points
+    trained_codes = torch.stack(list(model._trained_latent_vectors), dim=0)
+    mean_code = trained_codes.mean(dim=0).to(
+        device=control_points.device, dtype=control_points.dtype
+    )
+    param_spline.set_param(mean_code.expand(control_points.shape))
+
+    lattice_struct = LatticeSDFStruct(
+        tiling=tiling, microtile=sdf, parametrization=param_spline, bounds=bounds
+    )
+
+    return {
+        "lattice_struct": lattice_struct,
+        "param_spline": param_spline,
+        "param_spline_sp": param_spline_sp,
+        "scaling": scaling,
+        "bounds": bounds,
+        "model": model,
+        "sdf": sdf,
+        "mesh_orig": mesh_orig,
+        "mesh_norm": mesh_norm,
+        "scale": scale,
+        "shift": shift,
+        "latent_dim": latent_dim,
+        "tiling": tiling,
+        "spline_degree": spline_degree,
+        "create_mesh_N": create_mesh_N,
+        "mesh_path": mesh_path,
+        "device": device,
+    }
+
+
 def reconstruct_shape(
     experiment_path: Path,
     specs: ExperimentSpecifications,
@@ -644,12 +757,6 @@ def reconstruct_shape(
         Identifier for this run. Auto-generated from mesh name and tiling
         if not provided.
     """
-    import trimesh
-    from DeepSDFStruct.pretrained_models import get_model
-    from DeepSDFStruct.SDF import SDFfromDeepSDF, normalize_mesh_to_unit_cube
-    from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-    from DeepSDFStruct.parametrization import SplineParametrization
-    from DeepSDFStruct.torch_spline import TorchScaling
     from DeepSDFStruct.export_knot_grid import (
         export_knot_grid_paramspace,
         export_control_lattice_paramspace,
@@ -712,42 +819,24 @@ def reconstruct_shape(
     }
     _write_json(local_dir / "specs_summary.json", run_info)
 
-    # --- CUDA check ---
+    # --- CUDA check (covers the separate mesh_device too) ---
     if "cuda" in str(device) or "cuda" in str(mesh_device):
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "CUDA requested in config, but torch.cuda.is_available() is False."
             )
 
-    # --- Load and normalize mesh ---
-    mesh_orig = trimesh.load_mesh(str(mesh_path))
-    mesh, scale, shift = normalize_mesh_to_unit_cube(mesh_orig.copy())
+    # --- Build model + lattice (shared with the latent-edit GUI) ---
+    built = build_reconstruction_lattice(specs, device=device)
+    mesh_orig = built["mesh_orig"]
+    mesh = built["mesh_norm"]
+    bounds = built["bounds"]
+    scaling = built["scaling"]
+    param_spline_sp = built["param_spline_sp"]
+    lattice_struct = built["lattice_struct"]
+
     if verbose:
         mesh.export(str(heavy_dir / "input_mesh_normalized.stl"))
-
-    bounds = torch.tensor(mesh.bounds, device=device, dtype=torch.float32)
-    scaling = TorchScaling(
-        scale_factors=scale,
-        translation=shift,
-        bounds=bounds,
-        device=device,
-    )
-
-    # --- Load model ---
-    model = get_model(model_path, checkpoint=checkpoint)
-    sdf = SDFfromDeepSDF(model)
-
-    # --- Build spline ---
-    mins = bounds[0].detach().cpu().numpy()
-    maxs = bounds[1].detach().cpu().numpy()
-    latent_dim = model._trained_latent_vectors[0].shape[0]
-
-    param_spline_sp = build_parameter_spline(
-        spline_degrees=spline_degree,
-        tiling=tiling,
-        latent_dim=latent_dim,
-        bounds=np.stack([mins, maxs]),
-    )
 
     if debug:
         export_knot_grid_paramspace(
@@ -758,22 +847,6 @@ def reconstruct_shape(
             filename=str(heavy_dir / "control_lattice_paramspace.vtp"),
             order="F",
         )
-
-    param_spline = SplineParametrization(param_spline_sp, device=model.device)
-    # Initialize every lattice control point to the mean of the trained latent
-    # vectors. The decoder is only well-conditioned inside the learned latent
-    # manifold; starting from ~0 lands in a flat/degenerate region where the
-    # inference-time code optimization stalls (pronounced at small latent dims).
-    control_points = param_spline.torch_spline.control_points
-    trained_codes = torch.stack(list(model._trained_latent_vectors), dim=0)
-    mean_code = trained_codes.mean(dim=0).to(
-        device=control_points.device, dtype=control_points.dtype
-    )
-    param_spline.set_param(mean_code.expand(control_points.shape))
-
-    lattice_struct = LatticeSDFStruct(
-        tiling=tiling, microtile=sdf, parametrization=param_spline, bounds=bounds
-    )
 
     # --- Reconstruct ---
     metric_prefix = mlflow_metric_prefix or f"reconstruction_{case_name}"
@@ -794,6 +867,11 @@ def reconstruct_shape(
     )
 
     lattice_struct.parametrization.set_param(recon_result["params"][0])
+
+    # Persist the optimized control-point latent codes so the reconstruction
+    # can be reloaded later (e.g. by the interactive latent-edit GUI). Same
+    # format as shape_optimization.run_reconstruction's rec_parameters.pt.
+    torch.save(recon_result["params"], heavy_dir / "rec_parameters.pt")
 
     # --- Mesh + SDF-grid exports ---
     physical_mesh_name = f"{mesh_path.stem}_reconstructed.stl"

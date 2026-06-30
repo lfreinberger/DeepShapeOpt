@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Latent-code editor — DeepShapeOpt</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #1a1d21; color: #e6e6e6; }
+  #app { display: flex; height: 100%; }
+  #view { flex: 1; position: relative; }
+  #panel {
+    width: 320px; background: #23262b; border-left: 1px solid #34383d;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #panel header { padding: 14px 16px; border-bottom: 1px solid #34383d; }
+  #panel header h1 { font-size: 15px; margin: 0 0 4px; }
+  #panel header p { font-size: 12px; margin: 0; color: #9aa0a6; }
+  #knotInfo { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #34383d; min-height: 44px; }
+  #knotInfo .muted { color: #9aa0a6; }
+  #sliders { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  .row { margin: 10px 0; }
+  .row label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .row label .val { color: #7cc7ff; font-variant-numeric: tabular-nums; }
+  .row input[type=range] { width: 100%; }
+  #panel footer { padding: 12px 16px; border-top: 1px solid #34383d; display: flex; gap: 8px; align-items: center; }
+  button {
+    background: #2f7de0; color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 12px; font-size: 13px; cursor: pointer;
+  }
+  button.secondary { background: #3a3f45; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #badge {
+    position: absolute; top: 12px; left: 12px; background: rgba(47,125,224,0.92);
+    color: #fff; padding: 5px 10px; border-radius: 6px; font-size: 12px;
+    opacity: 0; transition: opacity 0.15s; pointer-events: none;
+  }
+  #badge.on { opacity: 1; }
+  #hint {
+    position: absolute; bottom: 12px; left: 12px; font-size: 12px; color: #9aa0a6;
+    background: rgba(0,0,0,0.35); padding: 5px 9px; border-radius: 6px;
+  }
+  #error {
+    position: absolute; top: 12px; right: 12px; background: #c0392b; color: #fff;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 60%; display: none;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="badge">updating…</div>
+    <div id="error"></div>
+    <div id="hint">drag = orbit · scroll = zoom · click a sphere to pick a knot</div>
+  </div>
+  <div id="panel">
+    <header>
+      <h1>Local latent code editor</h1>
+      <p id="meta">loading…</p>
+    </header>
+    <div id="knotInfo"><span class="muted">No knot selected. Click a control-net sphere.</span></div>
+    <div id="sliders"></div>
+    <footer>
+      <button id="reset" class="secondary">Reset shape</button>
+      <span id="status" style="font-size:12px;color:#9aa0a6;"></span>
+    </footer>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const view = document.getElementById('view');
+const badge = document.getElementById('badge');
+const errorBox = document.getElementById('error');
+const slidersEl = document.getElementById('sliders');
+const knotInfo = document.getElementById('knotInfo');
+const metaEl = document.getElementById('meta');
+const statusEl = document.getElementById('status');
+
+// ---- three.js scene ----
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d21);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.001, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+view.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(1, 1.5, 1); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-1, -0.5, -1); scene.add(fill);
+
+let surfaceMesh = null;
+let knotMesh = null;          // InstancedMesh of spheres
+const COLOR_FREE = new THREE.Color(0x6f7681);
+const COLOR_SEL = new THREE.Color(0xffb030);
+
+let state = null;             // server state
+let selected = -1;
+let sceneCenter = new THREE.Vector3();
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ---- mesh building ----
+function buildSurface(meshData) {
+  if (surfaceMesh) { surfaceMesh.geometry.dispose(); scene.remove(surfaceMesh); surfaceMesh = null; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(meshData.vertices, 3));
+  g.setIndex(meshData.faces);
+  g.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x8fb4d6, metalness: 0.1, roughness: 0.7, side: THREE.DoubleSide,
+    flatShading: false,
+  });
+  surfaceMesh = new THREE.Mesh(g, mat);
+  scene.add(surfaceMesh);
+}
+
+function buildKnots(knots, bounds) {
+  if (knotMesh) { knotMesh.geometry.dispose(); knotMesh.material.dispose(); scene.remove(knotMesh); }
+  const diag = Math.hypot(
+    bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1], bounds[1][2] - bounds[0][2]
+  ) || 1;
+  const r = diag * 0.012;
+  const geo = new THREE.SphereGeometry(r, 16, 12);
+  const mat = new THREE.MeshStandardMaterial({ metalness: 0.2, roughness: 0.5 });
+  knotMesh = new THREE.InstancedMesh(geo, mat, knots.length);
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < knots.length; i++) {
+    const p = knots[i].pos;
+    m.makeTranslation(p[0], p[1], p[2]);
+    knotMesh.setMatrixAt(i, m);
+    knotMesh.setColorAt(i, COLOR_FREE);
+  }
+  knotMesh.instanceMatrix.needsUpdate = true;
+  if (knotMesh.instanceColor) knotMesh.instanceColor.needsUpdate = true;
+  scene.add(knotMesh);
+}
+
+function frameScene(bounds) {
+  const min = new THREE.Vector3(...bounds[0]);
+  const max = new THREE.Vector3(...bounds[1]);
+  sceneCenter = min.clone().add(max).multiplyScalar(0.5);
+  const diag = max.clone().sub(min).length() || 1;
+  controls.target.copy(sceneCenter);
+  camera.position.copy(sceneCenter).add(new THREE.Vector3(diag, diag * 0.6, diag));
+  camera.near = diag / 1000; camera.far = diag * 1000;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+// ---- selection / sliders ----
+function highlight(idx) {
+  if (!knotMesh) return;
+  if (selected >= 0) knotMesh.setColorAt(selected, COLOR_FREE);
+  selected = idx;
+  if (idx >= 0) knotMesh.setColorAt(idx, COLOR_SEL);
+  if (knotMesh.instanceColor) knotMesh.instanceColor.needsUpdate = true;
+}
+
+function buildSliders(idx) {
+  const k = state.knots[idx];
+  const code = state.codes[idx];
+  const ijk = k.ijk && k.ijk.length ? ` (i,j,k = ${k.ijk.join(', ')})` : '';
+  knotInfo.innerHTML = `<b>Knot #${idx}</b>${ijk}<br><span class="muted">${state.latent_dim} latent dimensions</span>`;
+  slidersEl.innerHTML = '';
+  const b = state.code_bound;
+  // Allow a little head-room beyond the training bound so edits are visible.
+  const lo = -b * 1.5, hi = b * 1.5, step = (hi - lo) / 1000;
+  for (let d = 0; d < state.latent_dim; d++) {
+    const row = document.createElement('div'); row.className = 'row';
+    const lab = document.createElement('label');
+    const name = document.createElement('span'); name.textContent = `dim ${d}`;
+    const val = document.createElement('span'); val.className = 'val'; val.textContent = code[d].toFixed(3);
+    lab.appendChild(name); lab.appendChild(val);
+    const input = document.createElement('input');
+    input.type = 'range'; input.min = lo; input.max = hi; input.step = step; input.value = code[d];
+    input.addEventListener('input', () => {
+      const v = parseFloat(input.value);
+      val.textContent = v.toFixed(3);
+      state.codes[idx][d] = v;
+      queueUpdate(idx, d, v);
+    });
+    row.appendChild(lab); row.appendChild(input);
+    slidersEl.appendChild(row);
+  }
+}
+
+// ---- networking (debounced + coalesced) ----
+let inFlight = false;
+let pending = null;       // latest {idx, dim, value}
+let debounceTimer = null;
+
+function setBadge(on) { badge.classList.toggle('on', on); }
+function showError(msg) {
+  errorBox.textContent = msg; errorBox.style.display = 'block';
+  setTimeout(() => { errorBox.style.display = 'none'; }, 4000);
+}
+
+function queueUpdate(idx, dim, value) {
+  pending = { idx, dim, value };
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(flush, 80);
+}
+
+async function flush() {
+  if (inFlight || !pending) return;
+  const job = pending; pending = null;
+  inFlight = true; setBadge(true);
+  try {
+    const res = await fetch('/api/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ knot_idx: job.idx, dim: job.dim, value: job.value }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    buildSurface(data.mesh);
+    statusEl.textContent = `${data.mesh.n_vertices} verts · ${data.mesh.n_faces} faces`;
+  } catch (e) {
+    showError('update failed: ' + e.message);
+  } finally {
+    inFlight = false; setBadge(false);
+    if (pending) flush();          // a newer edit arrived while we were busy
+  }
+}
+
+// ---- raycasting picks ----
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let downXY = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { downXY = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!downXY) return;
+  const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
+  downXY = null;
+  if (moved > 5 || !knotMesh) return;   // it was an orbit drag, not a click
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObject(knotMesh);
+  if (hits.length && hits[0].instanceId != null) {
+    highlight(hits[0].instanceId);
+    buildSliders(hits[0].instanceId);
+  }
+});
+
+document.getElementById('reset').addEventListener('click', async () => {
+  setBadge(true);
+  try {
+    const res = await fetch('/api/reset', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    buildSurface(data.mesh);
+    state.codes = data.codes;
+    if (selected >= 0) buildSliders(selected);
+    statusEl.textContent = `${data.mesh.n_vertices} verts · ${data.mesh.n_faces} faces`;
+  } catch (e) {
+    showError('reset failed: ' + e.message);
+  } finally { setBadge(false); }
+});
+
+// ---- boot ----
+(async function init() {
+  resize();
+  try {
+    const res = await fetch('/api/state');
+    state = await res.json();
+    if (state.error) throw new Error(state.error);
+  } catch (e) {
+    metaEl.textContent = 'failed to load';
+    showError('could not load /api/state: ' + e.message);
+    return;
+  }
+  metaEl.textContent =
+    `${state.n_knots} knots · ${state.latent_dim}-dim codes · tiling [${state.tiling.join(', ')}]`;
+  buildSurface(state.mesh);
+  buildKnots(state.knots, state.bounds);
+  frameScene(state.bounds);
+  statusEl.textContent = `${state.mesh.n_vertices} verts · ${state.mesh.n_faces} faces`;
+})();
+</script>
+</body>
+</html>
