@@ -17,7 +17,7 @@
     "grad_clip": 1.0,
     "eikonal_lambda": 0.0,
     "device": "cuda",
-    "reuse_parameter": false,
+    "reuse_parameter": true,
     "export_rec_samples_series": false,
     "export_rec_samples_fine_until_epoch": 1,
     "export_rec_samples_fine_every": 3
@@ -39,11 +39,19 @@
     },
     "max_step": 0.02,
     "bounds": [-2.0, 2.0],
+    "pca": {
+      "enabled": true,
+      "n_components": 16,
+      "basis_source": "trained_latent",
+      "bounds": [-3.0, 3.0],
+      "max_step": 0.1
+    },
     "use_center_constraint": true,
     "center_tol": 0.05,
     "convergence_obj_tol": 0.0002,
     "convergence_window": 3,
     "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "foam_runtime_root": "/work/lfrei/DeepShapeOpt",
     "sensitivity": {
       "loading_method": "conservative",
       "field_name": "pointSensVecadjS1ESI",

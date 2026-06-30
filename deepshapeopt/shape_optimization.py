@@ -217,6 +217,11 @@ class OptSetup:
     mask_locked_flat: torch.Tensor
     locked_values: torch.Tensor
     optimizer: Any
+    # Set when PCA latent reduction is enabled. ``param`` then remains the full
+    # latent control-point tensor (autograd leaf), while ``coeffs`` is the
+    # reduced k-dim coefficient tensor that the MMA optimizer actually moves.
+    pca_basis: Any = None
+    coeffs: torch.Tensor | None = None
 
 
 def setup_optimizer(
@@ -240,6 +245,53 @@ def setup_optimizer(
         logger.info("Locked control points: %d", locked_idx.numel())
 
     mask_locked_cp, mask_locked_flat, locked_values = make_locked_masks(param, locked_idx)
+
+    pca_cfg = opt_cfg.get("pca", {})
+    if pca_cfg.get("enabled", False):
+        from deepshapeopt.latent_pca import build_pca_basis
+
+        k = int(pca_cfg["n_components"])
+        basis = build_pca_basis(
+            rec_cfg["model_path"],
+            rec_cfg.get("model_checkpoint", "latest"),
+            k,
+            device=param.device,
+            cache_path=pca_cfg.get("cache_path"),
+        ).to(device=param.device, dtype=param.dtype)
+
+        n_ctrl = param.shape[0]
+        # Project the fitted control points onto the PCA subspace and adopt that
+        # as the starting shape, so the initial volume/centroid (measured by the
+        # caller right after this) match what iteration 0 actually optimizes.
+        with torch.no_grad():
+            coeffs = basis.to_coeff(param).contiguous()
+            param.copy_(basis.to_latent(coeffs))
+
+        # Locking is per control point; expand the per-CP mask to the k coeffs.
+        mask_locked_flat = mask_locked_cp[:, None].expand(n_ctrl, k).reshape(-1)
+
+        bounds = np.full((coeffs.numel(), 2), pca_cfg.get("bounds", [-3.0, 3.0]))
+        optimizer = MMA(
+            coeffs.reshape(-1, 1), bounds,
+            max_step=pca_cfg.get("max_step", opt_cfg["max_step"]),
+            n_constraints=n_constraints,
+        )
+
+        logger.info(
+            "PCA latent reduction enabled: %d control points x %d components "
+            "= %d design variables (was %d)",
+            n_ctrl, k, coeffs.numel(), param.numel(),
+        )
+
+        return OptSetup(
+            param=param,
+            mask_locked_cp=mask_locked_cp,
+            mask_locked_flat=mask_locked_flat,
+            locked_values=locked_values,
+            optimizer=optimizer,
+            pca_basis=basis,
+            coeffs=coeffs,
+        )
 
     bounds = np.full((param.reshape(-1, 1).shape[0], 2), opt_cfg["bounds"])
     optimizer = MMA(

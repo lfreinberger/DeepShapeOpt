@@ -102,6 +102,19 @@ def optimize_shape(experiment_path: Path, specs):
         heavy_data=paths.heavy_data,
     )
 
+    # Set up the optimizer before measuring the initial volume/centroid: when PCA
+    # latent reduction is enabled it projects the starting shape onto the reduced
+    # subspace, and the constraint baselines below must reflect that shape.
+    n_constraints = 2 if use_center_constraint else 1
+    opt_setup = setup_optimizer(
+        lattice.lattice_struct,
+        lattice.param_spline_sp,
+        opt_cfg,
+        rec_cfg,
+        lock_bboxes=None,
+        n_constraints=n_constraints,
+    )
+
     mesh_pipeline = opt_cfg.get("mesh_pipeline", "snappy")
     hex_pipeline = None
     if mesh_pipeline == "sdf_hex":
@@ -132,16 +145,6 @@ def optimize_shape(experiment_path: Path, specs):
     LOGGER.info("Initial volume: %.6f", init_volume.item())
     LOGGER.info("Initial centroid: %s", initial_centroid)
 
-    n_constraints = 2 if use_center_constraint else 1
-    opt_setup = setup_optimizer(
-        lattice.lattice_struct,
-        lattice.param_spline_sp,
-        opt_cfg,
-        rec_cfg,
-        lock_bboxes=None,
-        n_constraints=n_constraints,
-    )
-
     if debug:
         export_knot_grid_paramspace(lattice.param_spline_sp, paths.reconstruction / "knot_grid_paramspace.vtp")
         export_design_volume_paramspace(lattice.param_spline_sp, paths.reconstruction / "design_volume_paramspace.vts")
@@ -152,7 +155,17 @@ def optimize_shape(experiment_path: Path, specs):
             locked_idx=locked_idx if locked_idx.numel() > 0 else None,
         )
 
-    case_dir = foam_utils.prepare_foam_runtime(experiment_path / "foam_case", run_name=results_name)
+    # Root the transient OpenFOAM case on node-local scratch when foam_runtime_root
+    # is set (e.g. "/workdisk/<user>/..." -- fast local disk, not the backed-up NFS
+    # file server), keeping per-iteration OpenFOAM I/O off NFS. Kept outputs (results
+    # dir, heavy_data) are unaffected. Absent -> case lives next to the template.
+    foam_runtime_root = opt_cfg.get("foam_runtime_root")
+    if foam_runtime_root:
+        LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
+    case_dir = foam_utils.prepare_foam_runtime(
+        experiment_path / "foam_case", run_name=results_name,
+        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+    )
     foam_utils.select_allrun(case_dir, mesh_pipeline)
     snapshot_dir = paths.optimization / "snapshots"
     if debug:
@@ -279,6 +292,8 @@ def optimize_shape(experiment_path: Path, specs):
             constraints.append(center_constraint.reshape(()))
 
         G = torch.stack(constraints)
+        if opt_setup.pca_basis is not None:
+            grad_list = [opt_setup.pca_basis.project_grad(g) for g in grad_list]
         masked = mask_gradients(grad_list, opt_setup.mask_locked_flat)
         dJ_mma = masked[0]
         dG_mma = torch.stack(masked[1:], dim=0)
@@ -309,6 +324,14 @@ def optimize_shape(experiment_path: Path, specs):
         )
 
         opt_setup.optimizer.step(J, dJ_mma, G, dG_mma)
+        if opt_setup.pca_basis is not None:
+            # MMA updated the reduced coefficients in place; rebuild the full
+            # latent control points so the next iteration's mesh uses them.
+            with torch.no_grad():
+                z_new = opt_setup.pca_basis.to_latent(opt_setup.coeffs)
+                if opt_setup.mask_locked_cp.any():
+                    z_new[opt_setup.mask_locked_cp] = opt_setup.locked_values
+                opt_setup.param.copy_(z_new)
         history_mma_ch.append(float(opt_setup.optimizer.ch))
         if len(history_objective) >= 2 and history_objective[0] != 0:
             history_obj_change.append(abs(history_objective[-1] - history_objective[-2]) / abs(history_objective[0]))
