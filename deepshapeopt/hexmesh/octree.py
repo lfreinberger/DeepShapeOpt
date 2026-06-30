@@ -292,10 +292,9 @@ def build_static_castellation(
             sub = CellSet(cells.levels[cand_idx], cells.anchors[cand_idx])
             sdf_refine[cand_idx] = _near_surface(sub, lattice, phi_np, beta)
 
-        region_refine = np.zeros(len(cells), dtype=bool)
-        if regions:
-            req = np.minimum(region_min_level(cells, lattice, regions), cap)
-            region_refine = candidates & (cells.levels < req)
+        region_refine = _region_refine_mask(
+            cells, lattice, regions, cap, candidates, phi_np, beta
+        )
 
         refine = forced | sdf_refine | region_refine
         if not np.any(refine):
@@ -424,20 +423,48 @@ def _level_cap(
 
 @dataclasses.dataclass
 class RefineRegion:
-    """Axis-aligned box (physical coords) whose cells are refined to ``level``."""
+    """Axis-aligned box (physical coords) whose cells are refined to ``level``.
+
+    When ``surface_only`` is set the box only *scopes* the refinement: cells
+    are refined to ``level`` where the box overlaps **and** the cell lies in
+    the near-surface band of the SDF (so the box bounds a curved patch, e.g.
+    the sensitivity surface, instead of filling its whole volume with cells).
+    The band thickness is the cell-relative default (``refine_band_beta``)
+    unless ``distance`` is given, which fixes it to an absolute physical
+    width (same units as ``box``); only meaningful with ``surface_only``.
+    """
 
     box: np.ndarray  # (2, 3) float64 physical
     level: int
+    surface_only: bool = False
+    distance: float | None = None  # absolute band half-width (surface_only)
 
 
-def parse_refine_regions(cfg_list, lattice: Lattice, max_level: int) -> list[RefineRegion]:
+def parse_refine_regions(
+    cfg_list,
+    lattice: Lattice,
+    max_level: int,
+    named_boxes: dict[str, np.ndarray] | None = None,
+) -> list[RefineRegion]:
     """Parse the ``refinement_regions`` config list.
 
-    Two entry forms:
+    Three entry forms:
       - ``{"box": [[lo], [hi]], "level": L}`` -- explicit physical box;
       - ``{"face": "x_min", "distance": d, "level": L}`` -- a slab of
-        thickness ``d`` against that domain face.
+        thickness ``d`` against that domain face;
+      - ``{"region": "sensitivity", "level": L}`` -- a named box supplied by
+        the caller (``named_boxes``). Named regions default to surface-band
+        refinement (``surface_only``), so the box bounds a curved patch
+        rather than its whole volume.
+
+    Any entry may set ``"surface_only": true|false`` to override the default
+    (``False`` for ``box``/``face``, ``True`` for ``region``). For a
+    ``surface_only`` ``box``/``region`` entry, ``"distance"`` fixes the
+    surface-band half-width in absolute physical units (default: the
+    cell-relative ``refine_band_beta`` band). On a ``face`` entry ``distance``
+    keeps its slab-thickness meaning and does not affect the band.
     """
+    named_boxes = named_boxes or {}
     regions: list[RefineRegion] = []
     domain_lo = lattice.origin
     domain_hi = lattice.origin + lattice.root_dims * lattice.h0
@@ -447,8 +474,23 @@ def parse_refine_regions(cfg_list, lattice: Lattice, max_level: int) -> list[Ref
             raise ValueError(
                 f"refinement region level {level} exceeds max_level {max_level}"
             )
+        band_distance = None
         if "box" in entry:
             box = np.asarray(entry["box"], dtype=np.float64)
+            surface_only = bool(entry.get("surface_only", False))
+            if "distance" in entry:
+                band_distance = float(entry["distance"])
+        elif "region" in entry:
+            name = entry["region"]
+            if name not in named_boxes:
+                raise ValueError(
+                    f"refinement region {name!r} is unknown; available named "
+                    f"regions: {sorted(named_boxes)}"
+                )
+            box = np.asarray(named_boxes[name], dtype=np.float64).copy()
+            surface_only = bool(entry.get("surface_only", True))
+            if "distance" in entry:
+                band_distance = float(entry["distance"])
         elif "face" in entry:
             axis = {"x": 0, "y": 1, "z": 2}[entry["face"][0]]
             side = entry["face"][2:]
@@ -460,9 +502,24 @@ def parse_refine_regions(cfg_list, lattice: Lattice, max_level: int) -> list[Ref
                 box[0, axis] = domain_hi[axis] - d
             else:
                 raise ValueError(f"Unknown face {entry['face']!r}")
+            surface_only = bool(entry.get("surface_only", False))
         else:
-            raise ValueError(f"refinement region needs 'box' or 'face': {entry}")
-        regions.append(RefineRegion(box=box, level=level))
+            raise ValueError(
+                f"refinement region needs 'box', 'face', or 'region': {entry}"
+            )
+        if band_distance is not None and not surface_only:
+            raise ValueError(
+                f"refinement region 'distance' as a band width needs "
+                f"'surface_only': {entry}"
+            )
+        regions.append(
+            RefineRegion(
+                box=box,
+                level=level,
+                surface_only=surface_only,
+                distance=band_distance,
+            )
+        )
     return regions
 
 
@@ -483,6 +540,37 @@ def region_min_level(
         )
         req[overlap] = np.maximum(req[overlap], region.level)
     return req
+
+
+def _region_refine_mask(cells, lattice, regions, cap, candidates, phi_np, beta):
+    """Per-cell refinement flag from user :class:`RefineRegion` list.
+
+    Volumetric regions refine every overlapping candidate; ``surface_only``
+    regions additionally require the cell to sit in the near-surface band of
+    ``phi_np`` (so a box can bound a curved patch without filling its volume).
+    Required levels are clamped to ``cap`` so regions never violate grading.
+    """
+    mask = np.zeros(len(cells), dtype=bool)
+    if not regions:
+        return mask
+    vol = [r for r in regions if not r.surface_only]
+    surf = [r for r in regions if r.surface_only]
+    if vol:
+        req = np.minimum(region_min_level(cells, lattice, vol), cap)
+        mask |= candidates & (cells.levels < req)
+    # Surface regions are evaluated one at a time so each can carry its own
+    # absolute band width (``distance``); the near-surface test is per-region.
+    for region in surf:
+        req = np.minimum(region_min_level(cells, lattice, [region]), cap)
+        surf_cand = candidates & (cells.levels < req)
+        idx = np.nonzero(surf_cand)[0]
+        if len(idx) > 0:
+            sub = CellSet(cells.levels[idx], cells.anchors[idx])
+            near = _near_surface(
+                sub, lattice, phi_np, beta, distance=region.distance
+            )
+            mask[idx[near]] = True
+    return mask
 
 
 def build_inner_castellation(
@@ -543,10 +631,9 @@ def build_inner_castellation(
             sub = CellSet(cells.levels[cand_idx], cells.anchors[cand_idx])
             sdf_refine[cand_idx] = _near_surface(sub, lattice, phi_ext_np, beta)
 
-        region_refine = np.zeros(len(cells), dtype=bool)
-        if regions:
-            req = np.minimum(region_min_level(cells, lattice, regions), cap)
-            region_refine = candidates & (cells.levels < req)
+        region_refine = _region_refine_mask(
+            cells, lattice, regions, cap, candidates, phi_ext_np, beta
+        )
 
         refine = forced | sdf_refine | region_refine
         if not np.any(refine):
@@ -620,16 +707,27 @@ def build_inner_castellation(
 
 
 def _near_surface(
-    cells: CellSet, lattice: Lattice, phi_ext_np, beta: float
+    cells: CellSet, lattice: Lattice, phi_ext_np, beta: float,
+    distance: float | None = None,
 ) -> np.ndarray:
-    """Cells whose center/corner SDF samples indicate the surface band."""
+    """Cells whose center/corner SDF samples indicate the surface band.
+
+    The band half-width is ``beta`` cell half-diagonals (so it shrinks with
+    the cell), unless ``distance`` is given, which fixes it to that absolute
+    physical width regardless of level. Cells the surface passes through
+    (a sign change among the corners) are always included.
+    """
     centers = cells.centers_phys(lattice)
     corners = cells.corners_phys(lattice)
     pts = np.concatenate([centers[:, None, :], corners], axis=1)  # [N, 9, 3]
     phi = phi_ext_np(pts.reshape(-1, 3)).reshape(len(cells), 9)
 
-    half_diag = 0.5 * np.sqrt(3.0) * lattice.cell_size(cells.levels)
-    in_band = np.abs(phi).min(axis=1) < beta * half_diag
+    if distance is None:
+        half_diag = 0.5 * np.sqrt(3.0) * lattice.cell_size(cells.levels)
+        threshold = beta * half_diag
+    else:
+        threshold = distance
+    in_band = np.abs(phi).min(axis=1) < threshold
     sign_change = np.any(phi[:, 1:] > 0, axis=1) & np.any(phi[:, 1:] < 0, axis=1)
     return in_band | sign_change
 
