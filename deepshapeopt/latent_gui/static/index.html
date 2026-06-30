@@ -160,7 +160,7 @@ function buildKnots(knots, bounds) {
   const diag = Math.hypot(
     bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1], bounds[1][2] - bounds[0][2]
   ) || 1;
-  const r = diag * 0.018;
+  const r = diag * 0.010;
   const geo = new THREE.SphereGeometry(r, 16, 12);
   // depthTest off + high renderOrder => knots stay visible even when they sit
   // inside the (opaque) solid, so you can always see and target them.
