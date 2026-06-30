@@ -40,7 +40,7 @@
     "max_step": 0.02,
     "bounds": [-2.0, 2.0],
     "pca": {
-      "enabled": false,
+      "enabled": true,
       "n_components": 8,
       "basis_source": "trained_latent",
       "bounds": [-3.0, 3.0],
