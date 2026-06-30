@@ -198,7 +198,15 @@ def optimize_shape(experiment_path: Path, specs):
     LOGGER.info("Initial volume: %.6f", init_volume.item())
     LOGGER.info("Initial centroid: %s", initial_centroid)
 
-    case_dir = foam_utils.prepare_foam_runtime(experiment_path / "foam_case", run_name=results_name)
+    # Optional node-local scratch root for the transient OpenFOAM case (see
+    # optimize_drag_latent.py). Absent -> case lives next to the template.
+    foam_runtime_root = opt_cfg.get("foam_runtime_root")
+    if foam_runtime_root:
+        LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
+    case_dir = foam_utils.prepare_foam_runtime(
+        experiment_path / "foam_case", run_name=results_name,
+        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+    )
     bounds = np.full((param.reshape(-1, 1).shape[0], 2), opt_cfg["bounds"])
     n_constraints = 1 + int(use_center_constraint) + int(use_jacobian_constraint)
     optimizer = MMA(param.reshape(-1, 1), bounds, max_step=opt_cfg["max_step"], n_constraints=n_constraints)

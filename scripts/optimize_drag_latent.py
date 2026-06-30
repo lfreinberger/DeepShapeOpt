@@ -155,7 +155,17 @@ def optimize_shape(experiment_path: Path, specs):
             locked_idx=locked_idx if locked_idx.numel() > 0 else None,
         )
 
-    case_dir = foam_utils.prepare_foam_runtime(experiment_path / "foam_case", run_name=results_name)
+    # Root the transient OpenFOAM case on node-local scratch when foam_runtime_root
+    # is set (e.g. "/workdisk/<user>/..." -- fast local disk, not the backed-up NFS
+    # file server), keeping per-iteration OpenFOAM I/O off NFS. Kept outputs (results
+    # dir, heavy_data) are unaffected. Absent -> case lives next to the template.
+    foam_runtime_root = opt_cfg.get("foam_runtime_root")
+    if foam_runtime_root:
+        LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
+    case_dir = foam_utils.prepare_foam_runtime(
+        experiment_path / "foam_case", run_name=results_name,
+        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+    )
     foam_utils.select_allrun(case_dir, mesh_pipeline)
     snapshot_dir = paths.optimization / "snapshots"
     if debug:
