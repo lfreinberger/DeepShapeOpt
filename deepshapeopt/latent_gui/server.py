@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from deepshapeopt.latent_gui.backend import LatentEditSession
 
@@ -58,18 +60,36 @@ class _Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def _serve_static(self, url_path: str):
+        """Serve a file from STATIC_DIR (e.g. the vendored three.js), guarding
+        against path traversal outside the static root."""
+        rel = unquote(url_path).lstrip("/") or "index.html"
+        target = (STATIC_DIR / rel).resolve()
+        if not target.is_relative_to(STATIC_DIR) or not target.is_file():
+            self._send_json({"error": "not found"}, status=404)
+            return
+        ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if target.suffix in (".js", ".mjs"):
+            ctype = "text/javascript"
+        if target.suffix == ".html":
+            ctype = "text/html; charset=utf-8"
+        self._send_file(target, ctype)
+
     # -- routes -----------------------------------------------------------
     def do_GET(self):  # noqa: N802
-        if self.path in ("/", "/index.html"):
+        path = urlparse(self.path).path
+        if path in ("/", "/index.html"):
             self._send_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-        elif self.path == "/api/state":
+        elif path == "/api/state":
             try:
                 self._send_json(self.session.state())
             except Exception as exc:  # pragma: no cover - surfaced to client
                 logger.exception("state failed")
                 self._send_json({"error": str(exc)}, status=500)
-        else:
+        elif path.startswith("/api/"):
             self._send_json({"error": "not found"}, status=404)
+        else:
+            self._serve_static(path)
 
     def do_POST(self):  # noqa: N802
         try:

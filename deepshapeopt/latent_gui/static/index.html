@@ -8,10 +8,13 @@
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #1a1d21; color: #e6e6e6; }
-  #app { display: flex; height: 100%; }
-  #view { flex: 1; position: relative; }
+  #app { display: flex; height: 100%; overflow: hidden; }
+  /* min-width:0 lets the canvas column shrink instead of shoving the panel
+     off-screen; the panel keeps its fixed width and never shrinks. */
+  #view { flex: 1 1 0; min-width: 0; position: relative; }
+  #view canvas { display: block; }
   #panel {
-    width: 320px; background: #23262b; border-left: 1px solid #34383d;
+    flex: 0 0 320px; width: 320px; background: #23262b; border-left: 1px solid #34383d;
     display: flex; flex-direction: column; overflow: hidden;
   }
   #panel header { padding: 14px 16px; border-bottom: 1px solid #34383d; }
@@ -49,10 +52,20 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
   }
 }
+</script>
+<script>
+  // Surface fatal JS / ES-module load errors instead of failing to a black
+  // screen (e.g. a missing import or a syntax error in the module below).
+  window.addEventListener('error', function (e) {
+    var msg = (e.message || 'error') + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+    var b = document.getElementById('error');
+    if (b) { b.style.display = 'block'; b.textContent = 'JS error: ' + msg; }
+    document.title = 'ERR: ' + msg;
+  });
 </script>
 </head>
 <body>
@@ -114,7 +127,8 @@ let sceneCenter = new THREE.Vector3();
 
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
-  renderer.setSize(w, h, false);
+  renderer.setSize(w, h);   // updateStyle=true: canvas CSS size matches the
+                            // container regardless of devicePixelRatio
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
@@ -146,10 +160,13 @@ function buildKnots(knots, bounds) {
   const diag = Math.hypot(
     bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1], bounds[1][2] - bounds[0][2]
   ) || 1;
-  const r = diag * 0.012;
+  const r = diag * 0.018;
   const geo = new THREE.SphereGeometry(r, 16, 12);
-  const mat = new THREE.MeshStandardMaterial({ metalness: 0.2, roughness: 0.5 });
+  // depthTest off + high renderOrder => knots stay visible even when they sit
+  // inside the (opaque) solid, so you can always see and target them.
+  const mat = new THREE.MeshBasicMaterial({ depthTest: false, transparent: true, opacity: 0.95 });
   knotMesh = new THREE.InstancedMesh(geo, mat, knots.length);
+  knotMesh.renderOrder = 999;
   const m = new THREE.Matrix4();
   for (let i = 0; i < knots.length; i++) {
     const p = knots[i].pos;
@@ -249,26 +266,45 @@ async function flush() {
   }
 }
 
-// ---- raycasting picks ----
-const raycaster = new THREE.Raycaster();
-const ndc = new THREE.Vector2();
+// ---- picking (screen-space nearest knot; occlusion-proof) ----
+// Tiny spheres buried inside the solid are unreliable to ray-pick, so we pick
+// the knot whose projected screen position is closest to the click.
+const _v = new THREE.Vector3();
+function pickKnot(clientX, clientY) {
+  if (!state || !state.knots) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const px = clientX - rect.left, py = clientY - rect.top;
+  let best = -1, bestD = 18;   // px tolerance
+  for (let i = 0; i < state.knots.length; i++) {
+    _v.set(state.knots[i].pos[0], state.knots[i].pos[1], state.knots[i].pos[2]).project(camera);
+    if (_v.z > 1) continue;    // behind the camera
+    const sx = (_v.x * 0.5 + 0.5) * rect.width;
+    const sy = (-_v.y * 0.5 + 0.5) * rect.height;
+    const d = Math.hypot(sx - px, sy - py);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
 let downXY = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { downXY = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', (e) => {
   if (!downXY) return;
   const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
   downXY = null;
-  if (moved > 5 || !knotMesh) return;   // it was an orbit drag, not a click
-  const rect = renderer.domElement.getBoundingClientRect();
-  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(ndc, camera);
-  const hits = raycaster.intersectObject(knotMesh);
-  if (hits.length && hits[0].instanceId != null) {
-    highlight(hits[0].instanceId);
-    buildSliders(hits[0].instanceId);
+  if (moved > 6) return;   // it was an orbit drag, not a click
+  const idx = pickKnot(e.clientX, e.clientY);
+  console.log('[latent-gui] click -> knot', idx);
+  if (idx < 0) return;
+  try {
+    highlight(idx);
+    buildSliders(idx);
+  } catch (err) {
+    console.error(err);
+    showError('could not open knot ' + idx + ': ' + err.message);
   }
 });
+
 
 document.getElementById('reset').addEventListener('click', async () => {
   setBadge(true);
