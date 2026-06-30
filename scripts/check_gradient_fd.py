@@ -109,28 +109,64 @@ def main() -> None:
         ).reshape(-1)
         LOGGER.info("Base run: J = %.6e (%.0f s)", J0, time.time() - t0)
 
-        top = torch.argsort(dJ.abs(), descending=True)[: args.n_components]
-        flat = param.data.reshape(-1)
-        rows = []
-        for idx in top.tolist():
-            adj = float(dJ[idx])
-            LOGGER.info(
-                "Component %d: adjoint dJ = %.6e, predicted dJ*2eps = %.3e",
-                idx, adj, abs(adj) * 2 * args.eps,
-            )
-            flat[idx] += args.eps
-            _, _, J_plus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
-            flat[idx] -= 2 * args.eps
-            _, _, J_minus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
-            flat[idx] += args.eps  # restore
+        # When PCA latent reduction is enabled, validate the *projected* gradient
+        # dJ/dc against FD in coefficient space: perturbing coefficient (p, j)
+        # moves z[p] along the principal direction V[:, j].
+        pca_cfg = opt_cfg.get("pca", {})
+        if pca_cfg.get("enabled", False):
+            from deepshapeopt.latent_pca import build_pca_basis
 
-            fd = (J_plus - J_minus) / (2 * args.eps)
-            rel = abs(adj - fd) / max(abs(fd), 1e-30)
-            rows.append((idx, adj, fd, rel))
-            LOGGER.info(
-                "Component %d: adjoint %.6e vs FD %.6e (J+ %.6e, J- %.6e) -> rel err %.2f%%",
-                idx, adj, fd, J_plus, J_minus, 100 * rel,
-            )
+            basis = build_pca_basis(
+                rec_cfg["model_path"], rec_cfg.get("model_checkpoint", "latest"),
+                int(pca_cfg["n_components"]),
+                device=param.device, cache_path=pca_cfg.get("cache_path"),
+            ).to(device=param.device, dtype=param.dtype)
+            k = basis.n_components
+            dc = basis.project_grad(dJ).reshape(-1, k)  # (n_cp, k) adjoint dJ/dc
+            param2d = param.data.reshape(-1, basis.latent_dim)
+            top = torch.argsort(dc.reshape(-1).abs(), descending=True)[: args.n_components]
+            rows = []
+            for flat_idx in top.tolist():
+                p, j = divmod(flat_idx, k)
+                adj = float(dc[p, j])
+                direction = basis.components[:, j]  # z-direction for coeff (p, j)
+                LOGGER.info("Coeff (cp %d, comp %d): adjoint dJ/dc = %.6e", p, j, adj)
+                param2d[p] += args.eps * direction
+                _, _, J_plus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
+                param2d[p] -= 2 * args.eps * direction
+                _, _, J_minus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
+                param2d[p] += args.eps * direction  # restore
+
+                fd = (J_plus - J_minus) / (2 * args.eps)
+                rel = abs(adj - fd) / max(abs(fd), 1e-30)
+                rows.append((flat_idx, adj, fd, rel))
+                LOGGER.info(
+                    "Coeff (cp %d, comp %d): adjoint %.6e vs FD %.6e -> rel err %.2f%%",
+                    p, j, adj, fd, 100 * rel,
+                )
+        else:
+            top = torch.argsort(dJ.abs(), descending=True)[: args.n_components]
+            flat = param.data.reshape(-1)
+            rows = []
+            for idx in top.tolist():
+                adj = float(dJ[idx])
+                LOGGER.info(
+                    "Component %d: adjoint dJ = %.6e, predicted dJ*2eps = %.3e",
+                    idx, adj, abs(adj) * 2 * args.eps,
+                )
+                flat[idx] += args.eps
+                _, _, J_plus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
+                flat[idx] -= 2 * args.eps
+                _, _, J_minus = evaluate(hex_pipeline, case_dir, sens_cfg, reuse_castellation=True)
+                flat[idx] += args.eps  # restore
+
+                fd = (J_plus - J_minus) / (2 * args.eps)
+                rel = abs(adj - fd) / max(abs(fd), 1e-30)
+                rows.append((idx, adj, fd, rel))
+                LOGGER.info(
+                    "Component %d: adjoint %.6e vs FD %.6e (J+ %.6e, J- %.6e) -> rel err %.2f%%",
+                    idx, adj, fd, J_plus, J_minus, 100 * rel,
+                )
 
         print(f"\nBase objective J = {J0:.6e}, eps = {args.eps:g}")
         print(f"{'comp':>6} {'adjoint dJ/dz':>16} {'FD dJ/dz':>16} {'rel err':>9}")
