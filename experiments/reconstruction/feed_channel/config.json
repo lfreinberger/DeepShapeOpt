@@ -1,7 +1,7 @@
 {
   "reconstruction": {
     "mesh_path": "data/shapes/flow_channel.stl",
-    "model_path": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models/primitives_cl08",
+    "model_path": "/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/trained_models/primitives_cl32_noT",
     "model_checkpoint": "latest",
     "tiling": [1, 8, 8],
     "spline_degree": [1, 1, 1],
@@ -16,8 +16,8 @@
     "code_bound": 1.0,
     "grad_clip": 1.0,
     "eikonal_lambda": 0.0,
-    "device": "cpu",
-    "mesh_device": "cpu",
+    "device": "cuda",
+    "mesh_device": "cuda",
     "heavy_data_output_path": "/storage/lfrei/DeepShapeOpt"
   },
   "results_name": "results"

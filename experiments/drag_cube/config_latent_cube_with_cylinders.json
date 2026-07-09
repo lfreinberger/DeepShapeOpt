@@ -1,5 +1,5 @@
 {
-  "results_name": "results_cube_with_cylinders",
+  "results_name": "results_cube_with_cylinders_pca",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
@@ -10,7 +10,7 @@
     "n_uniform_samples": 100000,
     "n_surface_samples": 500000,
     "lr": 5e-3,
-    "num_iterations": 50,
+    "num_iterations": 20,
     "batch_size": 4096,
     "code_reg_lambda": 0.0,
     "code_bound": 1.0,
@@ -25,11 +25,19 @@
     "mesh_resolution": 48,
     "max_step": 0.02,
     "bounds": [-2.0, 2.0],
+    "pca": {
+      "enabled": true,
+      "n_components": 32,
+      "bounds": [-5, 5],
+      "max_step": 0.5,
+      "_note": ""
+    },
     "use_center_constraint": true,
     "center_tol": 0.05,
     "convergence_obj_tol": 0.0002,
     "convergence_window": 3,
     "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "foam_runtime_root": "/work/lfrei/DeepShapeOpt",
     "sensitivity": {
       "loading_method": "conservative",
       "field_name": "pointSensVecadjS1ESI",
