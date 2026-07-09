@@ -22,10 +22,11 @@ def configure_logging(debug: bool, log_file: Path | None = None) -> None:
     to named loggers with a timestamped formatter; without intervention
     those messages get emitted twice — once by their handler and once via
     propagation through ours. Here we detach existing handlers, install
-    ours with a bare ``%(message)s`` format, and stop named loggers that
-    own handlers from propagating into the root. In non-debug mode we also
-    raise their level to ``WARNING`` and silence ``DeepSDFStruct``-origin
-    ``UserWarning``s (PyTorch tensor-construction noise).
+    ours with a bare ``%(message)s`` format, strip the named loggers' own
+    handlers and let them propagate through ours (so e.g. the MMA / GCMMA
+    back-off lines reach run.log, not just the console). In non-debug mode
+    we also raise their level to ``WARNING`` and silence
+    ``DeepSDFStruct``-origin ``UserWarning``s (PyTorch tensor noise).
     """
     level = logging.DEBUG if debug else logging.INFO
 
@@ -58,7 +59,12 @@ def configure_logging(debug: bool, log_file: Path | None = None) -> None:
     for name, lg in list(logging.Logger.manager.loggerDict.items()):
         if not isinstance(lg, logging.Logger) or not lg.handlers:
             continue
-        lg.propagate = False
+        # Strip their own handlers and route them through ours instead: single
+        # emission, and their messages (e.g. the MMA iteration / GCMMA back-off
+        # lines from DeepSDFStruct) land in run.log too, not just on the console.
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
+        lg.propagate = True
         if not debug:
             lg.setLevel(logging.WARNING)
 
