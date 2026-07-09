@@ -217,6 +217,14 @@ class OptSetup:
     mask_locked_flat: torch.Tensor
     locked_values: torch.Tensor
     optimizer: Any
+    # Set when PCA latent reduction is enabled (opt_cfg["pca"]["enabled"]). ``param`` stays the
+    # full latent control-point tensor; ``coeffs`` is the reduced k-dim design vector the MMA
+    # optimizer actually moves (whitened *deltas around the reconstruction* -- the basis'
+    # reference is set to lambda^0), ``pca_basis`` maps between them, and ``mask_locked_coeff``
+    # is the lock mask in coefficient space. ``mask_locked_flat`` always stays in full param space.
+    pca_basis: Any = None
+    coeffs: torch.Tensor | None = None
+    mask_locked_coeff: torch.Tensor | None = None
 
 
 def setup_optimizer(
@@ -240,6 +248,52 @@ def setup_optimizer(
         logger.info("Locked control points: %d", locked_idx.numel())
 
     mask_locked_cp, mask_locked_flat, locked_values = make_locked_masks(param, locked_idx)
+
+    pca_cfg = opt_cfg.get("pca") or {}
+    if pca_cfg.get("enabled", False):
+        from deepshapeopt.latent_pca import build_pca_basis
+
+        k = int(pca_cfg["n_components"])
+        basis = build_pca_basis(
+            rec_cfg["model_path"], rec_cfg.get("model_checkpoint", "latest"), k,
+            device=param.device, cache_path=pca_cfg.get("cache_path"),
+        ).to(device=param.device, dtype=param.dtype)
+
+        n_ctrl = param.shape[0]
+        # Delta parametrization around the reconstruction: z = lambda0 + (z_a * scale) @ V_k.T,
+        # with lambda0 the reconstructed latent field (the current ``param``) as the fixed
+        # reference. The MMA design vector z_a starts at 0, so iteration 0 IS the reconstruction
+        # exactly -- its detail outside the top-k subspace is preserved (never projected away),
+        # locked control points already hold their exact values, and the box bounds the
+        # *perturbation* so the start is always feasible. Gradients still project to z_a via
+        # ``basis.project_grad`` (same Jacobian V_k * scale).
+        basis.set_reference(param.detach().clone())
+        coeffs = torch.zeros((n_ctrl, k), device=param.device, dtype=param.dtype)
+
+        # Lock mask in coefficient space: a locked control point freezes all its k coefficients.
+        mask_locked_coeff = mask_locked_cp[:, None].expand(n_ctrl, k).reshape(-1)
+
+        bounds = np.full((coeffs.numel(), 2), pca_cfg.get("bounds", [-2.5, 2.5]))
+        optimizer = MMA(
+            coeffs.reshape(-1, 1), bounds,
+            max_step=pca_cfg.get("max_step", opt_cfg["max_step"]),
+            n_constraints=n_constraints,
+        )
+        logger.info(
+            "PCA delta reduction: %d control points x %d whitened modes = %d design variables "
+            "(deltas around the reconstruction; was %d full latent params)",
+            n_ctrl, k, coeffs.numel(), param.numel(),
+        )
+        return OptSetup(
+            param=param,
+            mask_locked_cp=mask_locked_cp,
+            mask_locked_flat=mask_locked_flat,
+            locked_values=locked_values,
+            optimizer=optimizer,
+            pca_basis=basis,
+            coeffs=coeffs,
+            mask_locked_coeff=mask_locked_coeff,
+        )
 
     bounds = np.full((param.reshape(-1, 1).shape[0], 2), opt_cfg["bounds"])
     optimizer = MMA(
