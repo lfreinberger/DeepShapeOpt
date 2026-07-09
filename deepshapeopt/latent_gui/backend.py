@@ -20,7 +20,6 @@ import torch
 from deepshapeopt.config import ExperimentSpecifications, make_experiment_paths
 from deepshapeopt.reconstruction import (
     build_reconstruction_lattice,
-    fit_lattice_to_sdf,
     with_float32_lattice,
 )
 
@@ -105,19 +104,23 @@ class LatentEditSession:
         self,
         config_path: str | Path,
         device: str | None = None,
-        fit_if_missing: bool = True,
         mesh_n: int | None = None,
-        source: str = "reconstruction",
+        source: str = "auto",
         params_file: str | Path | None = None,
     ):
-        if source not in ("reconstruction", "optimization"):
-            raise ValueError(
-                f"Unknown latent-GUI source {source!r}; use 'reconstruction' or 'optimization'."
-            )
         self.config_path = Path(config_path).resolve()
         self.experiment_path = self.config_path.parent
         self.specs = ExperimentSpecifications(str(self.config_path))
         self.rec_cfg = self.specs["reconstruction"]
+        if source == "auto":
+            # Inspect the optimization result when the config drives an
+            # optimization; otherwise show the whole-input-mesh reconstruction.
+            source = "optimization" if self.specs.get("optimization") else "reconstruction"
+        if source not in ("reconstruction", "optimization"):
+            raise ValueError(
+                f"Unknown latent-GUI source {source!r}; use 'auto', 'reconstruction' "
+                "or 'optimization'."
+            )
         self.source = source
         self.params_file = Path(params_file).resolve() if params_file else None
         self._lock = threading.RLock()
@@ -144,11 +147,9 @@ class LatentEditSession:
         self._knot_positions = positions.astype(float)
         self._knot_ijk = ijk.astype(int)
 
-        if source == "optimization":
-            self._load_optimization_codes()
-        else:
-            self._load_or_fit_codes(fit_if_missing=fit_if_missing)
+        self._load_codes()
         self._original_codes = self._control_points.detach().clone()
+        self._setup_pca()
 
     # -- lattice construction ---------------------------------------------
     def _build_reconstruction_lattice(self, device: str | None = None) -> None:
@@ -208,87 +209,188 @@ class LatentEditSession:
         )
 
     # -- loading ----------------------------------------------------------
-    def _load_optimization_codes(self) -> None:
-        """Load an optimization run's saved latent control points and adopt them as
-        the editable shape. Never fits: in optimization mode the GUI inspects an
-        *existing* optimized design, so a missing parameter file is an error."""
-        expected = tuple(self._control_points.shape)
+    def _load_codes(self) -> None:
+        """Load the saved latent control points to display and adopt them as the
+        editable shape. The GUI never fits on the fly: it always inspects an
+        *existing* saved design, so a missing parameter file is an error.
+
+        The file is located from ``--config`` (overridable with ``--params-file``):
+        the optimization source prefers the optimizer's ``parameters.pt`` and falls
+        back to the reconstruction's ``rec_parameters.pt``; the reconstruction source
+        uses the reconstruction's ``rec_parameters.pt``.
+        """
         if self.params_file is not None:
             candidates = [self.params_file]
-        else:
+        elif self.source == "optimization":
             candidates = [
-                self._paths.optimization / "updated_parameters.pt",
+                #self._paths.optimization / "parameters.pt",
                 self._paths.reconstruction / "rec_parameters.pt",
             ]
+        else:
+            candidates = [
+                _resolve_param_file(
+                    self.experiment_path, self.specs, self.mesh_path, self.tiling
+                )
+            ]
+
         for f in candidates:
             if f.exists():
-                data = torch.load(f, map_location=self.device)
-                codes = data[0] if isinstance(data, (list, tuple)) else data
-                if tuple(codes.shape) != expected:
-                    raise ValueError(
-                        f"Saved latents at {f} have shape {tuple(codes.shape)} but this "
-                        f"configuration expects {expected}. The config's tiling/model must "
-                        f"match the run that produced the parameters."
-                    )
-                self.param_spline.set_param(
-                    codes.to(device=self._control_points.device, dtype=self._control_points.dtype)
-                )
-                logger.info("Loaded optimization latents from %s", f)
+                self._apply_codes(f)
                 return
+
         searched = "\n  ".join(str(c) for c in candidates)
         raise FileNotFoundError(
-            "No optimization latent parameters found to load (optimization-mode GUI does "
-            "not fit on the fly). Run the optimization for this experiment first, or pass "
+            f"No saved latent parameters found to load for the {self.source} source. The "
+            "latent GUI never fits on the fly; run the reconstruction/optimization for "
+            "this experiment first (e.g. "
+            f"`python scripts/reconstruct.py --config {self.config_path}`), or pass "
             "--params-file explicitly. Looked for:\n  " + searched
         )
 
-    # -- reconstruction loading ------------------------------------------
-    def _load_or_fit_codes(self, fit_if_missing: bool) -> None:
-        param_file = _resolve_param_file(
-            self.experiment_path, self.specs, self.mesh_path, self.tiling
-        )
+    def _apply_codes(self, param_file: Path) -> None:
+        """Load latent control points from *param_file* and set them on the spline,
+        validating their shape against this configuration's control net."""
         expected = tuple(self._control_points.shape)
-
-        if param_file.exists():
-            recon_param = torch.load(param_file, map_location=self.device)
-            codes = recon_param[0] if isinstance(recon_param, (list, tuple)) else recon_param
-            if tuple(codes.shape) != expected:
-                raise ValueError(
-                    f"Saved rec_parameters.pt has shape {tuple(codes.shape)} but "
-                    f"this configuration expects {expected}. Delete the stale file "
-                    f"or fix the config: {param_file}"
-                )
-            logger.info("Loaded reconstructed codes from %s", param_file)
-            self.param_spline.set_param(
-                codes.to(device=self._control_points.device, dtype=self._control_points.dtype)
+        data = torch.load(param_file, map_location=self.device)
+        codes = data[0] if isinstance(data, (list, tuple)) else data
+        if tuple(codes.shape) != expected:
+            raise ValueError(
+                f"Saved latents at {param_file} have shape {tuple(codes.shape)} but this "
+                f"configuration expects {expected}. The config's tiling/model must match "
+                "the run that produced the parameters (delete the stale file or fix the "
+                "config)."
             )
+        self.param_spline.set_param(
+            codes.to(device=self._control_points.device, dtype=self._control_points.dtype)
+        )
+        logger.info("Loaded latents from %s", param_file)
+
+    # -- PCA reduced basis ------------------------------------------------
+    def _setup_pca(self) -> None:
+        """When the config enables PCA latent reduction (an ``optimization.pca`` block),
+        rebuild the same whitened PCA basis the optimizer uses so the GUI can also edit
+        each knot's PCA coefficients. No-op otherwise (``pca_basis`` stays ``None``).
+
+        Fits the basis directly from the model's training latents (rather than via
+        ``build_pca_basis``) so we can also keep the per-component explained-variance
+        ratio for display; the mean/components/scale are identical to the optimizer's.
+        """
+        self.pca_basis = None
+        self.pca_bounds: list[float] | None = None
+        self.pca_explained: list[float] = []
+        self.n_components = 0
+        if self.source != "optimization":
+            return
+        pca_cfg = self.specs.get("optimization", {}).get("pca") or {}
+        if not pca_cfg.get("enabled", False):
             return
 
-        if not fit_if_missing:
-            raise FileNotFoundError(
-                f"No saved reconstruction found at {param_file}. Run "
-                f"`python scripts/reconstruct.py --config {self.config_path}` first, "
-                f"or launch the GUI without --no-fit to fit on the fly."
-            )
+        from deepshapeopt.latent_pca import (
+            PCALatentBasis,
+            compute_latent_pca,
+            gather_training_latents,
+        )
 
+        dev = self._control_points.device
+        dtype = self._control_points.dtype
+        latents = gather_training_latents(
+            self.rec_cfg["model_path"],
+            self.rec_cfg.get("model_checkpoint", "latest"),
+            device=dev,
+        )
+        mean, components, explained, scale = compute_latent_pca(
+            latents, int(pca_cfg["n_components"])
+        )
+        self.pca_basis = PCALatentBasis(mean, components, scale).to(device=dev, dtype=dtype)
+        # Delta parametrization: measure coefficients as deltas around the reconstruction
+        # lambda^0 (same origin the optimizer uses), so the sliders match the optimizer's
+        # design variables and truncation keeps the reconstruction detail.
+        self.pca_basis.set_reference(self._pca_reference_field())
+        self.pca_explained = [float(e) for e in explained]
+        b = pca_cfg.get("bounds", [-2.5, 2.5])
+        self.pca_bounds = [float(b[0]), float(b[1])]
+        self.n_components = int(self.pca_basis.n_components)
         logger.info(
-            "No saved codes at %s — running reconstruction fit (this is a one-off; "
-            "the result is cached for next launch).",
-            param_file,
+            "PCA panel enabled: %d modes (%.1f%% variance), coefficient box %s "
+            "(deltas around the reconstruction)",
+            self.n_components,
+            100.0 * sum(self.pca_explained),
+            self.pca_bounds,
         )
-        param_file.parent.mkdir(parents=True, exist_ok=True)
-        result = fit_lattice_to_sdf(
-            self.lattice_struct,
-            self.mesh_norm,
-            self.bounds,
-            self.rec_cfg,
-            output_dir=param_file.parent,
-            save_vtp=False,
-            box_constrained=False,
-        )
-        self.param_spline.set_param(result["params"][0])
-        torch.save(result["params"], param_file)
-        logger.info("Saved reconstructed codes to %s", param_file)
+
+    def _pca_reference_field(self) -> torch.Tensor:
+        """The reconstruction lambda^0 the PCA deltas are measured from -- the same origin
+        the optimizer uses. Loads the run's ``rec_parameters.pt``; falls back to the loaded
+        field (deltas measured from what's shown, all zero at load) if it is unavailable."""
+        cp = self._control_points
+        rec_file = self._paths.reconstruction / "rec_parameters.pt"
+        if rec_file.exists():
+            data = torch.load(rec_file, map_location=cp.device)
+            ref = data[0] if isinstance(data, (list, tuple)) else data
+            if tuple(ref.shape) == tuple(cp.shape):
+                logger.info("PCA delta reference: reconstruction %s", rec_file)
+                return ref.to(device=cp.device, dtype=cp.dtype)
+            logger.warning(
+                "rec_parameters.pt shape %s != %s; measuring PCA deltas from the loaded field.",
+                tuple(ref.shape), tuple(cp.shape),
+            )
+        else:
+            logger.warning(
+                "No rec_parameters.pt at %s; measuring PCA deltas from the loaded field.",
+                rec_file,
+            )
+        return cp.detach().clone()
+
+    def coeffs(self) -> list[list[float]] | None:
+        """Current whitened PCA coefficients ``(n_knots, k)`` derived from the live
+        latent control points, or ``None`` when PCA is not enabled."""
+        if self.pca_basis is None:
+            return None
+        with self._lock:
+            c = self.pca_basis.to_coeff(self._control_points.detach())
+        return c.cpu().numpy().astype(float).tolist()
+
+    def coeff(self, knot_idx: int) -> list[float] | None:
+        """One knot's whitened PCA coefficients, or ``None`` when PCA is not enabled."""
+        if self.pca_basis is None:
+            return None
+        with self._lock:
+            row = self._control_points[knot_idx : knot_idx + 1].detach()
+            c = self.pca_basis.to_coeff(row)
+        return c[0].cpu().numpy().astype(float).tolist()
+
+    def set_coeff(self, knot_idx: int, comp: int, value: float) -> None:
+        """Move a single knot along one PCA direction: ``z += (value - c_old) * scale_j
+        * V[:, j]``. Editing the coefficient in place leaves the orthogonal complement
+        (the part of the latent not captured by the k components) and every other knot
+        untouched, so it composes cleanly with raw-latent edits."""
+        if self.pca_basis is None:
+            raise RuntimeError("PCA editing requested but no PCA basis is loaded.")
+        if not (0 <= knot_idx < self.n_knots):
+            raise IndexError(f"knot_idx {knot_idx} out of range [0, {self.n_knots})")
+        if not (0 <= comp < self.n_components):
+            raise IndexError(f"comp {comp} out of range [0, {self.n_components})")
+        with self._lock:
+            z = self._control_points.detach().clone()
+            old = float(self.pca_basis.to_coeff(z[knot_idx : knot_idx + 1])[0, comp])
+            delta = (float(value) - old) * self.pca_basis.scale[comp]
+            z[knot_idx] = z[knot_idx] + delta * self.pca_basis.components[:, comp]
+            self.param_spline.set_param(z)
+
+    def truncate_to_k(self, k: int) -> None:
+        """Zero every knot's PCA coefficients from component ``k`` on, i.e. project the
+        whole design onto its first ``k`` principal directions. This reproduces the
+        starting design of a reduced ``n_components = k`` optimization run (which drops
+        the tail at init), so you can preview what a smaller basis has to work with.
+        Lossy: the discarded tail cannot be recovered except via ``reset``."""
+        if self.pca_basis is None:
+            raise RuntimeError("PCA truncation requested but no PCA basis is loaded.")
+        if not (1 <= k <= self.n_components):
+            raise IndexError(f"k {k} out of range [1, {self.n_components}]")
+        with self._lock:
+            c = self.pca_basis.to_coeff(self._control_points.detach()).clone()
+            c[:, k:] = 0.0
+            self.param_spline.set_param(self.pca_basis.to_latent(c))
 
     # -- queries ----------------------------------------------------------
     def knots(self) -> list[dict]:
@@ -363,7 +465,7 @@ class LatentEditSession:
     # -- combined ---------------------------------------------------------
     def state(self) -> dict:
         """Everything the frontend needs on first load."""
-        return {
+        st = {
             "latent_dim": self.latent_dim,
             "code_bound": self.code_bound,
             "n_knots": self.n_knots,
@@ -374,3 +476,14 @@ class LatentEditSession:
             "codes": self.codes(),
             "mesh": self.mesh(),
         }
+        if self.pca_basis is not None:
+            st["pca"] = {
+                "enabled": True,
+                "n_components": self.n_components,
+                "bounds": self.pca_bounds,
+                "explained": self.pca_explained,
+            }
+            st["coeffs"] = self.coeffs()
+        else:
+            st["pca"] = {"enabled": False}
+        return st

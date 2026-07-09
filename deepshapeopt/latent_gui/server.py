@@ -4,9 +4,11 @@ plus a static Three.js viewer. No third-party web dependencies.
 Endpoints
 ---------
 GET  /              -> static/index.html
-GET  /api/state     -> full initial state (latent_dim, knots, codes, mesh, ...)
-POST /api/update    -> {"knot_idx", "dim", "value"} -> {"mesh", "code"}
-POST /api/reset     -> restore the reconstructed codes -> {"mesh"}
+GET  /api/state        -> full initial state (latent_dim, knots, codes, mesh, pca, ...)
+POST /api/update       -> {"knot_idx", "dim", "value"}  -> {"mesh", "code"[, "coeff"]}
+POST /api/update_coeff -> {"knot_idx", "comp", "value"} -> {"mesh", "code", "coeff"}
+POST /api/pca_truncate -> {"k"} project onto first k PCs -> {"mesh", "codes"[, "coeffs"]}
+POST /api/reset        -> restore the loaded codes      -> {"mesh", "codes"[, "coeffs"]}
 """
 
 from __future__ import annotations
@@ -60,6 +62,25 @@ class _Handler(BaseHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def _knot_edit_payload(self, idx: int) -> dict:
+        """Mesh plus the edited knot's latent code (and PCA coefficients when enabled),
+        so either editor tab can refresh its sliders after an edit made through the
+        other (a coeff edit changes the raw latents and vice versa)."""
+        payload = {"mesh": self.session.mesh(), "code": self.session.code(idx)}
+        coeff = self.session.coeff(idx)
+        if coeff is not None:
+            payload["coeff"] = coeff
+        return payload
+
+    def _all_knots_payload(self) -> dict:
+        """Mesh + all latent codes (and all PCA coefficients when enabled), for edits
+        that move every knot at once (reset, PCA truncation)."""
+        payload = {"mesh": self.session.mesh(), "codes": self.session.codes()}
+        coeffs = self.session.coeffs()
+        if coeffs is not None:
+            payload["coeffs"] = coeffs
+        return payload
+
     def _serve_static(self, url_path: str):
         """Serve a file from STATIC_DIR (e.g. the vendored three.js), guarding
         against path traversal outside the static root."""
@@ -95,15 +116,21 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/update":
                 data = self._read_json()
-                self.session.set_value(
-                    int(data["knot_idx"]), int(data["dim"]), float(data["value"])
-                )
-                self._send_json(
-                    {"mesh": self.session.mesh(), "code": self.session.code(int(data["knot_idx"]))}
-                )
+                idx = int(data["knot_idx"])
+                self.session.set_value(idx, int(data["dim"]), float(data["value"]))
+                self._send_json(self._knot_edit_payload(idx))
+            elif self.path == "/api/update_coeff":
+                data = self._read_json()
+                idx = int(data["knot_idx"])
+                self.session.set_coeff(idx, int(data["comp"]), float(data["value"]))
+                self._send_json(self._knot_edit_payload(idx))
+            elif self.path == "/api/pca_truncate":
+                data = self._read_json()
+                self.session.truncate_to_k(int(data["k"]))
+                self._send_json(self._all_knots_payload())
             elif self.path == "/api/reset":
                 self.session.reset()
-                self._send_json({"mesh": self.session.mesh(), "codes": self.session.codes()})
+                self._send_json(self._all_knots_payload())
             else:
                 self._send_json({"error": "not found"}, status=404)
         except (KeyError, ValueError, IndexError) as exc:

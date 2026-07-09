@@ -1,14 +1,29 @@
-"""Launch the interactive local-latent-code editor for a reconstructed shape.
+"""Launch the interactive local-latent-code editor for a saved shape.
 
-Loads a reconstruction experiment (the same config.json used by
-``scripts/reconstruct.py``), exposes its B-spline control net of local latent
-codes in a small web GUI, and lets you click a knot and drag sliders to change
-that knot's latent code while the geometry updates live.
+Loads an experiment config.json (the same one used by ``scripts/reconstruct.py``
+or ``scripts/optimize_drag_latent.py``), rebuilds its B-spline control net of
+local latent codes, loads that run's *saved* latent parameters, and serves a
+small web GUI where you click a knot and drag sliders to change its latent code
+while the geometry updates live.
+
+The GUI never fits on the fly: it always loads an existing parameter file. Point
+it at the run via ``--config`` (the source and parameter file are located
+automatically) or give an explicit ``--source`` / ``--params-file``; a missing
+file raises an error.
+
+By default ``--source auto`` inspects the optimization result when the config has
+an ``optimization`` block and the whole-input-mesh reconstruction otherwise.
 
 Examples
 --------
+    # inspect a reconstruction (rec_parameters.pt under the config's results):
     python scripts/latent_gui.py \
         --config experiments/reconstruction/feed_channel/config.json
+
+    # inspect an optimization result (auto-detected; parameters.pt, else
+    # rec_parameters.pt):
+    python scripts/latent_gui.py \
+        --config experiments/drag_cube/config_latent_cube.json
 
     # quick non-interactive sanity check (no browser/server):
     python scripts/latent_gui.py \
@@ -44,23 +59,21 @@ def main() -> None:
         "Lower = faster updates, coarser surface. Defaults to a responsive heuristic.",
     )
     parser.add_argument(
-        "--no-fit",
-        action="store_true",
-        help="Require a saved rec_parameters.pt instead of fitting on launch.",
-    )
-    parser.add_argument(
         "--source",
-        choices=("reconstruction", "optimization"),
-        default="reconstruction",
-        help="reconstruction: fit/show the whole input mesh (default). optimization: "
-        "rebuild the optimizer's design-domain lattice and load that run's saved "
-        "latents (updated_parameters.pt, else rec_parameters.pt); errors if none exist.",
+        choices=("auto", "reconstruction", "optimization"),
+        default="auto",
+        help="Which lattice/parameters to load. auto (default): optimization when the "
+        "config has an 'optimization' block, else reconstruction. reconstruction: "
+        "rebuild the whole-input-mesh lattice and load its rec_parameters.pt. "
+        "optimization: rebuild the optimizer's design-domain lattice and load that "
+        "run's saved latents (parameters.pt, else rec_parameters.pt). The GUI never "
+        "fits: the file must already exist or it errors.",
     )
     parser.add_argument(
         "--params-file",
         default=None,
-        help="Explicit .pt latent file to load (optimization source). Overrides the "
-        "default updated_parameters.pt / rec_parameters.pt lookup.",
+        help="Explicit .pt latent file to load, overriding the automatic lookup from "
+        "--config. Must exist.",
     )
     parser.add_argument(
         "--smoke",
@@ -76,7 +89,6 @@ def main() -> None:
     session = LatentEditSession(
         args.config,
         device=args.device,
-        fit_if_missing=not args.no_fit,
         mesh_n=args.mesh_n,
         source=args.source,
         params_file=args.params_file,
