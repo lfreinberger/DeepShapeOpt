@@ -95,8 +95,10 @@ def main() -> None:
     hex_pipeline = SdfHexMeshPipeline(
         lattice.lattice_struct, model_setup, opt_cfg, paths.optimization
     )
+    foam_runtime_root = opt_cfg.get("foam_runtime_root")
     case_dir = foam_utils.prepare_foam_runtime(
-        experiment_path / "foam_case", run_name=f"{results_name}_fd_check"
+        experiment_path / "foam_case", run_name=f"{results_name}_fd_check",
+        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
     )
     foam_utils.select_allrun(case_dir, "sdf_hex")
 

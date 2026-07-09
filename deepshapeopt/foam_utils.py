@@ -1,6 +1,7 @@
 from pathlib import Path
 import contextlib
 import io
+import json
 import logging
 import os
 import re
@@ -813,13 +814,18 @@ def compute_shape_gradient(param, verts, faces, sens_on_orig, invert_normals=Fal
 
 def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int):
     """
-    Export VTK files for the latest OpenFOAM time step for a given optimization iteration.
+    Export the latest OpenFOAM time step as a per-iteration VTK multiblock.
+
+    Copies foamToVTK's whole time directory (internal.vtu + boundary/<patch>.vtp)
+    to vtk_series/iter_NNNN/ and rewrites the accompanying .vtm so every boundary
+    patch stays a named block ParaView can toggle in the Multi-block Inspector.
+    An iterations.vtm.series index maps ParaView time to the iteration number.
     """
 
     case.run(["foamToVTK", "-latestTime"])
 
-    vtk_series_dir = str(vtk_series_dir / "vtk_series")
-    os.makedirs(vtk_series_dir, exist_ok=True)
+    vtk_series_dir = Path(vtk_series_dir) / "vtk_series"
+    vtk_series_dir.mkdir(parents=True, exist_ok=True)
 
     vtk_root = case_dir / "VTK"
     if not vtk_root.exists():
@@ -830,25 +836,33 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
         raise RuntimeError(f"No VTK subdirectories in {vtk_root}")
 
     latest_vtk_dir = max(vtk_dirs, key=lambda p: p.stat().st_mtime)
+    src_vtm = latest_vtk_dir.with_suffix(".vtm")
+    if not src_vtm.exists():
+        raise RuntimeError(f"Multiblock file not found: {src_vtm}")
 
-    # ---------- volume ----------
-    vtu_files = list(latest_vtk_dir.glob("internal*.vtu"))
-    if not vtu_files:
-        raise RuntimeError(f"No internal*.vtu found in {latest_vtk_dir}")
+    iter_name = f"iter_{e:04d}"
+    dst_dir = vtk_series_dir / iter_name
+    if dst_dir.exists():
+        shutil.rmtree(dst_dir)
+    shutil.copytree(latest_vtk_dir, dst_dir)
 
-    src_internal = max(vtu_files, key=lambda p: p.stat().st_mtime)
-    dst_internal = f"{vtk_series_dir}/internal_{e:04d}.vtu"
+    # Re-point the block references at the copied directory and stamp the
+    # iteration number as TimeValue — the solver's own latestTime is identical
+    # every iteration and would collapse the series onto a single time step.
+    vtm_text = src_vtm.read_text()
+    vtm_text = vtm_text.replace(f"{latest_vtk_dir.name}/", f"{iter_name}/")
+    vtm_text = re.sub(r"<!-- time='[^']*' -->", f"<!-- time='{e}' -->", vtm_text)
+    vtm_text = re.sub(
+        r"(Name='TimeValue'[^>]*>\s*)[-+0-9.eE]+", rf"\g<1>{e}", vtm_text
+    )
+    dst_vtm = vtk_series_dir / f"{iter_name}.vtm"
+    dst_vtm.write_text(vtm_text)
+    logger.debug("Saved multiblock VTK for ParaView: %s", dst_vtm)
 
-    shutil.copy2(src_internal, dst_internal)
-    logger.debug("Saved volume VTK for ParaView: %s", dst_internal)
-
-    # ---------- boundary (optional) ----------
-    boundary_dir = latest_vtk_dir / "boundary"
-    src_boundary = boundary_dir / "dragObject.vtp"
-
-    if boundary_dir.exists() and src_boundary.exists():
-        dst_boundary = f"{vtk_series_dir}/dragObject_{e:04d}.vtp"
-        shutil.copy2(src_boundary, dst_boundary)
-        logger.debug("Saved boundary VTK for ParaView: %s", dst_boundary)
-    else:
-        logger.debug("Boundary VTK not found for iteration %s (expected %s)", e, src_boundary)
+    # Regenerate the series index from what is on disk so reruns stay consistent.
+    entries = [
+        {"name": p.name, "time": int(p.stem.split("_")[1])}
+        for p in sorted(vtk_series_dir.glob("iter_*.vtm"))
+    ]
+    series = {"file-series-version": "1.0", "files": entries}
+    (vtk_series_dir / "iterations.vtm.series").write_text(json.dumps(series, indent=2))

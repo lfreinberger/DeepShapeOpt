@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Latent-code editor — DeepShapeOpt</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #1a1d21; color: #e6e6e6; }
+  #app { display: flex; height: 100%; overflow: hidden; }
+  /* min-width:0 lets the canvas column shrink instead of shoving the panel
+     off-screen; the panel keeps its fixed width and never shrinks. */
+  #view { flex: 1 1 0; min-width: 0; position: relative; }
+  #view canvas { display: block; }
+  #panel {
+    flex: 0 0 320px; width: 320px; background: #23262b; border-left: 1px solid #34383d;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #panel header { padding: 14px 16px; border-bottom: 1px solid #34383d; }
+  #panel header h1 { font-size: 15px; margin: 0 0 4px; }
+  #panel header p { font-size: 12px; margin: 0; color: #9aa0a6; }
+  #knotInfo { padding: 12px 16px; font-size: 13px; border-bottom: 1px solid #34383d; min-height: 44px; }
+  #knotInfo .muted { color: #9aa0a6; }
+  #tabs { display: none; gap: 6px; padding: 8px 16px 0; }
+  #tabs button {
+    flex: 1; background: #3a3f45; color: #cfd3d8; padding: 6px 8px; font-size: 12px;
+    border-radius: 6px 6px 0 0;
+  }
+  #tabs button.active { background: #2f7de0; color: #fff; }
+  #sliders { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  #pcaGlobal { display: none; padding: 10px 16px; border-bottom: 1px solid #34383d; font-size: 12px; }
+  #pcaGlobal h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #7cc7ff; }
+  #pcaGlobal .line { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  #pcaGlobal label { color: #9aa0a6; }
+  #pcaGlobal input[type=number] {
+    width: 64px; background: #14161a; color: #e6e6e6; border: 1px solid #34383d;
+    border-radius: 4px; padding: 3px 6px; font-size: 12px;
+  }
+  #pcaGlobal button { padding: 4px 8px; font-size: 12px; }
+  #pcaGlobal .stat { color: #9aa0a6; font-variant-numeric: tabular-nums; line-height: 1.5; }
+  #pcaGlobal .stat b { color: #7cc7ff; font-weight: 600; }
+  #pcaGlobal .stat .over { color: #e0a53a; }
+  .row label .ev { color: #6f7681; font-size: 11px; }
+  .row { margin: 10px 0; }
+  .row label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .row label .val { color: #7cc7ff; font-variant-numeric: tabular-nums; }
+  .row input[type=range] { width: 100%; }
+  #panel footer { padding: 12px 16px; border-top: 1px solid #34383d; display: flex; gap: 8px; align-items: center; }
+  button {
+    background: #2f7de0; color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 12px; font-size: 13px; cursor: pointer;
+  }
+  button.secondary { background: #3a3f45; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #badge {
+    position: absolute; top: 12px; left: 12px; background: rgba(47,125,224,0.92);
+    color: #fff; padding: 5px 10px; border-radius: 6px; font-size: 12px;
+    opacity: 0; transition: opacity 0.15s; pointer-events: none;
+  }
+  #badge.on { opacity: 1; }
+  #hint {
+    position: absolute; bottom: 12px; left: 12px; font-size: 12px; color: #9aa0a6;
+    background: rgba(0,0,0,0.35); padding: 5px 9px; border-radius: 6px;
+  }
+  #error {
+    position: absolute; top: 12px; right: 12px; background: #c0392b; color: #fff;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px; max-width: 60%; display: none;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
+  }
+}
+</script>
+<script>
+  // Surface fatal JS / ES-module load errors instead of failing to a black
+  // screen (e.g. a missing import or a syntax error in the module below).
+  window.addEventListener('error', function (e) {
+    var msg = (e.message || 'error') + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : '');
+    var b = document.getElementById('error');
+    if (b) { b.style.display = 'block'; b.textContent = 'JS error: ' + msg; }
+    document.title = 'ERR: ' + msg;
+  });
+</script>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="badge">updating…</div>
+    <div id="error"></div>
+    <div id="hint">drag = orbit · scroll = zoom · click a sphere to pick a knot</div>
+  </div>
+  <div id="panel">
+    <header>
+      <h1>Local latent code editor</h1>
+      <p id="meta">loading…</p>
+    </header>
+    <div id="knotInfo"><span class="muted">No knot selected. Click a control-net sphere.</span></div>
+    <div id="tabs"></div>
+    <div id="pcaGlobal"></div>
+    <div id="sliders"></div>
+    <footer>
+      <button id="reset" class="secondary">Reset shape</button>
+      <span id="status" style="font-size:12px;color:#9aa0a6;"></span>
+    </footer>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const view = document.getElementById('view');
+const badge = document.getElementById('badge');
+const errorBox = document.getElementById('error');
+const slidersEl = document.getElementById('sliders');
+const tabsEl = document.getElementById('tabs');
+const pcaGlobalEl = document.getElementById('pcaGlobal');
+const knotInfo = document.getElementById('knotInfo');
+const metaEl = document.getElementById('meta');
+const statusEl = document.getElementById('status');
+
+// ---- three.js scene ----
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d21);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.001, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+view.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(1, 1.5, 1); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-1, -0.5, -1); scene.add(fill);
+
+let surfaceMesh = null;
+let knotMesh = null;          // InstancedMesh of spheres
+const COLOR_FREE = new THREE.Color(0x6f7681);
+const COLOR_SEL = new THREE.Color(0xffb030);
+
+let state = null;             // server state
+let selected = -1;
+let activeTab = 'latent';     // 'latent' | 'pca' (PCA tab only when enabled)
+let pcaBoundAbs = null;       // editable symmetric slider box for the PCA tab (GUI-only)
+let activeK = null;           // # of PCA components kept (project onto first activeK)
+let sceneCenter = new THREE.Vector3();
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h);   // updateStyle=true: canvas CSS size matches the
+                            // container regardless of devicePixelRatio
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ---- mesh building ----
+function buildSurface(meshData) {
+  if (surfaceMesh) { surfaceMesh.geometry.dispose(); scene.remove(surfaceMesh); surfaceMesh = null; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(meshData.vertices, 3));
+  g.setIndex(meshData.faces);
+  g.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x8fb4d6, metalness: 0.1, roughness: 0.7, side: THREE.DoubleSide,
+    flatShading: false,
+  });
+  surfaceMesh = new THREE.Mesh(g, mat);
+  scene.add(surfaceMesh);
+}
+
+function buildKnots(knots, bounds) {
+  if (knotMesh) { knotMesh.geometry.dispose(); knotMesh.material.dispose(); scene.remove(knotMesh); }
+  const diag = Math.hypot(
+    bounds[1][0] - bounds[0][0], bounds[1][1] - bounds[0][1], bounds[1][2] - bounds[0][2]
+  ) || 1;
+  const r = diag * 0.010;
+  const geo = new THREE.SphereGeometry(r, 16, 12);
+  // depthTest off + high renderOrder => knots stay visible even when they sit
+  // inside the (opaque) solid, so you can always see and target them.
+  const mat = new THREE.MeshBasicMaterial({ depthTest: false, transparent: true, opacity: 0.95 });
+  knotMesh = new THREE.InstancedMesh(geo, mat, knots.length);
+  knotMesh.renderOrder = 999;
+  const m = new THREE.Matrix4();
+  for (let i = 0; i < knots.length; i++) {
+    const p = knots[i].pos;
+    m.makeTranslation(p[0], p[1], p[2]);
+    knotMesh.setMatrixAt(i, m);
+    knotMesh.setColorAt(i, COLOR_FREE);
+  }
+  knotMesh.instanceMatrix.needsUpdate = true;
+  if (knotMesh.instanceColor) knotMesh.instanceColor.needsUpdate = true;
+  scene.add(knotMesh);
+}
+
+function frameScene(bounds) {
+  const min = new THREE.Vector3(...bounds[0]);
+  const max = new THREE.Vector3(...bounds[1]);
+  sceneCenter = min.clone().add(max).multiplyScalar(0.5);
+  const diag = max.clone().sub(min).length() || 1;
+  controls.target.copy(sceneCenter);
+  camera.position.copy(sceneCenter).add(new THREE.Vector3(diag, diag * 0.6, diag));
+  camera.near = diag / 1000; camera.far = diag * 1000;
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+// ---- selection / sliders ----
+function highlight(idx) {
+  if (!knotMesh) return;
+  if (selected >= 0) knotMesh.setColorAt(selected, COLOR_FREE);
+  selected = idx;
+  if (idx >= 0) knotMesh.setColorAt(idx, COLOR_SEL);
+  if (knotMesh.instanceColor) knotMesh.instanceColor.needsUpdate = true;
+}
+
+// Shared knot header + a single [name, value] slider row wired to a change handler.
+function knotHeader(idx, subtitle) {
+  const k = state.knots[idx];
+  const ijk = k.ijk && k.ijk.length ? ` (i,j,k = ${k.ijk.join(', ')})` : '';
+  knotInfo.innerHTML = `<b>Knot #${idx}</b>${ijk}<br><span class="muted">${subtitle}</span>`;
+}
+
+function sliderRow(name, value, lo, hi, onInput, sub) {
+  const row = document.createElement('div'); row.className = 'row';
+  const lab = document.createElement('label');
+  const nameEl = document.createElement('span'); nameEl.textContent = name;
+  if (sub) {
+    const s = document.createElement('span'); s.className = 'ev'; s.textContent = ' ' + sub;
+    nameEl.appendChild(s);
+  }
+  const val = document.createElement('span'); val.className = 'val'; val.textContent = value.toFixed(3);
+  lab.appendChild(nameEl); lab.appendChild(val);
+  const input = document.createElement('input');
+  input.type = 'range'; input.min = lo; input.max = hi; input.step = (hi - lo) / 1000; input.value = value;
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    val.textContent = v.toFixed(3);
+    onInput(v);
+  });
+  row.appendChild(lab); row.appendChild(input);
+  slidersEl.appendChild(row);
+}
+
+// Rebuild the panel's sliders for the selected knot according to the active tab.
+function buildSliders(idx) {
+  if (activeTab === 'pca' && state.pca && state.pca.enabled) buildPcaSliders(idx);
+  else buildLatentSliders(idx);
+}
+
+function buildLatentSliders(idx) {
+  const code = state.codes[idx];
+  knotHeader(idx, `${state.latent_dim} latent dimensions`);
+  slidersEl.innerHTML = '';
+  const b = state.code_bound;
+  // Allow a little head-room beyond the training bound so edits are visible.
+  const lo = -b * 1.5, hi = b * 1.5;
+  for (let d = 0; d < state.latent_dim; d++) {
+    sliderRow(`dim ${d}`, code[d], lo, hi, (v) => {
+      state.codes[idx][d] = v;
+      queue({
+        url: '/api/update',
+        body: { knot_idx: idx, dim: d, value: v },
+        apply: (data) => { if (data.coeff && state.coeffs) state.coeffs[idx] = data.coeff; },
+      });
+    });
+  }
+}
+
+// Perturbation statistics across ALL knots: the whitened deltas from the
+// reconstruction (sigma units), computed live from state.coeffs so the readout
+// tracks edits. 0 everywhere means the shape IS the reconstruction; nonzero shows
+// how far a loaded/edited design has moved. "over box" counts deltas beyond the
+// current +-box (those the optimizer would clamp in a real run).
+function pcaStats() {
+  let cmax = 0, sum = 0, n = 0, over = 0;
+  const b = pcaBoundAbs;
+  for (const row of (state.coeffs || [])) {
+    for (let c = 0; c < activeK; c++) {   // only the kept (active) coefficients
+      const a = Math.abs(row[c]);
+      if (a > cmax) cmax = a;
+      sum += a; n += 1;
+      if (a > b) over += 1;
+    }
+  }
+  return { cmax, cmean: n ? sum / n : 0, over, n, frac: n ? 100 * over / n : 0 };
+}
+
+function pcaStatHtml() {
+  const s = pcaStats();
+  return `Δ from reconstruction: |Δ|max <b>${s.cmax.toFixed(3)}</b> · ` +
+         `mean <b>${s.cmean.toFixed(3)}</b> · box &plusmn;${pcaBoundAbs.toFixed(2)} · ` +
+         `<span class="over">${s.over}/${s.n} over box (${s.frac.toFixed(1)}%)</span>`;
+}
+
+function refreshPcaStats() {
+  const el = document.getElementById('pcaStat');
+  if (el) el.innerHTML = pcaStatHtml();
+}
+
+// Per-knot component sliders (comp 0..activeK-1). The box range and active-k
+// live in the global PCA strip (buildPcaGlobal), not here.
+function buildPcaSliders(idx) {
+  const coeff = (state.coeffs && state.coeffs[idx]) || [];
+  const ev = state.pca.explained || [];
+  const k = state.pca.n_components;
+  knotHeader(idx, `${activeK} of ${k} PCA modes · Δ from reconstruction`);
+  slidersEl.innerHTML = '';
+  // Head-room beyond the box so coeffs already outside it stay grabbable.
+  const lo = -pcaBoundAbs * 1.3, hi = pcaBoundAbs * 1.3;
+  for (let c = 0; c < activeK; c++) {
+    const cur = coeff[c] !== undefined ? coeff[c] : 0;
+    const sub = ev[c] !== undefined ? `${(ev[c] * 100).toFixed(ev[c] >= 0.1 ? 0 : 1)}%` : '';
+    sliderRow(`comp ${c}`, cur, lo, hi, (v) => {
+      if (state.coeffs && state.coeffs[idx]) state.coeffs[idx][c] = v;
+      queue({
+        url: '/api/update_coeff',
+        body: { knot_idx: idx, comp: c, value: v },
+        apply: (data) => {
+          if (data.code) state.codes[idx] = data.code;
+          if (data.coeff && state.coeffs) state.coeffs[idx] = data.coeff;
+          refreshPcaStats();
+        },
+      });
+    }, sub);
+  }
+}
+
+// Global PCA controls, shown on the PCA tab regardless of knot selection: the
+// slider box (perturbation range), active-k projection, and the live delta
+// diagnostic. All of these act across ALL knots, so they sit outside the per-knot list.
+function buildPcaGlobal() {
+  if (!(state.pca && state.pca.enabled)) return;
+  const k = state.pca.n_components;
+  const totVar = (state.pca.explained || []).reduce((a, b) => a + b, 0);
+  pcaGlobalEl.innerHTML = '';
+
+  const h = document.createElement('h2');
+  h.textContent = `PCA basis · ${k} comps · ${(totVar * 100).toFixed(0)}% var`;
+  pcaGlobalEl.appendChild(h);
+
+  // box +- : the per-mode perturbation range for the sliders (defaults to the config's
+  // pca.bounds). Purely a GUI drag range -- the reconstruction sits at 0 and is always
+  // inside it, so there is nothing to "fit" here.
+  const line = document.createElement('div'); line.className = 'line';
+  const lab = document.createElement('label'); lab.textContent = 'box ± (σ)';
+  const box = document.createElement('input');
+  box.type = 'number'; box.step = '0.1'; box.min = '0.1'; box.value = pcaBoundAbs;
+  box.title = 'Slider range for each mode, in sigma of perturbation from the reconstruction';
+  box.addEventListener('change', () => {
+    const v = parseFloat(box.value);
+    if (v > 0) { pcaBoundAbs = v; if (selected >= 0) buildPcaSliders(selected); refreshPcaStats(); }
+  });
+  line.appendChild(lab); line.appendChild(box);
+  pcaGlobalEl.appendChild(line);
+
+  // Active-k: project every knot onto its first k components (zeros the tail).
+  const kline = document.createElement('div'); kline.className = 'line';
+  const klab = document.createElement('label'); klab.textContent = `keep k (of ${k})`;
+  const kin = document.createElement('input');
+  kin.type = 'number'; kin.step = '1'; kin.min = '1'; kin.max = k; kin.value = activeK;
+  kin.title = 'Move only the first k modes; reconstruction detail beyond k is kept fixed (all knots)';
+  kin.addEventListener('change', () => {
+    let kv = Math.round(parseFloat(kin.value));
+    kv = Math.max(1, Math.min(k, kv || k));
+    kin.value = kv;
+    if (kv === activeK) return;
+    queue({
+      url: '/api/pca_truncate', body: { k: kv },
+      apply: (data) => {
+        if (data.codes) state.codes = data.codes;
+        if (data.coeffs) state.coeffs = data.coeffs;
+        activeK = kv;
+        if (selected >= 0) buildPcaSliders(selected);
+        refreshPcaStats();
+      },
+    });
+  });
+  kline.appendChild(klab); kline.appendChild(kin);
+  pcaGlobalEl.appendChild(kline);
+
+  const stat = document.createElement('div'); stat.className = 'stat'; stat.id = 'pcaStat';
+  stat.innerHTML = pcaStatHtml();
+  pcaGlobalEl.appendChild(stat);
+}
+
+function updatePcaGlobal() {
+  const show = state.pca && state.pca.enabled && activeTab === 'pca';
+  pcaGlobalEl.style.display = show ? 'block' : 'none';
+}
+
+// Two tabs (Latent / PCA), shown only when the run uses PCA latent reduction.
+function setupTabs() {
+  if (!(state.pca && state.pca.enabled)) return;
+  // Start the slider box from the config's pca.bounds (symmetric magnitude).
+  pcaBoundAbs = Math.max(Math.abs(state.pca.bounds[0]), Math.abs(state.pca.bounds[1])) || 2.5;
+  activeK = state.pca.n_components;
+  tabsEl.style.display = 'flex';
+  tabsEl.innerHTML = '';
+  [['latent', 'Latent'], ['pca', 'PCA']].forEach(([key, label]) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.classList.toggle('active', key === activeTab);
+    btn.addEventListener('click', () => {
+      activeTab = key;
+      [...tabsEl.children].forEach((c) => c.classList.toggle('active', c === btn));
+      updatePcaGlobal();
+      if (selected >= 0) buildSliders(selected);
+    });
+    tabsEl.appendChild(btn);
+  });
+  buildPcaGlobal();
+  updatePcaGlobal();
+}
+
+// ---- networking (debounced + coalesced) ----
+// A job is { url, body, apply? }: the latest one wins, older ones are dropped so
+// a fast drag never queues a backlog of stale edits. `apply` runs on the response
+// to keep the other tab's slider values in sync (a coeff edit changes the raw
+// latents and vice versa).
+let inFlight = false;
+let pending = null;       // latest job
+let debounceTimer = null;
+
+function setBadge(on) { badge.classList.toggle('on', on); }
+function showError(msg) {
+  errorBox.textContent = msg; errorBox.style.display = 'block';
+  setTimeout(() => { errorBox.style.display = 'none'; }, 4000);
+}
+
+function queue(job) {
+  pending = job;
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(flush, 80);
+}
+
+async function flush() {
+  if (inFlight || !pending) return;
+  const job = pending; pending = null;
+  inFlight = true; setBadge(true);
+  try {
+    const res = await fetch(job.url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(job.body),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    buildSurface(data.mesh);
+    if (job.apply) job.apply(data);
+    statusEl.textContent = `${data.mesh.n_vertices} verts · ${data.mesh.n_faces} faces`;
+  } catch (e) {
+    showError('update failed: ' + e.message);
+  } finally {
+    inFlight = false; setBadge(false);
+    if (pending) flush();          // a newer edit arrived while we were busy
+  }
+}
+
+// ---- picking (screen-space nearest knot; occlusion-proof) ----
+// Tiny spheres buried inside the solid are unreliable to ray-pick, so we pick
+// the knot whose projected screen position is closest to the click.
+const _v = new THREE.Vector3();
+function pickKnot(clientX, clientY) {
+  if (!state || !state.knots) return -1;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const px = clientX - rect.left, py = clientY - rect.top;
+  let best = -1, bestD = 18;   // px tolerance
+  for (let i = 0; i < state.knots.length; i++) {
+    _v.set(state.knots[i].pos[0], state.knots[i].pos[1], state.knots[i].pos[2]).project(camera);
+    if (_v.z > 1) continue;    // behind the camera
+    const sx = (_v.x * 0.5 + 0.5) * rect.width;
+    const sy = (-_v.y * 0.5 + 0.5) * rect.height;
+    const d = Math.hypot(sx - px, sy - py);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+let downXY = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { downXY = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!downXY) return;
+  const moved = Math.hypot(e.clientX - downXY[0], e.clientY - downXY[1]);
+  downXY = null;
+  if (moved > 6) return;   // it was an orbit drag, not a click
+  const idx = pickKnot(e.clientX, e.clientY);
+  console.log('[latent-gui] click -> knot', idx);
+  if (idx < 0) return;
+  try {
+    highlight(idx);
+    buildSliders(idx);
+  } catch (err) {
+    console.error(err);
+    showError('could not open knot ' + idx + ': ' + err.message);
+  }
+});
+
+
+document.getElementById('reset').addEventListener('click', async () => {
+  setBadge(true);
+  try {
+    const res = await fetch('/api/reset', { method: 'POST' });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    buildSurface(data.mesh);
+    state.codes = data.codes;
+    if (data.coeffs) state.coeffs = data.coeffs;
+    if (state.pca && state.pca.enabled) { activeK = state.pca.n_components; buildPcaGlobal(); }
+    if (selected >= 0) buildSliders(selected);
+    statusEl.textContent = `${data.mesh.n_vertices} verts · ${data.mesh.n_faces} faces`;
+  } catch (e) {
+    showError('reset failed: ' + e.message);
+  } finally { setBadge(false); }
+});
+
+// ---- boot ----
+(async function init() {
+  resize();
+  try {
+    const res = await fetch('/api/state');
+    state = await res.json();
+    if (state.error) throw new Error(state.error);
+  } catch (e) {
+    metaEl.textContent = 'failed to load';
+    showError('could not load /api/state: ' + e.message);
+    return;
+  }
+  metaEl.textContent =
+    `${state.n_knots} knots · ${state.latent_dim}-dim codes · tiling [${state.tiling.join(', ')}]`;
+  buildSurface(state.mesh);
+  buildKnots(state.knots, state.bounds);
+  frameScene(state.bounds);
+  setupTabs();
+  statusEl.textContent = `${state.mesh.n_vertices} verts · ${state.mesh.n_faces} faces`;
+})();
+</script>
+</body>
+</html>

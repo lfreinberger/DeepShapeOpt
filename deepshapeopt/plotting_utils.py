@@ -128,8 +128,11 @@ def plot_optimization_history(
         for label, values in (extra_series or [])
     ]
 
-    # Normalize each constraint by its own initial value (limit included), so curves with
-    # different physical scales are comparable on the shared normalized axis.
+    # Normalize each constraint by its TARGET when one exists (curve = fraction of budget,
+    # limit line at 1.0); fall back to the initial value when there is no (or a zero) target.
+    # Normalizing by the initial is wrong for absolute-target drive-to-zero penalties: a clean
+    # start (e.g. W0 ~ 5e-5 vs target 1e-2) puts the normalized target line at ~200 and
+    # flattens every other curve on the shared axis.
     con_abs, con_norm = [], []
     for label, values, limit in constraints:
         if values is None:
@@ -137,9 +140,12 @@ def plot_optimization_history(
         v = np.asarray(to_numpy(values), dtype=float)
         lim = None if limit is None else float(to_numpy(limit))
         con_abs.append((label, v, lim))
-        finite = v[np.isfinite(v)]
-        c0 = finite[0] if finite.size and finite[0] != 0 else 1.0
-        con_norm.append((f"{label} / initial", v / c0, None if lim is None else lim / c0))
+        if lim is not None and np.isfinite(lim) and lim != 0:
+            con_norm.append((f"{label} / target", v / lim, 1.0))
+        else:
+            finite = v[np.isfinite(v)]
+            c0 = finite[0] if finite.size and finite[0] != 0 else 1.0
+            con_norm.append((f"{label} / initial", v / c0, None if lim is None else lim / c0))
 
     iterations = np.arange(len(history_obj))
 
