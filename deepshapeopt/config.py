@@ -104,6 +104,25 @@ def make_experiment_paths(
         heavy_data=heavy_data,
     )
 
+def make_setup_name(objective_name, constraint_enabled=False, constraint_name=None, constraint_cfg=None):
+    """Encode the objective/constraint setup into a run_subdir leaf name.
+
+    Two runs that differ only by objective/constraint then live side-by-side under the same
+    results dir without overwriting (e.g. ``obj_uniformityas1__con_lossesas2__rel_1.0``).
+    Feed the result to :func:`make_experiment_paths` as ``run_subdir``.
+    """
+    if not constraint_enabled:
+        return f"obj_{objective_name}__no_constraint"
+    target_mode = constraint_cfg.get("target_mode")
+    if target_mode == "relative_to_initial":
+        target_txt = f"rel_{constraint_cfg.get('target_factor')}"
+    elif target_mode == "absolute":
+        target_txt = f"abs_{constraint_cfg.get('target_value')}"
+    else:
+        target_txt = "target_unknown"
+    return f"obj_{objective_name}__con_{constraint_name}__{target_txt}"
+
+
 def ensure_experiment_dirs(paths: ExperimentPaths) -> None:
     for p in (paths.results, paths.reconstruction, paths.optimization):
         p.mkdir(parents=True, exist_ok=True)
