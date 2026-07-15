@@ -67,12 +67,46 @@ def outlet_strip_classifier(
     Returns a callable mapping face centroids [N, 3] (physical) to a bool
     mask of faces inside the interior region.
     """
+    triangles = outlet_cap_triangles(mesh_orig, plane_axis, plane_value, plane_tol)
+    return strip_classifier_from_triangles(
+        triangles, outlet_interior_cfg, debug_dir=debug_dir
+    )
+
+
+def strip_classifier_from_triangles(
+    triangles: np.ndarray,
+    outlet_interior_cfg: dict,
+    debug_dir: Path | None = None,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """As :func:`outlet_strip_classifier`, but from pre-selected cap
+    triangles [T, 3, 3] (also used per plane for interior-cap sources)."""
     import shapely
 
+    interior_2d, origin, axis_u, axis_v = interior_region_2d(
+        triangles, outlet_interior_cfg, debug_dir=debug_dir
+    )
+    shapely.prepare(interior_2d)
+
+    def classify(centroids: np.ndarray) -> np.ndarray:
+        centroids = np.asarray(centroids, dtype=np.float64).reshape(-1, 3)
+        uv = _project_to_plane(centroids, origin, axis_u, axis_v)
+        return shapely.contains_xy(interior_2d, uv[:, 0], uv[:, 1])
+
+    return classify
+
+
+def interior_region_2d(
+    triangles: np.ndarray,
+    outlet_interior_cfg: dict,
+    debug_dir: Path | None = None,
+):
+    """2D interior region of a cap cross-section plus its plane basis.
+
+    Returns ``(interior_2d, origin, axis_u, axis_v)``.
+    """
     cfg = outlet_interior_cfg
     method = str(cfg.get("method", "medial_axis"))
 
-    triangles = outlet_cap_triangles(mesh_orig, plane_axis, plane_value, plane_tol)
     loops_3d = _all_boundary_loops_from_triangles(triangles)
     if not loops_3d:
         raise ValueError("outlet_strip_classifier: no boundary loops on the outlet cap.")
@@ -148,11 +182,4 @@ def outlet_strip_classifier(
             "pipeline (expected 'medial_axis' or 'polygon_offset')."
         )
 
-    shapely.prepare(interior_2d)
-
-    def classify(centroids: np.ndarray) -> np.ndarray:
-        centroids = np.asarray(centroids, dtype=np.float64).reshape(-1, 3)
-        uv = _project_to_plane(centroids, origin, axis_u, axis_v)
-        return shapely.contains_xy(interior_2d, uv[:, 0], uv[:, 1])
-
-    return classify
+    return interior_2d, origin, axis_u, axis_v

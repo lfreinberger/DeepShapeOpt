@@ -46,22 +46,51 @@ PATCH_NAMES = ["inlet", "outlet", "sides", "dragObject"]
 _FACE_KEYS = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 
 
+_PATCH_TYPES = ("patch", "wall", "symmetry", "symmetryPlane")
+
+
+@dataclasses.dataclass
+class WallCarve:
+    """A named patch carved out of the wall faces by a face classifier.
+
+    ``classify(centroids [N, 3], corners [N, 4, 3] physical) -> bool mask``
+    runs over the current wall-code faces of every build (an interior cap
+    plane of an internal-flow geometry).  Carved patches are boundary type
+    "patch" (not wall) but their points participate in the snap.
+    """
+
+    name: str
+    classify: Callable[[np.ndarray, np.ndarray], np.ndarray]
+
+
 @dataclasses.dataclass
 class PatchPlan:
     """Config-driven boundary-patch layout.
 
     ``domain_faces`` maps each domain box face to a patch name (faces may
     share a name, e.g. all four lateral faces -> "sides").  Faces not on a
-    domain plane are walls; wall faces whose centroid lies inside
+    domain plane are walls; ``wall_carves`` reassign wall faces on interior
+    cap planes to named patches; wall faces whose centroid lies inside
     ``sensitivity_box`` move to the ``sensitivity_name`` patch (the design
     surface the adjoint differentiates).  ``face_subpatch`` carves a
     sub-patch out of ``subpatch_source`` by face centroid (the
     outletInterior of the extrusion die); it runs on the final per-build
-    face set, so membership follows refinement changes.
+    face set, so membership follows refinement changes.  ``subpatch_source``
+    may be a domain-face patch or a wall-carve patch.
 
     Patch order in the boundary file: domain-face patches (in
-    x/y/z-min/max order), then the sub-patch, then the wall-type patches
-    last and contiguous (``wall_face_slice`` spans all of them).
+    x/y/z-min/max order), then a domain-face-sourced sub-patch, then the
+    carve patches, then a carve-sourced sub-patch, then the wall-type
+    patches.  The tail from the first carve patch onward is the contiguous
+    *snapped* block (``snap_face_slice``); the wall-type patches stay last
+    and contiguous (``wall_face_slice``).
+
+    ``patch_types`` optionally overrides the OpenFOAM boundary type of
+    non-wall patches (e.g. ``{"symmetry": "symmetry"}`` for the cut plane
+    of a mirror-symmetric half model); wall-type patches are always "wall".
+
+    Patches listed in ``required_nonempty`` raise when they receive no
+    faces instead of being silently dropped by ``drop_empty``.
     """
 
     domain_faces: dict[str, str]
@@ -73,6 +102,9 @@ class PatchPlan:
     subpatch_source: str | None = None
     face_subpatch: Callable[[np.ndarray], np.ndarray] | None = None
     drop_empty: bool = False
+    wall_carves: tuple[WallCarve, ...] = ()
+    patch_types: dict[str, str] | None = None
+    required_nonempty: tuple[str, ...] = ()
 
     @staticmethod
     def default_external() -> "PatchPlan":
@@ -95,15 +127,49 @@ class PatchPlan:
             raise ValueError("subpatch_source is required with subpatch_name")
         if self.sensitivity_box is not None:
             self.sensitivity_box = np.asarray(self.sensitivity_box, dtype=np.float64)
+        reserved = set(self.domain_faces.values()) | set(self.wall_patch_names())
+        for carve in self.wall_carves:
+            if carve.name in reserved:
+                raise ValueError(
+                    f"wall-carve patch {carve.name!r} collides with a "
+                    "domain-face or wall-type patch name"
+                )
+        for name, ptype in (self.patch_types or {}).items():
+            if ptype not in _PATCH_TYPES:
+                raise ValueError(
+                    f"patch_types[{name!r}] = {ptype!r}; valid: {_PATCH_TYPES}"
+                )
+        if self.subpatch_source is not None:
+            known = set(self.domain_faces.values()) | self.carve_names()
+            if self.subpatch_source not in known:
+                raise ValueError(
+                    f"subpatch_source {self.subpatch_source!r} is neither a "
+                    f"domain-face patch nor a carve patch (known: {sorted(known)})"
+                )
+
+    def carve_names(self) -> set[str]:
+        return {c.name for c in self.wall_carves}
+
+    def _subpatch_after_carves(self) -> bool:
+        return (
+            self.subpatch_name is not None
+            and self.subpatch_source in self.carve_names()
+        )
 
     def ordered_names(self) -> list[str]:
-        """Patch names in boundary-file order (wall-type patches last)."""
+        """Patch names in boundary-file order (snapped patches last, with
+        the wall-type patches at the very end)."""
         names: list[str] = []
         for key in _FACE_KEYS:
             nm = self.domain_faces[key]
             if nm not in names:
                 names.append(nm)
-        if self.subpatch_name is not None:
+        if self.subpatch_name is not None and not self._subpatch_after_carves():
+            names.append(self.subpatch_name)
+        for carve in self.wall_carves:
+            if carve.name not in names:
+                names.append(carve.name)
+        if self._subpatch_after_carves():
             names.append(self.subpatch_name)
         names.append(self.wall_name)
         if self.sensitivity_name is not None:
@@ -114,6 +180,19 @@ class PatchPlan:
         names = [self.wall_name]
         if self.sensitivity_name is not None:
             names.append(self.sensitivity_name)
+        return names
+
+    def snap_patch_names(self) -> list[str]:
+        """Patches whose points snap onto the SDF surface: the wall-type
+        patches plus interior-cap carve patches (and a carve-sourced
+        sub-patch) -- contiguous and last in the boundary file."""
+        names: list[str] = []
+        for carve in self.wall_carves:
+            if carve.name not in names:
+                names.append(carve.name)
+        if self._subpatch_after_carves():
+            names.append(self.subpatch_name)
+        names.extend(self.wall_patch_names())
         return names
 
 
@@ -136,6 +215,9 @@ class PolyMeshData:
     patches: list[PatchSpec]
     n_cells: int
     wall_patch_names: tuple[str, ...] = ("dragObject",)
+    # Patches whose points snap onto the SDF surface: wall-type patches plus
+    # interior-cap carve patches.  Empty -> same as wall_patch_names.
+    snap_patch_names: tuple[str, ...] = ()
 
     @property
     def n_internal_faces(self) -> int:
@@ -151,21 +233,35 @@ class PolyMeshData:
         p = self.patch_by_name(name)
         return slice(p.start, p.start + p.n_faces)
 
-    def wall_face_slice(self) -> slice:
-        """Single contiguous slice over all wall-type patches (they are
-        written last and adjacent in the boundary file)."""
-        present = [p for p in self.patches if p.name in self.wall_patch_names]
+    def _contiguous_slice(self, names: tuple[str, ...], what: str) -> slice:
+        present = [p for p in self.patches if p.name in names]
         if not present:
-            raise KeyError(f"No wall patches {self.wall_patch_names} in mesh")
+            raise KeyError(f"No {what} patches {names} in mesh")
         start = min(p.start for p in present)
         end = max(p.start + p.n_faces for p in present)
         if sum(p.n_faces for p in present) != end - start:
-            raise RuntimeError("Wall patches are not contiguous")
+            raise RuntimeError(f"{what} patches are not contiguous".capitalize())
         return slice(start, end)
+
+    def wall_face_slice(self) -> slice:
+        """Single contiguous slice over all wall-type patches (they are
+        written last and adjacent in the boundary file)."""
+        return self._contiguous_slice(self.wall_patch_names, "wall")
 
     def wall_point_ids(self) -> np.ndarray:
         """Sorted unique point ids over all wall-type patches."""
         return np.unique(self.faces[self.wall_face_slice()].ravel())
+
+    def snap_face_slice(self) -> slice:
+        """Single contiguous slice over all snapped patches (wall-type
+        patches plus interior-cap carve patches, adjacent at the end of
+        the boundary file)."""
+        names = self.snap_patch_names or self.wall_patch_names
+        return self._contiguous_slice(names, "snapped")
+
+    def snap_point_ids(self) -> np.ndarray:
+        """Sorted unique point ids over all snapped patches."""
+        return np.unique(self.faces[self.snap_face_slice()].ravel())
 
 
 def _classify_boundary(
@@ -297,10 +393,27 @@ def build_polymesh(
     neighbour_raw = np.concatenate(nbr_batches)
     patch_code = np.concatenate(patch_batches)
 
-    # --- centroid-based reassignment (sensitivity region, sub-patch) -------
-    if plan.sensitivity_name is not None or plan.subpatch_name is not None:
+    # --- centroid-based reassignment (carves, sensitivity region, sub-patch)
+    if (
+        plan.wall_carves
+        or plan.sensitivity_name is not None
+        or plan.subpatch_name is not None
+    ):
         centroids = lattice.point_coords(corners.mean(axis=1))
         eps = 0.25 * lattice.h_fine
+
+        # Interior-cap carves first: they take faces out of the wall set
+        # before the sensitivity-box test (cap planes are validated to lie
+        # outside the design domain, so the order is defensive only).
+        for carve in plan.wall_carves:
+            cand = np.nonzero(patch_code == wall_code)[0]
+            if len(cand) == 0:
+                break
+            corner_phys = lattice.point_coords(
+                corners[cand].reshape(-1, 3)
+            ).reshape(-1, 4, 3)
+            sel = np.asarray(carve.classify(centroids[cand], corner_phys), dtype=bool)
+            patch_code[cand[sel]] = name_code[carve.name]
 
         if plan.sensitivity_name is not None:
             box = plan.sensitivity_box
@@ -341,13 +454,22 @@ def build_polymesh(
     int_order = int_idx[np.lexsort((neighbour[int_idx], owner[int_idx]))]
 
     wall_names = set(plan.wall_patch_names())
+    type_overrides = plan.patch_types or {}
     patches: list[PatchSpec] = []
     boundary_order = []
     start = len(int_order)
     for code, name in enumerate(ordered_names):
         p_idx = np.nonzero(patch_code == code)[0]
-        if len(p_idx) == 0 and plan.drop_empty:
-            continue
+        if len(p_idx) == 0:
+            if name in plan.required_nonempty:
+                raise ValueError(
+                    f"Patch {name!r} received no faces but is required "
+                    "nonempty: check the cap plane value/tol, the domain "
+                    "alignment, and that the region behind the cap is "
+                    "reachable from the seed point."
+                )
+            if plan.drop_empty:
+                continue
         p_order = p_idx[np.lexsort((corner_packed[p_idx, 0], owner[p_idx]))]
         boundary_order.append(p_order)
         is_wall = name in wall_names
@@ -356,7 +478,7 @@ def build_polymesh(
                 name=name,
                 start=start,
                 n_faces=len(p_order),
-                type="wall" if is_wall else "patch",
+                type="wall" if is_wall else type_overrides.get(name, "patch"),
                 in_groups=plan.wall_groups if is_wall else (),
             )
         )
@@ -379,6 +501,7 @@ def build_polymesh(
         patches=patches,
         n_cells=n_cells,
         wall_patch_names=tuple(plan.wall_patch_names()),
+        snap_patch_names=tuple(plan.snap_patch_names()),
     )
     n_wall = data.wall_face_slice()
     logger.info(

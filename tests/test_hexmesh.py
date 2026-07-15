@@ -378,9 +378,12 @@ def make_pipeline(tmp_path, r: torch.Tensor) -> SdfHexMeshPipeline:
 
     model_setup = SimpleNamespace(
         design_domain=torch.tensor(DESIGN_DOMAIN, dtype=torch.float32),
-        norm_fn=lambda x: x,
-        scale=torch.tensor(1.0),
-        box_norm=torch.tensor(DESIGN_DOMAIN, dtype=torch.float32),
+        frame=SimpleNamespace(
+            physical_sdf=lambda lattice_struct, sign=1.0, device="cpu": PhysicalSDF(
+                lattice_struct, lambda x: x, DESIGN_DOMAIN, sign=sign, device=device
+            ),
+            box_norm=torch.tensor(DESIGN_DOMAIN, dtype=torch.float32),
+        ),
     )
     opt_cfg = {
         "sdf_hex": {

@@ -63,13 +63,26 @@ _DEFAULTS = {
     "flow": "external",
     "geometry_stl": None,  # path; None -> model_setup.mesh_orig
     "fluid_side": "outside",  # "inside" for channels
+    # Cap planes of the geometry (inlet/outlet cross-sections). Legacy single
+    # axis: both min/max planes along cap_axis are treated as (domain-face)
+    # caps. Explicit list: "caps": [{"axis","value","patch",("tol")}...] --
+    # planes on domain faces are dropped from the wall SDF, interior planes
+    # seal the channel and their faces are carved into the named patch (see
+    # deepshapeopt.hexmesh.caps). cap_tol is the default per-cap pickup tol.
     "cap_axis": "x",  # axis of the geometry's inlet/outlet cap planes
     "cap_tol": 1e-4,
+    "caps": None,
     "seed_point": None,  # fluid point in the static region (required internal)
     "sign_probe_expect": None,  # None -> "solid" external / "fluid" internal
     # Boundary layout: domain faces -> patch names, plus the wall and the
     # design-surface (sensitivity) patch names.  None -> drag default.
+    # When the block IS given, unspecified domain faces default to "sides"
+    # (never inlet/outlet).
     "patches": None,
+    # Optional OpenFOAM boundary-type overrides for non-wall patches, e.g.
+    # {"symmetry": "symmetry"} for the cut plane of a mirror-symmetric half
+    # model (the geometry may then protrude through that face).
+    "patch_types": None,
     "refinement_regions": [],
     "band_max_level": None,  # design-surface band cap (default: max_level)
     "static_max_level": None,  # default: max_level
@@ -162,13 +175,13 @@ class HexMeshResult:
     stats: dict
 
     def patch_tris_local(self, name: str) -> torch.Tensor:
-        """Fan-triangulated faces of one wall-type patch, with indices local
+        """Fan-triangulated faces of one snapped patch, with indices local
         to ``surface_point_ids`` (e.g. the sensitivity_region subset for
         penalties that must only see the design surface)."""
         faces = self.mesh.faces[self.mesh.patch_face_slice(name)]
         local = np.searchsorted(self.surface_point_ids, faces)
         if np.any(self.surface_point_ids[local] != faces):
-            raise ValueError(f"Patch {name!r} is not a wall-type patch")
+            raise ValueError(f"Patch {name!r} is not a snapped patch")
         tris = np.concatenate([local[:, [0, 1, 2]], local[:, [0, 2, 3]]], axis=0)
         return torch.as_tensor(tris, dtype=torch.long)
 
@@ -187,6 +200,12 @@ class SdfHexMeshPipeline:
                 "constructing the pipeline."
             )
         self.cfg = {**_DEFAULTS, **raw_cfg}
+        if self.cfg["caps"] is not None and "cap_axis" in raw_cfg:
+            raise ValueError(
+                "sdf_hex.caps and an explicit sdf_hex.cap_axis are mutually "
+                "exclusive; remove cap_axis (cap_tol may stay as the default "
+                "per-cap pickup tolerance)."
+            )
         self.results_dir = Path(results_dir)
         self.device = model_setup.design_domain.device
 
@@ -220,6 +239,7 @@ class SdfHexMeshPipeline:
             },
         )
         self.geom = None
+        self.caps = None  # list[CapSpec] when sdf_hex.caps is configured
         self.patch_plan: PatchPlan | None = None
         if self.flow == "internal":
             if self.cfg["seed_point"] is None:
@@ -246,6 +266,7 @@ class SdfHexMeshPipeline:
     # ------------------------------------------------------------------
 
     def _make_geometry(self):
+        from .caps import CONSTRAINT_TYPES, resolve_caps, validate_geometry_containment
         from .trimesh_sdf import TriMeshSDF
 
         path = self.cfg["geometry_stl"]
@@ -260,58 +281,157 @@ class SdfHexMeshPipeline:
                     "sdf_hex.geometry_stl is not set and model_setup has no "
                     "mesh_orig to take the fixed geometry from"
                 )
-        return TriMeshSDF.from_trimesh(
-            mesh,
-            cap_axis=_AXES[str(self.cfg["cap_axis"])],
-            cap_tol=float(self.cfg["cap_tol"]),
-            fluid_side=str(self.cfg["fluid_side"]),
-            device=self.device,
+
+        if self.cfg["caps"] is None:
+            # Legacy single-axis mode (bit-identical wall set -> stable
+            # static caches for existing configs).
+            return TriMeshSDF.from_trimesh(
+                mesh,
+                cap_axis=_AXES[str(self.cfg["cap_axis"])],
+                cap_tol=float(self.cfg["cap_tol"]),
+                fluid_side=str(self.cfg["fluid_side"]),
+                device=self.device,
+            )
+
+        domain = np.asarray(self.cfg["domain"], dtype=np.float64)
+        dd = self.model_setup.design_domain.detach().cpu().numpy().astype(np.float64)
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        self.caps = resolve_caps(
+            self.cfg["caps"],
+            domain,
+            dd,
+            vertices,
+            faces,
+            default_tol=float(self.cfg["cap_tol"]),
+            interface_width=self.lattice.h0 / (1 << self.interface_level),
         )
 
+        # The geometry may only be truncated by the domain box through
+        # domain-face caps and symmetry-typed faces; any other protrusion
+        # would silently open the fluid into a "sides" boundary.
+        exempt = {
+            (cap.axis, cap.domain_side)
+            for cap in self.caps
+            if cap.treatment == "drop"
+        }
+        ptypes = self.cfg["patch_types"] or {}
+        for key, name in self._domain_faces_map().items():
+            if ptypes.get(name) in CONSTRAINT_TYPES:
+                exempt.add((_AXES[key[0]], 0 if key.endswith("min") else 1))
+        validate_geometry_containment(vertices, domain, exempt)
+
+        drop_planes = [
+            (cap.axis, cap.value, cap.tol)
+            for cap in self.caps
+            if cap.treatment == "drop"
+        ]
+        return TriMeshSDF.from_trimesh(
+            mesh,
+            fluid_side=str(self.cfg["fluid_side"]),
+            device=self.device,
+            drop_planes=drop_planes,
+        )
+
+    def _domain_faces_map(self) -> dict[str, str]:
+        """Resolved domain-face -> patch-name map (without cap fill-ins).
+
+        With no ``patches`` block the full drag default applies; with a
+        block present, unspecified faces default to "sides" only.
+        """
+        face_keys = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+        pcfg = dict(self.cfg["patches"] or {})
+        pcfg.pop("wall", None)
+        pcfg.pop("sensitivity", None)
+        unknown = set(pcfg) - set(face_keys)
+        if unknown:
+            raise ValueError(f"sdf_hex.patches has unknown keys: {sorted(unknown)}")
+        if self.cfg["patches"] is None:
+            domain_faces = {
+                "x_min": "inlet", "x_max": "outlet",
+                "y_min": "sides", "y_max": "sides",
+                "z_min": "sides", "z_max": "sides",
+            }
+        else:
+            domain_faces = {k: "sides" for k in face_keys}
+        domain_faces.update(pcfg)
+        return domain_faces
+
     def _make_patch_plan(self) -> PatchPlan:
+        from .polymesh import WallCarve
+
         pcfg = dict(self.cfg["patches"] or {})
         wall_name = pcfg.pop("wall", "walls")
         sens_name = pcfg.pop("sensitivity", None)
-        domain_faces = {
-            "x_min": "inlet", "x_max": "outlet",
-            "y_min": "sides", "y_max": "sides",
-            "z_min": "sides", "z_max": "sides",
-        }
-        unknown = set(pcfg) - set(domain_faces)
-        if unknown:
-            raise ValueError(f"sdf_hex.patches has unknown keys: {sorted(unknown)}")
-        domain_faces.update(pcfg)
+        explicit_faces = dict(pcfg)  # user-written face entries only
+        domain_faces = self._domain_faces_map()
+        domain = np.asarray(self.cfg["domain"], dtype=np.float64)
+
+        # Patches that must exist in the final mesh: every cap patch and
+        # every face patch the user wrote explicitly (except "sides").
+        required = {v for v in explicit_faces.values() if v != "sides"}
+
+        wall_carves: list[WallCarve] = []
+        keep_groups: dict[str, list] = {}
+        if self.caps:
+            from .caps import cap_carve_classifier
+
+            for cap in self.caps:
+                required.add(cap.patch)
+                if cap.treatment == "drop":
+                    key = f"{'xyz'[cap.axis]}_{'min' if cap.domain_side == 0 else 'max'}"
+                    if key in explicit_faces and explicit_faces[key] != cap.patch:
+                        raise ValueError(
+                            f"Cap {cap.patch!r} lies on domain face {key} but "
+                            f"sdf_hex.patches maps that face to "
+                            f"{explicit_faces[key]!r}; remove the entry or make "
+                            "the names agree."
+                        )
+                    domain_faces[key] = cap.patch
+                else:
+                    keep_groups.setdefault(cap.patch, []).append(cap)
+            for name, group in keep_groups.items():
+                wall_carves.append(
+                    WallCarve(name, cap_carve_classifier(group, self.lattice.h_fine))
+                )
 
         subpatch_name = None
         subpatch_source = None
         face_subpatch = None
         oi = self.cfg["outlet_interior"]
         if oi and oi.get("enabled", True):
-            from .patches import outlet_strip_classifier
-
             subpatch_source = str(oi.get("source_patch", "outlet"))
             subpatch_name = str(oi.get("patch_name", "outletInterior"))
-            domain = np.asarray(self.cfg["domain"], dtype=np.float64)
-            source_faces = [k for k, v in domain_faces.items() if v == subpatch_source]
-            if len(source_faces) != 1:
-                raise ValueError(
-                    f"outlet_interior.source_patch {subpatch_source!r} must map "
-                    f"to exactly one domain face, found {source_faces}"
-                )
-            axis = _AXES[source_faces[0][0]]
-            side = 0 if source_faces[0].endswith("min") else 1
             debug_dir = (
                 self.results_dir / "debug_outlet_interior"
                 if oi.get("debug") else None
             )
-            face_subpatch = outlet_strip_classifier(
-                self.geom,
-                plane_axis=axis,
-                plane_value=float(domain[side, axis]),
-                plane_tol=float(self.cfg["cap_tol"]),
-                outlet_interior_cfg=oi,
-                debug_dir=debug_dir,
-            )
+            source_faces = [k for k, v in domain_faces.items() if v == subpatch_source]
+            if len(source_faces) == 1:
+                from .patches import outlet_strip_classifier
+
+                axis = _AXES[source_faces[0][0]]
+                side = 0 if source_faces[0].endswith("min") else 1
+                face_subpatch = outlet_strip_classifier(
+                    self.geom,
+                    plane_axis=axis,
+                    plane_value=float(domain[side, axis]),
+                    plane_tol=float(self.cfg["cap_tol"]),
+                    outlet_interior_cfg=oi,
+                    debug_dir=debug_dir,
+                )
+            elif subpatch_source in keep_groups:
+                from .caps import cap_subpatch_classifier
+
+                face_subpatch = cap_subpatch_classifier(
+                    keep_groups[subpatch_source], oi, debug_dir=debug_dir
+                )
+            else:
+                raise ValueError(
+                    f"outlet_interior.source_patch {subpatch_source!r} must map "
+                    f"to exactly one domain face (found {source_faces}) or to "
+                    f"an interior-cap patch (found {sorted(keep_groups)})."
+                )
 
         dd = self.model_setup.design_domain.detach().cpu().numpy().astype(np.float64)
         return PatchPlan(
@@ -324,6 +444,9 @@ class SdfHexMeshPipeline:
             subpatch_source=subpatch_source,
             face_subpatch=face_subpatch,
             drop_empty=True,
+            wall_carves=tuple(wall_carves),
+            patch_types=self.cfg["patch_types"],
+            required_nonempty=tuple(sorted(required)),
         )
 
     def _validate_margins(self) -> None:
@@ -387,6 +510,8 @@ class SdfHexMeshPipeline:
                 self.cfg["static_band_max_level"],
                 self.cfg["static_refine_band_beta"],
             )
+            if self.cfg["caps"] is not None:
+                parts += (self.cfg["caps"],)
         key = hashlib.sha256(repr(parts).encode()).hexdigest()[:16]
         return self.results_dir / f"static_octree_{key}.npz"
 
@@ -512,7 +637,11 @@ class SdfHexMeshPipeline:
 
         from .lattice import unpack_keys
 
-        wall_ids = mesh.wall_point_ids()
+        # Snap set: wall-type patches plus interior-cap carve patches. Cap
+        # faces must snap (the kept cap triangles are in the wall SDF, so
+        # Newton lands exactly on the plane); without it they would stay on
+        # the castellation staircase up to half a local cell off the plane.
+        wall_ids = mesh.snap_point_ids()
         point_keys_xyz = unpack_keys(mesh.point_keys)
         points0 = self.lattice.point_coords(point_keys_xyz)
         x0 = points0[wall_ids]
@@ -522,6 +651,29 @@ class SdfHexMeshPipeline:
         # internal flows) may only slide within that plane.
         wall_keys = point_keys_xyz[wall_ids]
         lock_axes = (wall_keys == 0) | (wall_keys == self.lattice.fine_dims[None, :])
+
+        # Interior-cap points: pre-place them on the exact cap plane and lock
+        # that axis, so the snap only slides them in-plane (the analogue of
+        # the domain-plane treatment above).  Newton alone cannot finish the
+        # job at the rim: a staircase point already on the channel wall has
+        # phi = 0 and would never reach the wall/cap edge.
+        if self.caps:
+            for cap in self.caps:
+                if cap.treatment != "keep":
+                    continue
+                try:
+                    sl = mesh.patch_face_slice(cap.patch)
+                except KeyError:
+                    continue
+                pts = np.unique(mesh.faces[sl].ravel())
+                local = np.searchsorted(wall_ids, pts)
+                # Same patch name may merge several planes (possibly on
+                # different axes); pin each point to its own plane only.
+                near = np.abs(x0[local, cap.axis] - cap.value) <= 0.75 * h_local[local]
+                li = local[near]
+                x0[li, cap.axis] = cap.value
+                lock_axes[li, cap.axis] = True
+
         if not np.any(lock_axes):
             lock_axes = None
 
@@ -635,8 +787,8 @@ class SdfHexMeshPipeline:
         )
 
     def _wall_h_local(self, mesh: PolyMeshData, wall_ids: np.ndarray) -> np.ndarray:
-        """Per wall point: finest adjacent wall face size (physical)."""
-        wall_faces = mesh.faces[mesh.wall_face_slice()]
+        """Per snapped point: finest adjacent snapped face size (physical)."""
+        wall_faces = mesh.faces[mesh.snap_face_slice()]
         from .lattice import unpack_keys
 
         corners = unpack_keys(mesh.point_keys[wall_faces.ravel()]).reshape(-1, 4, 3)
@@ -657,8 +809,8 @@ class SdfHexMeshPipeline:
         return torch.as_tensor(tris, dtype=torch.long)
 
     def _wall_edges_local(self, mesh: PolyMeshData, wall_ids: np.ndarray) -> np.ndarray:
-        """Unique wall-surface edges with indices local to ``wall_ids``."""
-        wall_faces = mesh.faces[mesh.wall_face_slice()]
+        """Unique snapped-surface edges with indices local to ``wall_ids``."""
+        wall_faces = mesh.faces[mesh.snap_face_slice()]
         local = np.searchsorted(wall_ids, wall_faces)  # [Fw, 4]
         edges = np.concatenate(
             [local[:, [0, 1]], local[:, [1, 2]], local[:, [2, 3]], local[:, [3, 0]]],

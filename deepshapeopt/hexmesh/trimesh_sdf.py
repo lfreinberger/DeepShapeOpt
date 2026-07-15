@@ -75,26 +75,55 @@ class TriMeshSDF:
         cap_tol: float = 1e-4,
         fluid_side: str = "inside",
         device: str | torch.device = "cpu",
+        drop_planes: list[tuple[int, float, float]] | None = None,
     ) -> "TriMeshSDF":
         """Build from a ``trimesh.Trimesh``, dropping the cap triangles.
 
-        Caps are the triangles whose centroid lies within ``cap_tol`` of the
-        mesh's min/max plane along ``cap_axis`` (the inlet/outlet planes of
-        an extrusion channel).
+        Legacy single-axis mode (``drop_planes=None``): caps are the
+        triangles whose centroid lies within ``cap_tol`` of the mesh's
+        min/max plane along ``cap_axis`` (the inlet/outlet planes of an
+        extrusion channel).
+
+        Explicit mode: ``drop_planes`` is a list of ``(axis, value, tol)``
+        planes; a triangle is a cap iff its centroid lies within ``tol`` of
+        any plane.  Caps declared with keep-treatment (interior caps that
+        seal a channel flush) are simply not listed here, so they stay in
+        the wall set.
         """
         vertices = np.asarray(mesh.vertices, dtype=np.float64)
         faces = np.asarray(mesh.faces, dtype=np.int64)
         centroids = vertices[faces].mean(axis=1)
-        lo = vertices[:, cap_axis].min()
-        hi = vertices[:, cap_axis].max()
-        is_cap = (np.abs(centroids[:, cap_axis] - lo) < cap_tol) | (
-            np.abs(centroids[:, cap_axis] - hi) < cap_tol
-        )
+        if drop_planes is None:
+            lo = vertices[:, cap_axis].min()
+            hi = vertices[:, cap_axis].max()
+            is_cap = (np.abs(centroids[:, cap_axis] - lo) < cap_tol) | (
+                np.abs(centroids[:, cap_axis] - hi) < cap_tol
+            )
+            logger.info(
+                "TriMeshSDF: %d triangles (%d wall, %d cap along axis %d), fluid %s",
+                len(faces), len(faces) - int(is_cap.sum()), int(is_cap.sum()),
+                cap_axis, fluid_side,
+            )
+        else:
+            is_cap = np.zeros(len(faces), dtype=bool)
+            for axis, value, tol in drop_planes:
+                on_plane = np.abs(centroids[:, int(axis)] - float(value)) < float(tol)
+                if not np.any(on_plane):
+                    raise ValueError(
+                        f"No cap triangles found on axis {int(axis)} at "
+                        f"{float(value)} (tol {float(tol)})."
+                    )
+                logger.info(
+                    "TriMeshSDF: dropping %d cap triangles on axis %d at %.6g",
+                    int(on_plane.sum()), int(axis), float(value),
+                )
+                is_cap |= on_plane
+            logger.info(
+                "TriMeshSDF: %d triangles (%d wall, %d cap on %d plane(s)), fluid %s",
+                len(faces), len(faces) - int(is_cap.sum()), int(is_cap.sum()),
+                len(drop_planes), fluid_side,
+            )
         wall_faces = faces[~is_cap]
-        logger.info(
-            "TriMeshSDF: %d triangles (%d wall, %d cap along axis %d), fluid %s",
-            len(faces), len(wall_faces), int(is_cap.sum()), cap_axis, fluid_side,
-        )
         return TriMeshSDF(
             vertices, faces, wall_faces=wall_faces, fluid_side=fluid_side, device=device
         )

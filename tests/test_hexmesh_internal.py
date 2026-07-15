@@ -48,6 +48,14 @@ def make_tube() -> trimesh.Trimesh:
     return tube
 
 
+def make_tube_span(x0: float, x1: float) -> trimesh.Trimesh:
+    """Square channel spanning [x0, x1] in x (ends off the domain box make
+    interior caps)."""
+    tube = trimesh.creation.box(extents=[x1 - x0, 2 * HALF_WIDTH, 2 * HALF_WIDTH])
+    tube.apply_translation([0.5 * (x0 + x1), 0.0, 0.0])
+    return tube
+
+
 def make_insert_sdf(r: torch.Tensor) -> PhysicalSDF:
     """Square channel of half-width ``r`` with a bulge vanishing at the
     design-domain x faces; raw DeepSDF convention (negative inside the
@@ -183,17 +191,28 @@ def test_inner_castellation_internal_regions():
 # Full pipeline
 # ---------------------------------------------------------------------------
 
-def make_internal_pipeline(tmp_path, r: torch.Tensor, **cfg_overrides) -> SdfHexMeshPipeline:
+def make_internal_pipeline(
+    tmp_path,
+    r: torch.Tensor,
+    mesh: trimesh.Trimesh | None = None,
+    design_domain=None,
+    **cfg_overrides,
+) -> SdfHexMeshPipeline:
+    dd = DESIGN_DOMAIN if design_domain is None else design_domain
+
     def fn(x):
         bulge = 0.3 * torch.exp(-(((x[:, 0] + 2.25) / 1.5) ** 2))
         return torch.maximum(x[:, 1].abs(), x[:, 2].abs()) - (r + bulge)
 
     model_setup = SimpleNamespace(
-        design_domain=torch.tensor(DESIGN_DOMAIN, dtype=torch.float32),
-        norm_fn=lambda x: x,
-        scale=torch.tensor(1.0),
-        box_norm=torch.tensor(DESIGN_DOMAIN, dtype=torch.float32),
-        mesh_orig=make_tube(),
+        design_domain=torch.tensor(dd, dtype=torch.float32),
+        frame=SimpleNamespace(
+            physical_sdf=lambda lattice_struct, sign=1.0, device="cpu": PhysicalSDF(
+                lattice_struct, lambda x: x, dd, sign=sign, device=device
+            ),
+            box_norm=torch.tensor(dd, dtype=torch.float32),
+        ),
+        mesh_orig=make_tube() if mesh is None else mesh,
     )
     sdf_hex = {
         "flow": "internal",
@@ -395,3 +414,341 @@ def test_internal_pipeline_gradient_fd(tmp_path):
         (g_stl * res.surface_points).sum(), r, retain_graph=True, allow_unused=False
     )
     assert dJ_stl.item() == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Explicit caps: interior cap planes, carves, strict patches, validation
+# ---------------------------------------------------------------------------
+
+INTERIOR_CAPS = [
+    {"axis": "x", "value": -5.8, "patch": "outlet"},
+    {"axis": "x", "value": 50.0, "patch": "inlet"},
+]
+CAPS_PATCHES = {"wall": "walls", "sensitivity": "sensitivity_region"}
+
+
+def test_trimesh_sdf_drop_planes():
+    tube = make_tube()
+    legacy = TriMeshSDF.from_trimesh(tube, cap_axis=0, fluid_side="inside")
+    explicit = TriMeshSDF.from_trimesh(
+        tube, fluid_side="inside",
+        drop_planes=[(0, -6.0, 1e-4), (0, 50.0, 1e-4)],
+    )
+    # Equivalent drop set -> bit-identical wall faces and cache hash.
+    assert np.array_equal(legacy.wall_faces, explicit.wall_faces)
+    assert legacy.content_hash() == explicit.content_hash()
+
+    # Keeping a cap changes the hash and seals the channel there.
+    keep = TriMeshSDF.from_trimesh(
+        tube, fluid_side="inside", drop_planes=[(0, 50.0, 1e-4)]
+    )
+    assert keep.content_hash() != legacy.content_hash()
+    p = np.array([[-5.9, 0.0, 0.0]])
+    assert keep.phi_np(p)[0] == pytest.approx(0.1)
+    assert legacy.phi_np(p)[0] == pytest.approx(4.0)
+
+    with pytest.raises(ValueError, match="No cap triangles"):
+        TriMeshSDF.from_trimesh(tube, drop_planes=[(0, -5.0, 1e-4)])
+
+
+def test_interior_cap_carve_and_snap(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+    pipe = make_internal_pipeline(
+        tmp_path, r,
+        mesh=make_tube_span(-5.8, 50.0),
+        caps=INTERIOR_CAPS,
+        patches=CAPS_PATCHES,
+        outlet_interior=None,
+    )
+    res = pipe.build()
+
+    # x_max cap fills "inlet"; interior cap carves "outlet" before the
+    # wall-type patches; empty sides dropped.
+    names = [p.name for p in res.mesh.patches]
+    assert names == ["inlet", "outlet", "walls", "sensitivity_region"]
+    types = {p.name: p.type for p in res.mesh.patches}
+    assert types["outlet"] == "patch" and types["inlet"] == "patch"
+    assert types["walls"] == "wall"
+
+    # All outlet faces snapped exactly onto the interior cap plane, and the
+    # patch covers the full 8x8 cross-section.
+    sl = res.mesh.patch_face_slice("outlet")
+    out_faces = res.mesh.faces[sl]
+    pts = res.mesh.points[np.unique(out_faces.ravel())]
+    assert np.all(np.abs(pts[:, 0] - (-5.8)) < 1e-6)
+    fp = res.mesh.points[out_faces]
+    area = (
+        0.5 * np.linalg.norm(np.cross(fp[:, 1] - fp[:, 0], fp[:, 2] - fp[:, 0]), axis=1)
+        + 0.5 * np.linalg.norm(np.cross(fp[:, 2] - fp[:, 0], fp[:, 3] - fp[:, 0]), axis=1)
+    ).sum()
+    assert abs(area - 64.0) / 64.0 < 0.02
+
+    # Cap points are snapped (in surface_point_ids) but not wall-typed.
+    out_pts = np.unique(out_faces.ravel())
+    assert np.all(np.isin(out_pts, res.surface_point_ids))
+    pure_cap = np.setdiff1d(out_pts, res.mesh.wall_point_ids())
+    assert len(pure_cap) > 0
+
+    # Snapped mesh stays valid.
+    pyr_o, pyr_n = face_pyramid_volumes(res.mesh)
+    assert pyr_o.min() > 0 and pyr_n.min() > 0
+
+    # Cap points are STL-routed: exactly zero parameter gradient.
+    sel = np.isin(res.surface_point_ids, out_pts)
+    g = torch.randn_like(res.surface_points)
+    g[torch.as_tensor(~sel)] = 0.0
+    (dJ,) = torch.autograd.grad(
+        (g * res.surface_points).sum(), r, retain_graph=True
+    )
+    assert dJ.item() == 0.0
+
+    # patch_tris_local works for the carved (snapped, non-wall) patch.
+    tris = res.patch_tris_local("outlet")
+    assert len(tris) == 2 * (sl.stop - sl.start)
+
+
+def test_two_caps_merge_and_static_carve(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+    pipe = make_internal_pipeline(
+        tmp_path, r,
+        mesh=make_tube_span(-5.8, 49.3),
+        caps=[
+            {"axis": "x", "value": -5.8, "patch": "outlet"},
+            {"axis": "x", "value": 49.3, "patch": "outlet"},
+        ],
+        patches=CAPS_PATCHES,
+        outlet_interior=None,
+    )
+    res = pipe.build()
+
+    # Same-name caps merge into one patch; every domain-face patch is empty.
+    names = [p.name for p in res.mesh.patches]
+    assert names == ["outlet", "walls", "sensitivity_region"]
+
+    sl = res.mesh.patch_face_slice("outlet")
+    cx = res.mesh.points[res.mesh.faces[sl]].mean(axis=1)[:, 0]
+    near_lo = np.abs(cx - (-5.8)) < 0.3
+    near_hi = np.abs(cx - 49.3) < 0.3
+    assert np.all(near_lo | near_hi)
+    # Both planes are populated; the x=49.3 one lies in the static region.
+    assert near_lo.sum() > 0 and near_hi.sum() > 0
+    assert np.all(cx[near_hi] > MESH_BOX[1][0])
+
+    pts_hi = res.mesh.points[np.unique(res.mesh.faces[sl][near_hi].ravel())]
+    assert np.all(np.abs(pts_hi[:, 0] - 49.3) < 1e-6)
+
+
+def test_outlet_interior_on_cap_source(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+    kwargs = dict(
+        mesh=make_tube_span(-5.8, 50.0),
+        caps=INTERIOR_CAPS,
+        patches=CAPS_PATCHES,
+    )
+    oi = {"enabled": True, "method": "polygon_offset", "inset_distance": 1.0}
+    res_carved = make_internal_pipeline(
+        tmp_path / "a", r, outlet_interior=oi, **kwargs
+    ).build()
+    res_plain = make_internal_pipeline(
+        tmp_path / "b", r, outlet_interior=None, **kwargs
+    ).build()
+
+    names = [p.name for p in res_carved.mesh.patches]
+    assert names == ["inlet", "outlet", "outletInterior", "walls", "sensitivity_region"]
+
+    n_out = res_carved.mesh.patch_by_name("outlet").n_faces
+    n_int = res_carved.mesh.patch_by_name("outletInterior").n_faces
+    assert n_int > 0 and n_out > 0
+    assert n_out + n_int == res_plain.mesh.patch_by_name("outlet").n_faces
+
+    # Interior faces strictly inside the inset cross-section, on the plane.
+    sl = res_carved.mesh.patch_face_slice("outletInterior")
+    fp = res_carved.mesh.points[res_carved.mesh.faces[sl]]
+    c = fp.mean(axis=1)
+    assert np.all(np.abs(c[:, 1]) < HALF_WIDTH - 0.9)
+    assert np.all(np.abs(c[:, 2]) < HALF_WIDTH - 0.9)
+    assert np.all(np.abs(fp[..., 0] - (-5.8)) < 1e-6)
+
+
+def test_strict_patches_and_required(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+
+    # patches block present: unspecified faces default to "sides", never the
+    # drag inlet/outlet (the tube crosses x_max, so those faces get "sides").
+    pipe = make_internal_pipeline(
+        tmp_path / "a", r,
+        patches={"x_min": "outlet", "wall": "walls",
+                 "sensitivity": "sensitivity_region"},
+        outlet_interior=None,
+    )
+    res = pipe.build()
+    names = [p.name for p in res.mesh.patches]
+    assert "inlet" not in names
+    assert "sides" in names  # x_max faces of the tube
+    assert res.mesh.patch_by_name("sides").n_faces > 0
+
+    # An explicitly named face patch that receives no faces raises instead
+    # of being silently dropped.
+    pipe = make_internal_pipeline(
+        tmp_path / "b", r,
+        patches={"x_min": "outlet", "x_max": "inlet", "y_min": "bogusInlet",
+                 "wall": "walls", "sensitivity": "sensitivity_region"},
+        outlet_interior=None,
+    )
+    with pytest.raises(ValueError, match="received no faces"):
+        pipe.build()
+
+
+def test_cap_validation_errors(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+
+    # Wrong plane value: the error lists the planar clusters actually found.
+    with pytest.raises(ValueError, match=r"-5\.8"):
+        make_internal_pipeline(
+            tmp_path / "a", r,
+            mesh=make_tube_span(-5.8, 50.0),
+            caps=[{"axis": "x", "value": -5.0, "patch": "outlet"}],
+            patches=CAPS_PATCHES, outlet_interior=None,
+        )
+
+    # caps + explicit cap_axis are mutually exclusive.
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        make_internal_pipeline(
+            tmp_path / "b", r,
+            mesh=make_tube_span(-5.8, 50.0),
+            caps=INTERIOR_CAPS, cap_axis="x",
+            patches=CAPS_PATCHES, outlet_interior=None,
+        )
+
+    # Cap plane inside the design domain (differentiable region).
+    with pytest.raises(ValueError, match="design domain"):
+        make_internal_pipeline(
+            tmp_path / "d", r,
+            mesh=make_tube_span(-5.0, 50.0),
+            caps=[{"axis": "x", "value": -5.0, "patch": "outlet"},
+                  {"axis": "x", "value": 50.0, "patch": "inlet"}],
+            patches=CAPS_PATCHES, outlet_interior=None,
+        )
+
+    # Interior cap patch name colliding with a wall-type patch.
+    with pytest.raises(ValueError, match="collides"):
+        make_internal_pipeline(
+            tmp_path / "e", r,
+            mesh=make_tube_span(-5.8, 50.0),
+            caps=[{"axis": "x", "value": -5.8, "patch": "walls"},
+                  {"axis": "x", "value": 50.0, "patch": "inlet"}],
+            patches=CAPS_PATCHES, outlet_interior=None,
+        )
+
+    # Geometry protruding past the domain without an exempt face.
+    wide = trimesh.creation.box(extents=[56.0, 50.0, 2 * HALF_WIDTH])
+    wide.apply_translation([22.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="protrudes"):
+        make_internal_pipeline(
+            tmp_path / "f", r,
+            mesh=wide,
+            caps=[{"axis": "x", "value": -6.0, "patch": "outlet"},
+                  {"axis": "x", "value": 50.0, "patch": "inlet"}],
+            patches=CAPS_PATCHES, outlet_interior=None,
+        )
+
+
+# Symmetric half model: the z_min domain face cuts the geometry; declaring
+# its patch type as "symmetry" exempts the protrusion and types the patch.
+DOMAIN_SYM = [[-6.0, -21.0, 0.0], [50.0, 21.0, 21.0]]
+MESH_BOX_SYM = [[-6.0, -13.0, 0.0], [2.0, 13.0, 13.0]]
+DESIGN_DOMAIN_SYM = [[-5.5, -12.0, 0.0], [1.0, 12.0, 12.0]]
+
+
+def _sym_kwargs():
+    return dict(
+        mesh=make_tube(),
+        design_domain=DESIGN_DOMAIN_SYM,
+        domain=DOMAIN_SYM,
+        mesh_box=MESH_BOX_SYM,
+        caps=[{"axis": "x", "value": -6.0, "patch": "outlet"},
+              {"axis": "x", "value": 50.0, "patch": "inlet"}],
+        patches={"z_min": "symmetry", "wall": "walls",
+                 "sensitivity": "sensitivity_region"},
+        seed_point=[10.0, 0.0, 1.0],
+        sign_probe_point=[0.0, 0.0, 1.0],
+        outlet_interior=None,
+    )
+
+
+def test_symmetry_half_model(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+    pipe = make_internal_pipeline(
+        tmp_path, r, patch_types={"symmetry": "symmetry"}, **_sym_kwargs()
+    )
+    res = pipe.build()
+
+    names = {p.name: p for p in res.mesh.patches}
+    assert "symmetry" in names
+    assert names["symmetry"].type == "symmetry"
+    assert names["outlet"].type == "patch"
+
+    # Symmetry faces lie exactly on the cut plane; the fluid is the upper
+    # half of the channel only.
+    sl = res.mesh.patch_face_slice("symmetry")
+    pts = res.mesh.points[np.unique(res.mesh.faces[sl].ravel())]
+    assert np.all(pts[:, 2] == 0.0)
+    assert res.mesh.points[:, 2].min() >= 0.0
+
+    pyr_o, pyr_n = face_pyramid_volumes(res.mesh)
+    assert pyr_o.min() > 0 and pyr_n.min() > 0
+
+
+def test_symmetry_requires_patch_type(tmp_path):
+    r = torch.tensor(4.0, requires_grad=True)
+    with pytest.raises(ValueError, match="protrudes"):
+        make_internal_pipeline(tmp_path, r, **_sym_kwargs())
+
+
+def test_cap_carve_predicate():
+    from deepshapeopt.hexmesh.caps import CapSpec, cap_carve_classifier
+
+    h_fine = 0.25
+
+    def square_cap(axis, value, lo=0.0, hi=4.0):
+        other = [a for a in range(3) if a != axis]
+        p = np.zeros((4, 3))
+        p[:, axis] = value
+        p[:, other[0]] = [lo, hi, hi, lo]
+        p[:, other[1]] = [lo, lo, hi, hi]
+        tris = np.stack([p[[0, 1, 2]], p[[0, 2, 3]]])
+        return CapSpec(
+            axis=axis, value=value, patch="outlet", tol=1e-4,
+            treatment="keep", triangles=tris,
+        )
+
+    def quad(axis, offset, center_u, center_v, width, perpendicular=False):
+        """Corners [1, 4, 3] of a boundary quad near the cap plane."""
+        other = [a for a in range(3) if a != axis]
+        c = np.zeros((4, 3))
+        du = np.array([-0.5, 0.5, 0.5, -0.5]) * width
+        dv = np.array([-0.5, -0.5, 0.5, 0.5]) * width
+        if perpendicular:
+            # Varies along the cap axis instead of lying in the plane.
+            c[:, axis] = offset + du
+            c[:, other[0]] = center_u + dv
+            c[:, other[1]] = center_v
+        else:
+            c[:, axis] = offset
+            c[:, other[0]] = center_u + du
+            c[:, other[1]] = center_v + dv
+        return c[None]
+
+    for axis in (1, 2):
+        cap = square_cap(axis, 5.0)
+        classify = cap_carve_classifier([cap], h_fine)
+
+        cases = np.concatenate([
+            quad(axis, 5.2, 2.0, 2.0, 0.5),    # parallel, near, inside -> in
+            quad(axis, 5.5, 2.0, 2.0, 0.5),    # too far (0.5 > 0.375)
+            quad(axis, 5.2, 2.0, 2.0, 0.5, perpendicular=True),  # not coplanar
+            quad(axis, 5.2, 10.0, 10.0, 0.5),  # outside the footprint
+        ])
+        centroids = cases.mean(axis=1)
+        got = classify(centroids, cases).tolist()
+        assert got == [True, False, False, False], f"axis {axis}: {got}"
