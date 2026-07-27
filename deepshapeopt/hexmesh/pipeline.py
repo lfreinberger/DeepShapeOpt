@@ -724,11 +724,13 @@ class SdfHexMeshPipeline:
         if self.patch_plan is not None and self.patch_plan.subpatch_name is not None:
             n_sub = result.stats["patch_faces"].get(self.patch_plan.subpatch_name, 0)
             if n_sub == 0:
-                logger.warning(
-                    "Sub-patch %s received no faces; the outlet faces are "
-                    "probably coarser than the interior region (add a "
-                    "refinement_regions entry for the outlet plane).",
-                    self.patch_plan.subpatch_name,
+                raise ValueError(
+                    f"Sub-patch {self.patch_plan.subpatch_name!r} received no faces: "
+                    "the interior region selects no outlet face centroid. The region is "
+                    "probably narrower than one outlet cell (for method 'rectangle', widen "
+                    "the stripe to at least the outlet cell size, or offset it onto a cell "
+                    "column) or the outlet faces are coarser than the region (add a "
+                    "refinement_regions entry for the outlet plane)."
                 )
         logger.info("Hex mesh build: %s", result.stats)
 

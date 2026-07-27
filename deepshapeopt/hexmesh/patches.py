@@ -31,6 +31,50 @@ from deepshapeopt.mesh import (
 
 logger = logging.getLogger(__name__)
 
+# World basis vectors, indexed by axis (0=x, 1=y, 2=z).
+_WORLD_AXES = np.eye(3, dtype=float)
+
+
+def _axis_aligned_cap_basis(triangles: np.ndarray):
+    """World-aligned plane basis for an axis-aligned cap cross-section.
+
+    Unlike ``_make_plane_basis`` (whose in-plane orientation comes from the first
+    boundary edge and is therefore arbitrary), this pins ``(axis_u, axis_v)`` to the
+    two world axes that span the cap plane, so user-specified 2D coordinates map
+    directly to world in-plane coordinates: x-normal -> (y, z), y-normal -> (x, z),
+    z-normal -> (x, y). The origin is placed at zero in both in-plane world components
+    and at the mean of the cap in the normal component, so ``_project_to_plane`` returns
+    raw world in-plane coordinates.
+
+    Returns ``(origin, normal, axis_u, axis_v)`` to match the other basis helpers.
+    """
+    normal_acc = np.zeros(3, dtype=float)
+    for tri in triangles:
+        normal_acc += np.cross(tri[1] - tri[0], tri[2] - tri[0])
+    n_norm = np.linalg.norm(normal_acc)
+    if n_norm < 1e-14:
+        raise ValueError(
+            "rectangle outlet_interior: degenerate cap triangle set; cannot determine "
+            "plane normal."
+        )
+    normal = normal_acc / n_norm
+
+    k = int(np.argmax(np.abs(normal)))
+    if abs(normal[k]) < np.cos(np.deg2rad(30.0)):
+        raise ValueError(
+            f"rectangle outlet_interior: cap normal {tuple(float(v) for v in normal)} is "
+            "not aligned with a world axis. The rectangle method requires an axis-aligned "
+            "outlet cap so the 2D coordinates map to world in-plane axes."
+        )
+    i, j = (a for a in (0, 1, 2) if a != k)  # in-plane world axes, ascending
+
+    pts = triangles.reshape(-1, 3)
+    origin = np.zeros(3, dtype=float)
+    origin[k] = float(pts[:, k].mean())
+    axis_u = _WORLD_AXES[i]
+    axis_v = _WORLD_AXES[j]
+    return origin, normal, axis_u, axis_v
+
 
 def outlet_cap_triangles(
     mesh_orig, plane_axis: int, plane_value: float, plane_tol: float
@@ -111,7 +155,12 @@ def interior_region_2d(
     if not loops_3d:
         raise ValueError("outlet_strip_classifier: no boundary loops on the outlet cap.")
     all_loop_pts = np.vstack(loops_3d)
-    origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
+    # The rectangle method takes explicit world in-plane coordinates, so it needs a
+    # world-aligned frame; the shape-derived methods keep the arbitrary edge-derived frame.
+    if method == "rectangle":
+        origin, normal, axis_u, axis_v = _axis_aligned_cap_basis(triangles)
+    else:
+        origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
     loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
     poly_outlet = _build_shapely_multipolygon(loops_2d)
 
@@ -176,10 +225,52 @@ def interior_region_2d(
                 poly_outlet.difference(interior_2d),
                 origin, axis_u, axis_v, inset_distance=inset,
             )
+    elif method == "rectangle":
+        from shapely.geometry import box
+
+        rect = cfg.get("rectangle")
+        if not isinstance(rect, dict) or "min" not in rect or "max" not in rect:
+            raise ValueError(
+                "outlet_interior.method 'rectangle' requires a 'rectangle' block with "
+                "'min' and 'max' [u, v] corners (world in-plane coordinates)."
+            )
+        mn = np.asarray(rect["min"], dtype=float).reshape(-1)
+        mx = np.asarray(rect["max"], dtype=float).reshape(-1)
+        if mn.shape != (2,) or mx.shape != (2,):
+            raise ValueError(
+                "outlet_interior rectangle: 'min' and 'max' must each be a [u, v] pair."
+            )
+        if not np.all(mx > mn):
+            raise ValueError(
+                f"outlet_interior rectangle: 'max' {mx.tolist()} must be strictly greater "
+                f"than 'min' {mn.tolist()} in both components."
+            )
+        rect_poly = box(float(mn[0]), float(mn[1]), float(mx[0]), float(mx[1]))
+        interior_2d = poly_outlet.intersection(rect_poly)
+        if interior_2d.is_empty or interior_2d.area <= 0:
+            ob = poly_outlet.bounds  # (minu, minv, maxu, maxv)
+            raise ValueError(
+                "outlet_interior rectangle: empty intersection with the outlet. "
+                f"rectangle bbox min={mn.tolist()} max={mx.tolist()} vs outlet bbox "
+                f"min=[{ob[0]:.4g}, {ob[1]:.4g}] max=[{ob[2]:.4g}, {ob[3]:.4g}] "
+                "(check the rectangle coordinates against the outlet in-plane extent)."
+            )
+        logger.info(
+            "outletInterior strip (rectangle): outlet_area=%.6e, "
+            "rect_area=%.6e (%.1f%%)",
+            poly_outlet.area, interior_2d.area,
+            100.0 * interior_2d.area / poly_outlet.area,
+        )
+        if debug_dir is not None:
+            _write_polygon_offset_debug(
+                Path(debug_dir), loops_2d, poly_outlet, interior_2d,
+                poly_outlet.difference(interior_2d),
+                origin, axis_u, axis_v, inset_distance=float("nan"),
+            )
     else:
         raise ValueError(
             f"outlet_interior.method {method!r} not supported by the hex "
-            "pipeline (expected 'medial_axis' or 'polygon_offset')."
+            "pipeline (expected 'medial_axis', 'polygon_offset', or 'rectangle')."
         )
 
     return interior_2d, origin, axis_u, axis_v

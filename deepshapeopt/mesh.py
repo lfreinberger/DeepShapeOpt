@@ -428,6 +428,29 @@ def _unproject_from_plane(points_2d: np.ndarray, origin: np.ndarray, axis_u: np.
     return origin + points_2d[:, 0:1] * axis_u + points_2d[:, 1:2] * axis_v
 
 
+def _inplane_world_projector(origin: np.ndarray, axis_u: np.ndarray, axis_v: np.ndarray):
+    """Projector for rendering debug plots in the patch's own plane.
+
+    Returns ``(project, xlabel, ylabel)`` where ``project(coords_uv)`` lifts plane
+    ``(u, v)`` coordinates to 3D and returns the two world coordinates that span the
+    patch plane (the axes other than the plane normal, in ascending index order).
+
+    This keeps the plot in the patch's own axis plane whatever its orientation --
+    an x-normal outlet renders in world (y, z), a z-normal cap in world (x, y) --
+    instead of a hardcoded world (y, z) view that collapses for non-x-normal patches.
+    """
+    normal = np.cross(np.asarray(axis_u, dtype=float), np.asarray(axis_v, dtype=float))
+    k = int(np.argmax(np.abs(normal)))
+    i, j = (a for a in (0, 1, 2) if a != k)
+    names = "xyz"
+
+    def project(coords_uv: np.ndarray) -> np.ndarray:
+        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
+        return np.column_stack([pts3d[:, i], pts3d[:, j]])
+
+    return project, f"{names[i]} [mm]", f"{names[j]} [mm]"
+
+
 def _orient_triangle(tri: np.ndarray, normal: np.ndarray) -> np.ndarray:
     tri_normal = np.cross(tri[1] - tri[0], tri[2] - tri[0])
     if np.dot(tri_normal, normal) < 0:
@@ -762,7 +785,7 @@ def _render_polygon_offset_png(
     axis_v: np.ndarray,
     inset_distance: float,
 ) -> None:
-    """Render overview of the polygon-offset outlet split in world (y, z) with z up, y to the left."""
+    """Render overview of the outlet interior split in the patch's own axis plane."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -773,10 +796,7 @@ def _render_polygon_offset_png(
         logger.warning("matplotlib not available; skipping polygon_offset.png debug render.")
         return
 
-    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
-        """Lift 2D plane coords to 3D world, then drop x → return (-y, z) so that z is up, y points left."""
-        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
-        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
+    to_world_yz, xlabel, ylabel = _inplane_world_projector(origin, axis_u, axis_v)
 
     def polygon_to_patch(p, **kw):
         verts, codes = [], []
@@ -832,9 +852,14 @@ def _render_polygon_offset_png(
         seen.setdefault(l, h)
     ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=8)
     ax.set_aspect("equal")
-    ax.set_title(f"offset = {inset_distance:g} mm", fontsize=10)
-    ax.set_xlabel("y [mm]")
-    ax.set_ylabel("z [mm]")
+    title = (
+        f"offset = {inset_distance:g} mm"
+        if np.isfinite(inset_distance)
+        else "outlet interior split"
+    )
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1328,7 +1353,7 @@ def _render_medial_axis_pngs(
     axis_v: np.ndarray,
     strip_half_width: float,
 ) -> None:
-    """Render three PNGs (outlet-only, medial-axis-only, combined) in world (y, z), z up, y left."""
+    """Render three PNGs (outlet-only, medial-axis-only, combined) in the patch's own axis plane."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -1339,9 +1364,7 @@ def _render_medial_axis_pngs(
         logger.warning("matplotlib not available; skipping medial_axis PNG debug renders.")
         return
 
-    def to_world_yz(coords_uv: np.ndarray) -> np.ndarray:
-        pts3d = _unproject_from_plane(np.asarray(coords_uv, dtype=float), origin, axis_u, axis_v)
-        return np.column_stack([-pts3d[:, 1], pts3d[:, 2]])
+    to_world_yz, xlabel, ylabel = _inplane_world_projector(origin, axis_u, axis_v)
 
     def polygon_to_patch(p, **kw):
         verts, codes = [], []
@@ -1412,8 +1435,8 @@ def _render_medial_axis_pngs(
         ax.set_xlim(xmin - pad, xmax + pad)
         ax.set_ylim(ymin - pad, ymax + pad)
         ax.set_title(title, fontsize=10)
-        ax.set_xlabel("y [mm]")
-        ax.set_ylabel("z [mm]")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         fig.tight_layout()
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=150, bbox_inches="tight")
