@@ -1,0 +1,10 @@
+replotted 4 variants from /usr2/lfrei/ProjectsPhD/revision/DeepShapeOpt/revision_artifacts/grad_probe/grad_probe.json
+
+=== jump in grad s across tile interfaces vs mid-tile control ===
+(near-surface only, |s| < band; the kink is a sign flip of dT/dx, so it shows
+ up in the DIRECTION of grad s -- the surface normal -- not its magnitude)
+variant p   eik      rec.loss |g| jump if     ctl  angle if     ctl  ratio
+A       1   0.0      6.31e-04      0.0742  0.0772     6.21d   1.71d   3.64
+B       2   0.0      5.16e-04      0.0755  0.0781     3.85d   1.92d   2.01
+C       1   0.05     7.67e-03      0.1368  0.1483    17.35d   6.54d   2.65
+D       2   0.05     3.67e-03      0.1003  0.1037     5.12d   2.30d   2.22
