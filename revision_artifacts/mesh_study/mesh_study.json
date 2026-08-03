@@ -1,0 +1,44 @@
+[
+  {
+    "geometry": "cyl_init",
+    "level": 6,
+    "run_name": "meshstudy_cyl_init_L6",
+    "stl": "/storage/lfrei/Archive/DeepShapeOpt_archive_paper/experiments/optimization/drag_optimization_cube/results_cube_with_cylinders/stl_series/shape_0001.stl",
+    "patched": {
+      "features_level": 6,
+      "refinementSurfaces_level": 6,
+      "refinementRegions_distance": 6,
+      "maxLocalCells": 100000,
+      "maxGlobalCells": 2000000
+    },
+    "wall_clock_s": 228.74523854255676,
+    "drag": 37.1499,
+    "mesh_ok": true,
+    "cells": 275951,
+    "hexahedra": 245079,
+    "polyhedra": 28180,
+    "max_nonortho": 55.0638,
+    "avg_nonortho": 9.25111,
+    "max_skewness": 1.26595,
+    "max_aspect_ratio": 10.0443,
+    "nonortho_check_ok": true,
+    "openfoam_version": "2506",
+    "openfoam_build": "_615aae61d7-20250627",
+    "final_residuals": {
+      "Ux": 5.62749e-07,
+      "Uy": 1.75755e-06,
+      "Uz": 1.75622e-06,
+      "p": 9.98326e-06
+    },
+    "solvers": {
+      "op1": {
+        "converged": true,
+        "iterations": 676
+      },
+      "adjS1": {
+        "converged": false,
+        "iterations": 1000
+      }
+    }
+  }
+]

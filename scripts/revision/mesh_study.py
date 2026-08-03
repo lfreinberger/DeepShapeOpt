@@ -152,10 +152,16 @@ def parse_checkmesh(log: Path) -> dict:
     ):
         m = re.search(pat, text, re.M)
         out[key] = int(m.group(1)) if m else None
-    m = re.search(r"Max non-orthogonality = ([0-9.eE+-]+)", text)
+    # OpenFOAM writes "Mesh non-orthogonality Max: 55.06 average: 9.25", not
+    # "Max non-orthogonality = ...". Getting this wrong silently yields None.
+    m = re.search(r"Mesh non-orthogonality Max:\s*([0-9.eE+-]+)\s+average:\s*([0-9.eE+-]+)", text)
     out["max_nonortho"] = float(m.group(1)) if m else None
+    out["avg_nonortho"] = float(m.group(2)) if m else None
     m = re.search(r"Max skewness = ([0-9.eE+-]+)", text)
     out["max_skewness"] = float(m.group(1)) if m else None
+    m = re.search(r"Max aspect ratio = ([0-9.eE+-]+)", text)
+    out["max_aspect_ratio"] = float(m.group(1)) if m else None
+    out["nonortho_check_ok"] = "Non-orthogonality check OK" in text
     m = re.search(r"OPENFOAM=(\S+)", text)
     out["openfoam_version"] = m.group(1) if m else None
     m = re.search(r"Build\s*:\s*(\S+)", text)
@@ -244,7 +250,33 @@ def main() -> None:
                         default=REPO / "revision_artifacts" / "mesh_study")
     parser.add_argument("--keep-cases", action="store_true",
                         help="keep the runtime case directories (large)")
+    parser.add_argument("--reparse", action="store_true",
+                        help="re-derive results from logs already copied into --out-dir, "
+                             "without re-running OpenFOAM (drag is taken from the stored JSON)")
     args = parser.parse_args()
+
+    if args.reparse:
+        prev_path = args.out_dir / "mesh_study.json"
+        if not prev_path.is_file():
+            raise SystemExit(f"--reparse needs {prev_path}, which does not exist")
+        prev = json.loads(prev_path.read_text())
+        by_run = {r["run_name"]: r for r in prev}
+        results = []
+        for log_dir in sorted(p for p in args.out_dir.iterdir() if p.is_dir()):
+            old = by_run.get(log_dir.name, {})
+            rec = {k: old.get(k) for k in
+                   ("geometry", "level", "run_name", "stl", "patched", "wall_clock_s", "drag")}
+            rec["run_name"] = log_dir.name
+            rec.update(parse_checkmesh(log_dir / "log.checkMesh"))
+            rec.update(parse_solver_log(log_dir / "log.adjointOptimisationFoam"))
+            results.append(rec)
+        prev_path.write_text(json.dumps(results, indent=2))
+        for r in results:
+            print(f"{r['run_name']}: cells {r.get('cells')}  drag {r.get('drag')}  "
+                  f"max_nonortho {r.get('max_nonortho')}  avg {r.get('avg_nonortho')}  "
+                  f"max_skew {r.get('max_skewness')}  aspect {r.get('max_aspect_ratio')}")
+        print(f"\nreparsed {len(results)} run(s) -> {prev_path}")
+        return
 
     if not TEMPLATE.is_dir():
         raise SystemExit(f"missing foam_case template: {TEMPLATE}")
