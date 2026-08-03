@@ -1,0 +1,25 @@
+=== Table 3 (per-shape reconstruction error) ===
+shape         tiling         MAE_SDF   printed    MAE_geom   printed  gate
+Flow channel  1x8x8             5.73      5.73        5.31      5.31  OK
+Propeller     12x12x4           4.95      4.95        5.01      5.01  OK
+Rim           6x12x12           6.59      6.59        8.43      8.43  OK
+Dog           4x12x12           4.20      4.20        4.15      4.15  OK
+
+gate: 4/4 printed rows reproduced to printed precision
+
+=== Figure 9 (flow-channel sweep, MAE_SDF x 1e-4) ===
+tiling          cl08      cl16      cl32
+1x2x2          20.44     18.16     16.67
+1x4x4          17.05     12.20     11.15
+1x6x6          12.66      9.42      7.74
+1x8x8          10.96      8.07      6.99
+1x10x10         9.07      6.81      6.38
+1x12x12         8.00      6.23      5.48
+
+=== LaTeX (Table 3, with design-variable column) ===
+Flow channel & 32 & $1 \times 8 \times 8$ & 5.73 & 5.31 \\
+Propeller & 32 & $12 \times 12 \times 4$ & 4.95 & 5.01 \\
+Rim & 32 & $6 \times 12 \times 12$ & 6.59 & 8.43 \\
+Dog & 32 & $4 \times 12 \times 12$ & 4.20 & 4.15 \\
+
+wrote revision_artifacts/reconstruction_error_metrics.json

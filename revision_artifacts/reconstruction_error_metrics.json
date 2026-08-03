@@ -1,0 +1,415 @@
+{
+  "cutoff": 0.1,
+  "table3": [
+    {
+      "shape": "Flow channel",
+      "latent_dim": 32,
+      "tiling": "1x8x8",
+      "dir": "feed_channel/results/reconstruction/angusskanal_10x2_vereinfacht_tiling_1x8x8",
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0005725928144644868,
+        "median": 0.00043856847878487315,
+        "p05": 3.186978865414858e-05,
+        "p95": 0.0015131101717997788,
+        "max": 0.015008261427283287,
+        "rmse": 0.0007993792161570301
+      },
+      "mesh_vertex_error": {
+        "num_vertices": 51540,
+        "mae": 0.0005314822774380445,
+        "rmse": 0.0007323702448047698,
+        "median": 0.0004147774598095566,
+        "p95": 0.0013725212775170803,
+        "max": 0.006789143662899733,
+        "mean_signed_error": -7.05969359842129e-05
+      },
+      "printed_mae_sdf_e4": 5.73,
+      "printed_mae_geom_e4": 5.31,
+      "reproduces": true
+    },
+    {
+      "shape": "Propeller",
+      "latent_dim": 32,
+      "tiling": "12x12x4",
+      "dir": "ship_propeller/results/reconstruction/ship_propeller_tiling_12x12x4",
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0004950889967284493,
+        "median": 0.0003302744407847058,
+        "p05": 2.2922167408978568e-05,
+        "p95": 0.0015077390664373505,
+        "max": 0.015029114671051502,
+        "rmse": 0.0007832294156043106
+      },
+      "mesh_vertex_error": {
+        "num_vertices": 76718,
+        "mae": 0.0005012162146158516,
+        "rmse": 0.0008219211013056338,
+        "median": 0.0003238523204345256,
+        "p95": 0.0015542699256911874,
+        "max": 0.01644308865070343,
+        "mean_signed_error": -5.778568083769642e-05
+      },
+      "printed_mae_sdf_e4": 4.95,
+      "printed_mae_geom_e4": 5.01,
+      "reproduces": true
+    },
+    {
+      "shape": "Rim",
+      "latent_dim": 32,
+      "tiling": "6x12x12",
+      "dir": "rim/results/reconstruction/rim_tiling_6x12x12",
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0006588766014942267,
+        "median": 0.0004294922800909262,
+        "p05": 2.721411874517799e-05,
+        "p95": 0.002064675201017962,
+        "max": 0.015940899029374123,
+        "rmse": 0.0010147002304374722
+      },
+      "mesh_vertex_error": {
+        "num_vertices": 95816,
+        "mae": 0.0008434838964603841,
+        "rmse": 0.001365393167361617,
+        "median": 0.0004777802969329059,
+        "p95": 0.003106002463027835,
+        "max": 0.018664713948965073,
+        "mean_signed_error": -0.00023256814165506512
+      },
+      "printed_mae_sdf_e4": 6.59,
+      "printed_mae_geom_e4": 8.43,
+      "reproduces": true
+    },
+    {
+      "shape": "Dog",
+      "latent_dim": 32,
+      "tiling": "4x12x12",
+      "dir": "shiba/results/reconstruction/shiba_tiling_4x12x12",
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.00042037444138836097,
+        "median": 0.0003123748920188518,
+        "p05": 2.8451730031520128e-05,
+        "p95": 0.0011546294437721366,
+        "max": 0.01471730973571539,
+        "rmse": 0.000603255043939725
+      },
+      "mesh_vertex_error": {
+        "num_vertices": 65204,
+        "mae": 0.0004153175977990031,
+        "rmse": 0.0006032138480804861,
+        "median": 0.00030401028925552964,
+        "p95": 0.001153394696302712,
+        "max": 0.007914525456726551,
+        "mean_signed_error": -7.838290184736252e-05
+      },
+      "printed_mae_sdf_e4": 4.2,
+      "printed_mae_geom_e4": 4.15,
+      "reproduces": true
+    }
+  ],
+  "figure9": [
+    {
+      "tiling": "1x2x2",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0020440365427368077,
+        "median": 0.001171582933238824,
+        "p05": 8.175901821232401e-05,
+        "p95": 0.006852977554081005,
+        "max": 0.03698170325515093,
+        "rmse": 0.0032720115974946076
+      }
+    },
+    {
+      "tiling": "1x2x2",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0018159806845673325,
+        "median": 0.0010016048763645813,
+        "p05": 6.54966392175993e-05,
+        "p95": 0.006506797578185789,
+        "max": 0.02264613611623645,
+        "rmse": 0.0028195304661812214
+      }
+    },
+    {
+      "tiling": "1x2x2",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0016673688792587637,
+        "median": 0.001095854677259922,
+        "p05": 6.991289628786035e-05,
+        "p95": 0.005300513759721069,
+        "max": 0.02106440206989646,
+        "rmse": 0.0024381842329238936
+      }
+    },
+    {
+      "tiling": "1x4x4",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0017048458891980444,
+        "median": 0.001266318533453159,
+        "p05": 8.47111048642546e-05,
+        "p95": 0.004838576866313815,
+        "max": 0.020413058577105403,
+        "rmse": 0.002341779153214476
+      }
+    },
+    {
+      "tiling": "1x4x4",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0012198782328787002,
+        "median": 0.0008729943074285984,
+        "p05": 6.001251749694348e-05,
+        "p95": 0.0035688550036866214,
+        "max": 0.020512463990598917,
+        "rmse": 0.001743454493769183
+      }
+    },
+    {
+      "tiling": "1x4x4",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.00111493853003086,
+        "median": 0.000829782358778175,
+        "p05": 5.7973715775005986e-05,
+        "p95": 0.003145616113624782,
+        "max": 0.017949770495761186,
+        "rmse": 0.0015437516936105324
+      }
+    },
+    {
+      "tiling": "1x6x6",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0012656736780870942,
+        "median": 0.0009344463069282938,
+        "p05": 6.52982751489617e-05,
+        "p95": 0.0035595643581473255,
+        "max": 0.028300178237259388,
+        "rmse": 0.0018006908246193491
+      }
+    },
+    {
+      "tiling": "1x6x6",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0009421098605419252,
+        "median": 0.0007166190771386027,
+        "p05": 5.28622986166738e-05,
+        "p95": 0.0025554412277415395,
+        "max": 0.019756554742343724,
+        "rmse": 0.001319012541684792
+      }
+    },
+    {
+      "tiling": "1x6x6",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0007741703956749852,
+        "median": 0.0006130338661023416,
+        "p05": 4.5386449619400084e-05,
+        "p95": 0.0020260952413082116,
+        "max": 0.016207102686166763,
+        "rmse": 0.0010503910833164856
+      }
+    },
+    {
+      "tiling": "1x8x8",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.001095598079373258,
+        "median": 0.000790137051808415,
+        "p05": 5.601585962722311e-05,
+        "p95": 0.0031228130101226266,
+        "max": 0.019055376877076924,
+        "rmse": 0.0015570183128669065
+      }
+    },
+    {
+      "tiling": "1x8x8",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0008071996498454728,
+        "median": 0.000634389270999236,
+        "p05": 4.7636193630751226e-05,
+        "p95": 0.0021290528578901957,
+        "max": 0.01557924784719944,
+        "rmse": 0.0010892190180322096
+      }
+    },
+    {
+      "tiling": "1x8x8",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0006985768442768962,
+        "median": 0.0005433007900137454,
+        "p05": 3.951917897211388e-05,
+        "p95": 0.001860875193960964,
+        "max": 0.015412833541631699,
+        "rmse": 0.0009484065478939274
+      }
+    },
+    {
+      "tiling": "1x10x10",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0009073700605391081,
+        "median": 0.0007137864377000369,
+        "p05": 5.1965758848382394e-05,
+        "p95": 0.0023855517851188775,
+        "max": 0.015199840068817139,
+        "rmse": 0.0012235523435194637
+      }
+    },
+    {
+      "tiling": "1x10x10",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.000681183443681146,
+        "median": 0.0005373484909796389,
+        "p05": 3.8590302028751464e-05,
+        "p95": 0.0017985739468713289,
+        "max": 0.015785809606313705,
+        "rmse": 0.0009149419735057875
+      }
+    },
+    {
+      "tiling": "1x10x10",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0006384015586700275,
+        "median": 0.000527910649907426,
+        "p05": 3.8883159868419176e-05,
+        "p95": 0.0015728380571999876,
+        "max": 0.017472801730036736,
+        "rmse": 0.0008376818247453482
+      }
+    },
+    {
+      "tiling": "1x12x12",
+      "code_length": 8,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0008001572805702495,
+        "median": 0.0005947157983428042,
+        "p05": 4.209245307720267e-05,
+        "p95": 0.002231506136013193,
+        "max": 0.021958496421575546,
+        "rmse": 0.0011245713042499158
+      }
+    },
+    {
+      "tiling": "1x12x12",
+      "code_length": 16,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0006226920172308323,
+        "median": 0.00048151966620935127,
+        "p05": 3.3832598273875195e-05,
+        "p95": 0.0016602677256742002,
+        "max": 0.01709955558180809,
+        "rmse": 0.0008498427516320262
+      }
+    },
+    {
+      "tiling": "1x12x12",
+      "code_length": 32,
+      "sdf_sample_error": {
+        "cutoff": 0.1,
+        "num_total_samples": 1000000,
+        "num_near_surface_samples": 1000000,
+        "fraction_near_surface": 1.0,
+        "mae": 0.0005482620849489949,
+        "median": 0.00044057714239897905,
+        "p05": 3.203341620974243e-05,
+        "p95": 0.0013926686355262056,
+        "max": 0.017954137176275253,
+        "rmse": 0.0007389654525942759
+      }
+    }
+  ]
+}
