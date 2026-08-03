@@ -1,0 +1,68 @@
+[
+  {
+    "config": "experiments/drag_cube/config_latent_cube.json",
+    "device": "cuda",
+    "gpu": "NVIDIA RTX 4000 SFF Ada Generation",
+    "first_meshing_call_s": 20.6662618778646,
+    "reconstruction_iterations": 35,
+    "batch_size": 4096,
+    "init_volume": 0.9941573739051819,
+    "timings": {
+      "setup_model_and_domain_s": 0.41015467047691345,
+      "build_lattice_s": 0.002460455521941185,
+      "run_reconstruction_s": 168.08788228966296,
+      "initial_volume_mesh_s": 0.09364838525652885,
+      "initialization_total_s": 168.59414580091834
+    },
+    "online_loop": {
+      "run": "results_cube",
+      "n_updates": 30,
+      "total_elapsed_s": 5567.835027694702,
+      "mean_iter_s": 179.60707797542696
+    }
+  },
+  {
+    "config": "experiments/drag_cube/config_latent_cube_with_cylinders.json",
+    "device": "cuda",
+    "gpu": "NVIDIA RTX 4000 SFF Ada Generation",
+    "first_meshing_call_s": 0.09612282365560532,
+    "reconstruction_iterations": 50,
+    "batch_size": 4096,
+    "init_volume": 1.2282192707061768,
+    "timings": {
+      "setup_model_and_domain_s": 0.08806352876126766,
+      "build_lattice_s": 0.001220855861902237,
+      "run_reconstruction_s": 238.13137985393405,
+      "initial_volume_mesh_s": 0.09628608636558056,
+      "initialization_total_s": 238.3169503249228
+    },
+    "online_loop": {
+      "run": "results_cube_with_cylinders",
+      "n_updates": 33,
+      "total_elapsed_s": 6769.445889472961,
+      "mean_iter_s": 199.09994824493631
+    }
+  },
+  {
+    "config": "experiments/drag_cube/config_latent_cube_with_holes.json",
+    "device": "cuda",
+    "gpu": "NVIDIA RTX 4000 SFF Ada Generation",
+    "first_meshing_call_s": 0.019683891907334328,
+    "reconstruction_iterations": 30,
+    "batch_size": 4096,
+    "init_volume": 0.6940162777900696,
+    "timings": {
+      "setup_model_and_domain_s": 0.08891958743333817,
+      "build_lattice_s": 0.001087842509150505,
+      "run_reconstruction_s": 150.71034659445286,
+      "initial_volume_mesh_s": 0.01942078396677971,
+      "initialization_total_s": 150.81977480836213
+    },
+    "online_loop": {
+      "run": "results_cube_with_holes",
+      "n_updates": 21,
+      "total_elapsed_s": 3814.1089498996735,
+      "mean_iter_s": 173.36765600334513
+    }
+  }
+]
