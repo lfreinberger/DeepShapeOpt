@@ -1,0 +1,207 @@
+{
+  "archive": "/storage/lfrei/Archive/DeepShapeOpt-old-private-backup/experiments/optimization/drag_optimization_cube",
+  "convention": "row 1 is the initial design; n_updates = n_rows - 1",
+  "all_runs": [
+    {
+      "run": "results_cube",
+      "n_rows": 31,
+      "n_updates": 30,
+      "n_design": 864,
+      "reduction_final_pct": 14.49489330354301,
+      "reduction_best_pct": 14.49489330354301,
+      "best_update": 30,
+      "num_iter_cap": 60,
+      "hit_cap": false,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 5567.835027694702
+    },
+    {
+      "run": "results_cube_with_cylinders",
+      "n_rows": 34,
+      "n_updates": 33,
+      "n_design": 864,
+      "reduction_final_pct": 16.71471524822409,
+      "reduction_best_pct": 16.71471524822409,
+      "best_update": 33,
+      "num_iter_cap": 60,
+      "hit_cap": false,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 6769.445889472961
+    },
+    {
+      "run": "results_cube_with_holes",
+      "n_rows": 22,
+      "n_updates": 21,
+      "n_design": 864,
+      "reduction_final_pct": 25.375210639252245,
+      "reduction_best_pct": 25.39612302544643,
+      "best_update": 16,
+      "num_iter_cap": 60,
+      "hit_cap": false,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 3814.1089498996735
+    },
+    {
+      "run": "results_cube_with_holes_4x4x4",
+      "n_rows": 29,
+      "n_updates": 28,
+      "n_design": 4000,
+      "reduction_final_pct": 25.190846632011354,
+      "reduction_best_pct": 25.19539059944019,
+      "best_update": 26,
+      "num_iter_cap": 60,
+      "hit_cap": false,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 4265.34313082695
+    },
+    {
+      "run": "results_ffd_cube_with_cylinders_5x5x5",
+      "n_rows": 60,
+      "n_updates": 59,
+      "n_design": 375,
+      "reduction_final_pct": 14.200273827759634,
+      "reduction_best_pct": 14.219794222505389,
+      "best_update": 58,
+      "num_iter_cap": 60,
+      "hit_cap": true,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 11452.64483833313
+    },
+    {
+      "run": "results_ffd_cube_with_cylinders_7x7x7",
+      "n_rows": 33,
+      "n_updates": 32,
+      "n_design": 1029,
+      "reduction_final_pct": 15.689246160311242,
+      "reduction_best_pct": 15.76814108907536,
+      "best_update": 25,
+      "num_iter_cap": 60,
+      "hit_cap": false,
+      "conv_tol": 0.0002,
+      "conv_window": 3,
+      "elapsed_s": 6610.735720872879
+    }
+  ],
+  "manuscript_comparison": [
+    {
+      "label": "FFD (5x5x5 control points)",
+      "run": "results_ffd_cube_with_cylinders_5x5x5",
+      "printed": {
+        "n_design": 375,
+        "iterations": 46,
+        "reduction_pct": 14.2
+      },
+      "stored": {
+        "run": "results_ffd_cube_with_cylinders_5x5x5",
+        "n_rows": 60,
+        "n_updates": 59,
+        "n_design": 375,
+        "reduction_final_pct": 14.200273827759634,
+        "reduction_best_pct": 14.219794222505389,
+        "best_update": 58,
+        "num_iter_cap": 60,
+        "hit_cap": true,
+        "conv_tol": 0.0002,
+        "conv_window": 3,
+        "elapsed_s": 11452.64483833313
+      }
+    },
+    {
+      "label": "FFD (7x7x7 control points)",
+      "run": "results_ffd_cube_with_cylinders_7x7x7",
+      "printed": {
+        "n_design": 1029,
+        "iterations": 32,
+        "reduction_pct": 15.7
+      },
+      "stored": {
+        "run": "results_ffd_cube_with_cylinders_7x7x7",
+        "n_rows": 33,
+        "n_updates": 32,
+        "n_design": 1029,
+        "reduction_final_pct": 15.689246160311242,
+        "reduction_best_pct": 15.76814108907536,
+        "best_update": 25,
+        "num_iter_cap": 60,
+        "hit_cap": false,
+        "conv_tol": 0.0002,
+        "conv_window": 3,
+        "elapsed_s": 6610.735720872879
+      }
+    },
+    {
+      "label": "Proposed neural SDF method",
+      "run": "results_cube_with_cylinders",
+      "printed": {
+        "n_design": 864,
+        "iterations": 33,
+        "reduction_pct": 16.7
+      },
+      "stored": {
+        "run": "results_cube_with_cylinders",
+        "n_rows": 34,
+        "n_updates": 33,
+        "n_design": 864,
+        "reduction_final_pct": 16.71471524822409,
+        "reduction_best_pct": 16.71471524822409,
+        "best_update": 33,
+        "num_iter_cap": 60,
+        "hit_cap": false,
+        "conv_tol": 0.0002,
+        "conv_window": 3,
+        "elapsed_s": 6769.445889472961
+      }
+    },
+    {
+      "label": "Experiment 1 (cube, Fig. 14)",
+      "run": "results_cube",
+      "printed": {
+        "n_design": 864,
+        "iterations": 30,
+        "reduction_pct": 15.0
+      },
+      "stored": {
+        "run": "results_cube",
+        "n_rows": 31,
+        "n_updates": 30,
+        "n_design": 864,
+        "reduction_final_pct": 14.49489330354301,
+        "reduction_best_pct": 14.49489330354301,
+        "best_update": 30,
+        "num_iter_cap": 60,
+        "hit_cap": false,
+        "conv_tol": 0.0002,
+        "conv_window": 3,
+        "elapsed_s": 5567.835027694702
+      }
+    },
+    {
+      "label": "Experiment 3 (perforated, Fig. 20)",
+      "run": "results_cube_with_holes",
+      "printed": {
+        "n_design": 864,
+        "iterations": 21,
+        "reduction_pct": 25.4
+      },
+      "stored": {
+        "run": "results_cube_with_holes",
+        "n_rows": 22,
+        "n_updates": 21,
+        "n_design": 864,
+        "reduction_final_pct": 25.375210639252245,
+        "reduction_best_pct": 25.39612302544643,
+        "best_update": 16,
+        "num_iter_cap": 60,
+        "hit_cap": false,
+        "conv_tol": 0.0002,
+        "conv_window": 3,
+        "elapsed_s": 3814.1089498996735
+      }
+    }
+  ]
+}

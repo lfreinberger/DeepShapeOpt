@@ -1,0 +1,39 @@
+=== all stored runs in the archive ===
+run                                           upd  n_des  final%   best%  best@  cap
+------------------------------------------------------------------------------------
+results_cube                                   30    864   14.49   14.49     30   no
+results_cube_with_cylinders                    33    864   16.71   16.71     33   no
+results_cube_with_holes                        21    864   25.38   25.40     16   no
+results_cube_with_holes_4x4x4                  28   4000   25.19   25.20     26   no
+results_ffd_cube_with_cylinders_5x5x5          59    375   14.20   14.22     58  yes
+results_ffd_cube_with_cylinders_7x7x7          32   1029   15.69   15.77     25   no
+
+=== comparison with the submitted manuscript ===
+FFD (5x5x5 control points)
+    design vars : printed 375    ok
+    iterations  : printed 46     MISMATCH (stored 59)
+    reduction   : printed 14.2   ok
+    NOTE: run reached its num_iter cap (60); the convergence criterion (tol=0.0002, window=3) was never met
+FFD (7x7x7 control points)
+    design vars : printed 1029   ok
+    iterations  : printed 32     ok
+    reduction   : printed 15.7   ok
+Proposed neural SDF method
+    design vars : printed 864    ok
+    iterations  : printed 33     ok
+    reduction   : printed 16.7   ok
+Experiment 1 (cube, Fig. 14)
+    design vars : printed 864    ok
+    iterations  : printed 30     ok
+    reduction   : printed 15.0   MISMATCH (stored 14.49)
+Experiment 3 (perforated, Fig. 20)
+    design vars : printed 864    ok
+    iterations  : printed 21     ok
+    reduction   : printed 25.4   ok
+
+=== LaTeX (corrected Table 4) ===
+FFD (5x5x5 control points) & 375 & 59 & 14.2 \\
+FFD (7x7x7 control points) & 1029 & 32 & 15.7 \\
+Proposed neural SDF method & 864 & 33 & 16.7 \\
+
+wrote revision_artifacts/table4_rebuilt.json
