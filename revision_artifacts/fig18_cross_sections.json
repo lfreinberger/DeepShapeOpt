@@ -1,0 +1,48 @@
+{
+  "cut_plane_origin": [
+    0.047954407281332295,
+    0.0019732784749980727,
+    -0.009270118256481783
+  ],
+  "origin_source": "centroid of 'Neural SDF'",
+  "views": [
+    {
+      "title": "View 1: $x$-$y$ plane (normal $z$)",
+      "normal": "z",
+      "horizontal": "x",
+      "vertical": "y"
+    },
+    {
+      "title": "View 2: $x$-$z$ plane (normal $y$)",
+      "normal": "y",
+      "horizontal": "x",
+      "vertical": "z"
+    }
+  ],
+  "geometries": {
+    "FFD (7x7x7)": {
+      "run": "results_ffd_cube_with_cylinders_7x7x7",
+      "path": "/storage/lfrei/Archive/DeepShapeOpt-old-private-backup/experiments/optimization/drag_optimization_cube/results_ffd_cube_with_cylinders_7x7x7/optimization/current_shape.stl",
+      "n_faces": 23616,
+      "watertight": true,
+      "centroid": [
+        0.049847842344670844,
+        0.0006734559965513475,
+        -0.002815404961257704
+      ],
+      "volume": 1.2182950350934656
+    },
+    "Neural SDF": {
+      "run": "results_cube_with_cylinders",
+      "path": "/storage/lfrei/Archive/DeepShapeOpt-old-private-backup/experiments/optimization/drag_optimization_cube/results_cube_with_cylinders/optimization/current_shape.stl",
+      "n_faces": 33244,
+      "watertight": true,
+      "centroid": [
+        0.047954407281332295,
+        0.0019732784749980727,
+        -0.009270118256481783
+      ],
+      "volume": 1.2393699767654451
+    }
+  }
+}
