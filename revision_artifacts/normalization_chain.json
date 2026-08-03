@@ -1,0 +1,551 @@
+[
+  {
+    "config": "experiments/drag_cube/config_latent_cube.json",
+    "tiling": [
+      2,
+      2,
+      2
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -1.5,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.5,
+        0.8,
+        0.8
+      ]
+    ],
+    "physical_extent": [
+      3.0,
+      1.6,
+      1.6
+    ],
+    "stage_A": {
+      "reference_length_L": 3.0,
+      "factor": 0.6666666666666666,
+      "isotropic": true,
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "normalized_box": [
+        [
+          -1.0,
+          -0.5333333333333333,
+          -0.5333333333333333
+        ],
+        [
+          1.0,
+          0.5333333333333333,
+          0.5333333333333333
+        ]
+      ],
+      "returned_inv_scale": 1.5
+    },
+    "stage_B": {
+      "normalized_tile_width": [
+        1.0,
+        0.5333333333333333,
+        0.5333333333333333
+      ],
+      "physical_tile_size": [
+        1.5,
+        0.8,
+        0.8
+      ],
+      "per_axis_factor": [
+        2.0,
+        3.75,
+        3.75
+      ],
+      "isotropic": false
+    },
+    "decoder_sees_aspect_ratio": [
+      1.0,
+      1.875,
+      1.875
+    ],
+    "tile_mapping_checks": [
+      {
+        "axis": "x",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      }
+    ]
+  },
+  {
+    "config": "experiments/drag_cube/config_latent_cube_with_cylinders.json",
+    "tiling": [
+      2,
+      2,
+      2
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -1.6,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.6,
+        0.8,
+        0.8
+      ]
+    ],
+    "physical_extent": [
+      3.2,
+      1.6,
+      1.6
+    ],
+    "stage_A": {
+      "reference_length_L": 3.2,
+      "factor": 0.625,
+      "isotropic": true,
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "normalized_box": [
+        [
+          -1.0,
+          -0.5,
+          -0.5
+        ],
+        [
+          1.0,
+          0.5,
+          0.5
+        ]
+      ],
+      "returned_inv_scale": 1.6
+    },
+    "stage_B": {
+      "normalized_tile_width": [
+        1.0,
+        0.5,
+        0.5
+      ],
+      "physical_tile_size": [
+        1.6,
+        0.8,
+        0.8
+      ],
+      "per_axis_factor": [
+        2.0,
+        4.0,
+        4.0
+      ],
+      "isotropic": false
+    },
+    "decoder_sees_aspect_ratio": [
+      1.0,
+      2.0,
+      2.0
+    ],
+    "tile_mapping_checks": [
+      {
+        "axis": "x",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      }
+    ]
+  },
+  {
+    "config": "experiments/drag_cube/config_latent_cube_with_holes.json",
+    "tiling": [
+      2,
+      2,
+      2
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -1.5,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.5,
+        0.8,
+        0.8
+      ]
+    ],
+    "physical_extent": [
+      3.0,
+      1.6,
+      1.6
+    ],
+    "stage_A": {
+      "reference_length_L": 3.0,
+      "factor": 0.6666666666666666,
+      "isotropic": true,
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "normalized_box": [
+        [
+          -1.0,
+          -0.5333333333333333,
+          -0.5333333333333333
+        ],
+        [
+          1.0,
+          0.5333333333333333,
+          0.5333333333333333
+        ]
+      ],
+      "returned_inv_scale": 1.5
+    },
+    "stage_B": {
+      "normalized_tile_width": [
+        1.0,
+        0.5333333333333333,
+        0.5333333333333333
+      ],
+      "physical_tile_size": [
+        1.5,
+        0.8,
+        0.8
+      ],
+      "per_axis_factor": [
+        2.0,
+        3.75,
+        3.75
+      ],
+      "isotropic": false
+    },
+    "decoder_sees_aspect_ratio": [
+      1.0,
+      1.875,
+      1.875
+    ],
+    "tile_mapping_checks": [
+      {
+        "axis": "x",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "x",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "y",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 0.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.0,
+        "expected": 1.0,
+        "got": 1.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 1.5,
+        "expected": 0.0,
+        "got": 0.0,
+        "ok": true
+      },
+      {
+        "axis": "z",
+        "v": 2.0,
+        "expected": -1.0,
+        "got": -1.0,
+        "ok": true
+      }
+    ]
+  }
+]

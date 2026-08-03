@@ -1,0 +1,47 @@
+Normalization chain: physical -> normalized -> decoder input
+(Stage A uniform, Stage B per-axis; see module docstring for file refs)
+
+### experiments/drag_cube/config_latent_cube.json
+  design domain           3 x 1.6 x 1.6   tiling 2x2x2
+  Stage A (physical -> normalized)   uniform, factor 2/L = 0.666667 (L = 3)
+      normalized box      [-1.0000, -0.5333, -0.5333] .. [+1.0000, +0.5333, +0.5333]
+      -> only the longest axis reaches +-1; the box does NOT fill [-1,1]^3
+  Stage B (normalized -> decoder)    per-axis, factors [2, 3.75, 3.75]
+      one tile, physical  1.5 x 0.8 x 0.8   -> each mapped to [-1,1]^3
+  => physical tile aspect 1.875 : 1 : 1   [ANISOTROPIC]
+     each tile is mapped onto the cube [-1,1]^3, so as seen by the decoder
+     distances along x are compressed by 1.875x relative to the other axes
+     -> Stage B undoes the isotropy of Stage A; the decoder is queried off its [-1,1]^3 training distribution
+
+### experiments/drag_cube/config_latent_cube_with_cylinders.json
+  design domain           3.2 x 1.6 x 1.6   tiling 2x2x2
+  Stage A (physical -> normalized)   uniform, factor 2/L = 0.625 (L = 3.2)
+      normalized box      [-1.0000, -0.5000, -0.5000] .. [+1.0000, +0.5000, +0.5000]
+      -> only the longest axis reaches +-1; the box does NOT fill [-1,1]^3
+  Stage B (normalized -> decoder)    per-axis, factors [2, 4, 4]
+      one tile, physical  1.6 x 0.8 x 0.8   -> each mapped to [-1,1]^3
+  => physical tile aspect 2 : 1 : 1   [ANISOTROPIC]
+     each tile is mapped onto the cube [-1,1]^3, so as seen by the decoder
+     distances along x are compressed by 2x relative to the other axes
+     -> Stage B undoes the isotropy of Stage A; the decoder is queried off its [-1,1]^3 training distribution
+
+### experiments/drag_cube/config_latent_cube_with_holes.json
+  design domain           3 x 1.6 x 1.6   tiling 2x2x2
+  Stage A (physical -> normalized)   uniform, factor 2/L = 0.666667 (L = 3)
+      normalized box      [-1.0000, -0.5333, -0.5333] .. [+1.0000, +0.5333, +0.5333]
+      -> only the longest axis reaches +-1; the box does NOT fill [-1,1]^3
+  Stage B (normalized -> decoder)    per-axis, factors [2, 3.75, 3.75]
+      one tile, physical  1.5 x 0.8 x 0.8   -> each mapped to [-1,1]^3
+  => physical tile aspect 1.875 : 1 : 1   [ANISOTROPIC]
+     each tile is mapped onto the cube [-1,1]^3, so as seen by the decoder
+     distances along x are compressed by 1.875x relative to the other axes
+     -> Stage B undoes the isotropy of Stage A; the decoder is queried off its [-1,1]^3 training distribution
+
+### experiments/reconstruction/feed_channel/config.json
+  skipped: no design_domain -- standalone reconstruction path normalizes to the mesh bounding box (normalize_mesh_to_unit_cube), not the design box
+
+verified (45 checks over 3 configurations): T is a triangular wave of period two tiles,
+  T(v=0)=-1, T(v=0.5)=0, T(v=1)=+1, T(v=1.5)=0, T(v=2)=-1  with v = tiling * x_norm.
+  Successive tiles are mirrored; dT/dx flips sign at every integer v, i.e. at the
+  tile boundaries -- these are the kink planes probed for reviewer comment 4.
+wrote revision_artifacts/normalization_chain.json
