@@ -127,10 +127,19 @@ def experiment_b(lattice, box_norm, idx, dtype: torch.dtype, n_points=10_000) ->
     saved_p, saved_b = p.data.clone(), lattice.bounds.data.clone()
     saved_default = torch.get_default_dtype()
 
+    # The DECODER WEIGHTS must be cast too. DeepSDFModel is a plain class, not an
+    # nn.Module (deep_sdf/models.py), so the decoder is not a registered submodule
+    # of the lattice and is not reached by casting the lattice parameters. Missing
+    # this fails with "mat1 and mat2 must have the same dtype, but got Double and
+    # Float" as soon as the first linear layer is hit.
+    decoder = lattice.microtile.model._decoder
+    saved_decoder_dtype = next(decoder.parameters()).dtype
+
     try:
         torch.set_default_dtype(dtype)
         p.data = p.data.to(dtype)
         lattice.bounds.data = lattice.bounds.data.to(dtype)
+        decoder.to(dtype)
         pts_d, w_d = pts.to(dtype), w.to(dtype)
         base = p.data.clone()
 
@@ -165,6 +174,7 @@ def experiment_b(lattice, box_norm, idx, dtype: torch.dtype, n_points=10_000) ->
         torch.set_default_dtype(saved_default)
         p.data = saved_p
         lattice.bounds.data = saved_b
+        decoder.to(saved_decoder_dtype)
 
 
 def main() -> None:
