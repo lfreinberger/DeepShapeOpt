@@ -270,9 +270,19 @@ def setup_optimizer(
 def generate_mesh(lattice_struct, opt_cfg, rec_cfg, box_norm, scaling, mesh_type="surface", extend_bounds=True):
     """Generate a mesh from lattice parameters.
 
-    Temporarily casts the lattice parametrization to float32 because the
-    DeepSDF decoder and FlexiCubes mesh constructor require float32.
-    The float64 parameters are restored afterward for the MMA optimizer.
+    Routes through ``with_float32_lattice`` because the DeepSDF decoder and the
+    FlexiCubes mesh constructor require float32.
+
+    NOTE: the lattice parameters are *already* float32 in this pipeline --
+    ``TorchSpline`` registers its control points at the torch default dtype
+    (DeepSDFStruct/torch_spline.py:282) and the design domain is built as
+    float32 (``setup_model_and_domain``). The cast is therefore a no-op and
+    there are no float64 parameters to restore; only the surrounding
+    ``set_default_dtype`` guard has an effect. float64 appears in this workflow
+    solely in the numpy OpenFOAM I/O (``foam_utils``) and inside MMA
+    (``DeepSDFStruct/optimization.py``), which casts back to the parameter
+    dtype. An earlier version of this docstring claimed the parameters were
+    float64; that was incorrect.
 
     Parameters
     ----------

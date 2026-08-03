@@ -340,9 +340,16 @@ def fit_box_to_unit_cube(box_bounds: torch.Tensor, eps: float = 1e-12):
 def with_float32_lattice(lattice_struct, bounds, fn):
     """Run *fn(bounds_f32)* with the lattice temporarily cast to float32.
 
-    DeepSDF/FlexiCubes mesh generation requires float32; the outer
-    optimization keeps parameters in float64. This helper performs the
-    local cast around ``fn`` and restores the original dtype afterwards.
+    DeepSDF/FlexiCubes mesh generation requires float32. This helper performs
+    the local cast around ``fn`` and restores the original dtype afterwards.
+
+    NOTE: in the shipped pipeline the parameters are already float32, so the
+    casts below are no-ops and only the ``set_default_dtype`` guard actually
+    matters (FlexiCubes calls ``torch.get_default_dtype()`` internally). The
+    helper is kept general in case a float64 lattice is used -- see
+    scripts/revision/fd_check_geometry.py, which exercises that path. An
+    earlier version of this docstring stated that the outer optimization keeps
+    parameters in float64; it does not.
     """
     params = list(lattice_struct.parametrization.parameters())
     saved_params = [p.data for p in params]
