@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --job-name=revision_fd_check
+#SBATCH --partition=gpu
+#SBATCH --time=04:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --output=revision_artifacts/slurm-%j-fd_check.out
+#SBATCH --error=revision_artifacts/slurm-%j-fd_check.out
+
+# Gradient verification / precision study for reviewer comment 7.
+#
+# Submit from the repo root of the revision worktree:
+#   cd /usr2/lfrei/ProjectsPhD/revision/DeepShapeOpt
+#   sbatch scripts/revision/fd_check.slrm
+#
+# GPU partition (bob/gary/mp), one GPU. The dominant cost is experiment (A):
+# 8 step sizes x 20 components x 2 evaluations = 320 volume-mesh generations,
+# each a FlexiCubes extraction on a 97^3 grid, plus one reconstruction fit up
+# front (~3 min). 4 h is a generous ceiling; add --skip-a to run only the
+# cheap mesh-free precision comparison.
+#
+# Note: the house-style `source tests/env.sh` is NOT used here -- tests/ is
+# gitignored at 864385b and absent from this worktree.
+
+set -euo pipefail
+
+# uv lives in the user prefix and is not reliably on PATH in a batch shell.
+export PATH="/usr2/lfrei/.local/bin:$PATH"
+
+echo "node: $(hostname)  job: ${SLURM_JOB_ID:-none}"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+
+export DEEPSHAPEOPT_DATA_DIR=data
+export DEEPSHAPEOPT_MODEL_DIR=/usr2/lfrei/ProjectsPhD/revision/DeepSDFStruct/DeepSDFStruct/trained_models
+export DEEPSHAPEOPT_RESULTS_DIR=/storage/lfrei/DeepShapeOpt_revision
+
+uv run python scripts/revision/fd_check_geometry.py "$@"

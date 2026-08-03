@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH --job-name=revision_mesh_study
+#SBATCH --partition=cpu
+#SBATCH --time=24:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --output=revision_artifacts/slurm-%j-mesh_study.out
+#SBATCH --error=revision_artifacts/slurm-%j-mesh_study.out
+
+# Mesh-independence study for reviewer comment 8.
+#
+# Submit from the repo root of the revision worktree:
+#   cd /usr2/lfrei/ProjectsPhD/revision/DeepShapeOpt
+#   sbatch scripts/revision/mesh_study.slrm            # full 9-run grid
+#   sbatch scripts/revision/mesh_study.slrm cyl_init:6 # gate run only
+#
+# CPU partition, no GPU: the harness runs on stored STLs, so no torch, no
+# decoder and no lattice are involved. 16 cores because the shipped Allrun
+# decomposes with system/decomposeParDict.20, which declares
+# numberOfSubdomains 16 (the filename is misleading).
+#
+# Note: the house-style `source tests/env.sh` is NOT used here -- tests/ is
+# gitignored at 864385b and absent from this worktree. The environment is set
+# explicitly below, which is also better provenance for a revision artifact.
+
+# uv lives in the user prefix and is not reliably on PATH in a batch shell.
+export PATH="/usr2/lfrei/.local/bin:$PATH"
+
+# Source OpenFOAM BEFORE enabling strict mode. Its etc/config.sh/setup fails
+# under `set -e` ("pop_var_context: head of shell_variables not a function
+# context") and reads unset variables such as WM_PROJECT_SITE under `set -u`.
+source /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc
+
+set -euo pipefail
+
+echo "OpenFOAM: ${WM_PROJECT_DIR:?WM_PROJECT_DIR unset - bashrc did not source}"
+echo "node: $(hostname)  cores: ${SLURM_CPUS_PER_TASK:-?}  job: ${SLURM_JOB_ID:-none}"
+
+export DEEPSHAPEOPT_DATA_DIR=data
+export DEEPSHAPEOPT_MODEL_DIR=/usr2/lfrei/ProjectsPhD/revision/DeepSDFStruct/DeepSDFStruct/trained_models
+export DEEPSHAPEOPT_RESULTS_DIR=/storage/lfrei/DeepShapeOpt_revision
+
+if [ "$#" -gt 0 ]; then
+    uv run python scripts/revision/mesh_study.py --only "$@"
+else
+    uv run python scripts/revision/mesh_study.py
+fi
