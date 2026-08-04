@@ -182,8 +182,7 @@ gradients there carry no information.
 
 **Findings.**
 
-1. The kink is measurable, and it appears exactly where the reviewer's reasoning
-   predicts: in the **direction** of ∇s — the surface normal ∇s/|∇s| — and not in its
+1. The kink is measurable, and it appears in the **direction** of ∇s and not in its
    magnitude. The relative jump in |∇s| across an interface is indistinguishable from
    the mid-tile control (ratio 0.96).
 2. For the configuration used in the manuscript the median normal direction changes by
@@ -199,8 +198,44 @@ gradients there carry no information.
    EikonalLambda = 0, so imposing |∇s| = 1 on the latent codes alone works against a
    fixed decoder rather than with it.
 
-**On an H¹ or eikonal training loss.** We agree this is the principled direction, and we
-now say so in the outlook, but with two honest qualifications. First, the kink lives in
+**A clarification on how the kink reaches the optimizer.** The comment states that the
+shape sensitivities require the gradient of the neural SDF, the surface normal being
+∇s/|∇s|. That is the correct continuum picture — by the implicit function theorem a
+perturbation δs of the field moves the interface by δx = −δs/|∇s| along the normal — but
+we should record that our implementation never forms ∇s, so the propagation route is
+slightly different and worth stating precisely.
+
+In the differentiable chain (21), the surface is extracted by FlexiCubes from signed
+distance **values** sampled on a regular grid, and automatic differentiation propagates
+through those values. The gradient of the field is never evaluated: FlexiCubes accepts an
+optional gradient callback, which we do not supply, and the only reverse-mode
+differentiations in the optimization loop are with respect to the design variables, not
+with respect to spatial coordinates. The unit normals that multiply the adjoint surface
+sensitivity are computed from the extracted triangulation itself, as area-weighted
+averages of face normals, not from ∇s/|∇s|.
+
+The continuum relation nevertheless survives in discrete form: FlexiCubes locates each
+surface vertex by interpolating along a grid edge between corners of opposite sign, so
+the derivative of a vertex position with respect to the sampled values is inversely
+proportional to the finite difference of s along that edge — a discrete surrogate for
+1/|∇s| at the extraction resolution. A kink in ∇s therefore does influence the
+sensitivities, but through these cell-wise differences rather than through a pointwise
+gradient, and its effect is limited by the extraction grid rather than by the pointwise
+non-differentiability of the field.
+
+We therefore report the measurement above as a property of the **representation**, which
+is what the tabulated quantities characterise, and we now state explicitly in the
+manuscript that the quantity entering the optimizer is a grid-resolution difference of
+signed distance values.
+
+> **[AUTHOR: scope limitation, please note.** The table measures ∇s of the neural field,
+> obtained by automatic differentiation as a diagnostic. It does **not** directly measure
+> the two things the comment names: the normals of the extracted triangulation, and the
+> assembled sensitivity field. Both are measurable — the dihedral angles of the extracted
+> mesh binned by distance to a tile interface, and the same binning applied to the
+> per-vertex sensitivity vector — and neither was done. If you would prefer the answer to
+> address the referee's question literally rather than by the argument above, this is a
+> few hours of work and I can prepare it.] First, the kink lives in
 T(x), **upstream of the decoder**; no training loss can remove it, because it is a
 property of the coordinate map, not of the learned function. A gradient-aware loss can
 only reduce the magnitude of the jump by making the local field vary more smoothly.

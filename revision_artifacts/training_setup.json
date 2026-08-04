@@ -144,5 +144,15 @@
     "conclusion": "Neither the magnitude nor the sign of the ground-truth SDF is derived from a surface normal. The reconstruction loss (Eq. 15) fits VALUES, and both error measures (Eq. 22, 23) and Figure 10d compare distance values. So an ambiguous unit normal at an edge cannot be the source of the reconstruction error.",
     "correct_mechanism": "The TARGET distance field is non-differentiable near an edge: outside a convex edge the closest surface point is the edge itself, so grad s_gt rotates through a finite angle across an arbitrarily thin region. The neural SDF is itself piecewise linear and CAN represent creases, but only where its own non-smooth structure lies -- tile boundaries of T, knots of the latent field, and decoder activation-cell boundaries -- which are not aligned with an arbitrary target's edges. The residual error measures that misalignment and decreases with lattice refinement without vanishing.",
     "status": "Argued, NOT quantified. Binning the archived per-sample error by distance to the nearest sharp edge of the target mesh would test it directly."
+  },
+  "sensitivity_path_uses_no_spatial_gradient": {
+    "purpose": "Qualifies the reviewer-4 answer: the implementation never forms grad s.",
+    "evidence": [
+      "flexicubes.py:233 grad_func=None by default; never passed by DeepSDFStruct/mesh.py or any deepshapeopt code.",
+      "The only torch.autograd.grad calls in the optimization loop (optimize_drag_latent.py:187,229 and foam_utils.py:671) differentiate w.r.t. the design parameters, never w.r.t. spatial coordinates.",
+      "foam_utils.py:668 assembles the sensitivity as g = s * normals, where `normals` comes from compute_vertex_normals (foam_utils.py:565) -- cross products of triangle edges, i.e. MESH normals, not grad s/|grad s|."
+    ],
+    "continuum_vs_implementation": "Continuum: a field perturbation moves the interface by dx = -ds/|grad s| along the normal, so the gradient governs the sensitivity. Implementation: FlexiCubes interpolates surface vertices along grid edges from sampled VALUES, so d(vertex)/d(values) is inversely proportional to the finite difference of s along the edge -- a discrete surrogate for 1/|grad s| at the extraction resolution. The kink therefore does influence the sensitivities, but via cell-wise differences, bounded by the extraction grid rather than by pointwise non-differentiability.",
+    "scope_limitation": "The grad_probe table measures grad s of the neural field via autograd, i.e. a property of the REPRESENTATION. It does NOT measure the extracted triangulation's normals, nor the assembled sensitivity field -- the two things the referee names. Both remain unmeasured."
   }
 }
