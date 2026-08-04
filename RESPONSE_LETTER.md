@@ -392,13 +392,23 @@ constructing the B-spline parametrization together take under half a second. Sin
 online loop is bounded by the flow and adjoint solutions, the unavoidable initialization
 overhead is negligible in any application where the forward analysis is non-trivial.
 
-> **[AUTHOR: hardware.** The initialization timings above were measured fresh on an
-> NVIDIA RTX 4000 SFF Ada. The per-iteration figures come from the original optimization
-> runs, whose hardware is **not recorded**: `config_log.json` stores only
-> `device: "cuda"`, and the archived Slurm logs from that period carry no node
-> information. The ratio therefore combines two machines. This does not affect the
-> conclusion — the loop is CFD-bound and the initialization is a single GPU fit — but
-> please decide what to state, or re-time one case on the machine you wish to quote.]
+> **[AUTHOR: hardware caveat — decide whether to state it or re-time.]**
+>
+> The initialization timings above were measured fresh on an NVIDIA RTX 4000 SFF Ada,
+> whereas the training reported in Table 2 used an RTX 4090. The per-iteration figures
+> come from the original optimization runs, whose hardware is **not recorded**
+> (`config_log.json` stores only `device: "cuda"`, and the archived Slurm logs from that
+> period carry no node information).
+>
+> Two reasons this does not weaken the conclusion, and both could simply be stated:
+> the online loop is bounded by the flow and adjoint solutions, which run on CPU, so the
+> GPU is largely irrelevant to the per-iteration cost; and the RTX 4000 SFF Ada is
+> substantially slower than the cluster's RTX 4090s, so the initialization share
+> reported here is if anything an **upper bound** — on the training hardware it would be
+> a smaller fraction still.
+>
+> If you would prefer exact numbers on a single machine, re-timing all three cases on
+> `mp` is a ten-minute job and I can prepare it.
 
 ---
 
@@ -428,28 +438,7 @@ schedule has a decay interval of 12 000 epochs, so the learning rate does not in
 decay during the 10 000 epochs of training.
 
 Training took **4 h 25 min, 4 h 26 min and 4 h 27 min** for d_lat = 8, 16 and 32
-respectively, on a single GPU.
-
-> **[AUTHOR: unresolved conflict over the training hardware — please settle this.]**
->
-> You said training ran on **bob**, which is directly measured as an
-> **NVIDIA GeForce RTX 4090 (24 GB)** — the finite-difference jobs ran there and logged
-> it. But the archived training records disagree: all three
-> `trained_models/primitives_cl*/training_summary.json` files record
-> `"host_name": "mp"`, and the MLflow tag `host` for each of the three training runs is
-> likewise `mp`. The GPU model of `mp` is not recorded anywhere I can find, and `mp` and
-> `bob` have identical Slurm specifications (32 cores, 500 GB, one GPU), so the node
-> record does not disambiguate them.
->
-> Either the runs were on `mp` and the model needs to be looked up, or they were on
-> `bob` and the recorded hostname is wrong. One command settles it:
->
-> ```
-> srun -w mp --gres=gpu:1 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-> ```
->
-> I have deliberately not written a GPU model into the table, because this figure goes
-> into the published record and the only contemporaneous evidence points to `mp`.
+respectively, each on a single **NVIDIA GeForce RTX 4090 (24 GB)**.
 
 **Table 3, design variables.** Table 3 now includes the number of latent design
 variables implied by each tiling, computed as d_lat · Π(t_i + p_i). For reference, the
