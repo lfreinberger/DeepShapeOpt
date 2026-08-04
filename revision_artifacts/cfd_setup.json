@@ -1,0 +1,231 @@
+{
+  "purpose": "CFD numerical setup, for the revised numerical-setup paragraph and reviewer comment 8.",
+  "solver": "adjointOptimisationFoam (OpenFOAM v2506)",
+  "openfoam_build": "_615aae61d7-20250627",
+  "decomposition": {
+    "numberOfSubdomains": 16,
+    "method": "hierarchical",
+    "dict": "system/decomposeParDict.20 (filename says 20, declares 16)",
+    "verified": "nProcs : 16 in all nine mesh-study logs AND in the archived manuscript-era log"
+  },
+  "why_decomposition_matters": "OpenFOAM's linear solvers are not decomposition-invariant: GAMG's preconditioner and the smoother act per subdomain, so iteration counts and converged residuals depend on the split. All runs here used an identical decomposition, so this variation is common to all and cancels in the comparisons.",
+  "controlDict": {
+    "application": "adjointOptimisationFoam",
+    "endTime": "2000",
+    "writePrecision": "6"
+  },
+  "blockMesh": {
+    "cells": "20 10 10"
+  },
+  "snappy_baseline_level6": {
+    "features_level": "6",
+    "surface_level": "6 6",
+    "region_distance_level": "6",
+    "refinementBox_level": "3",
+    "maxGlobalCells": "2000000",
+    "maxLocalCells": "100000"
+  },
+  "physics": {
+    "transportModel": "Newtonian",
+    "nu": "1e-00",
+    "inflow_velocity": "(1 0 0)",
+    "Reynolds_number": "approx. 2 (nu = 1, U = 1, L approx 1.8)"
+  },
+  "turbulence": {
+    "simulationType": "RAS",
+    "RASModel": "SpalartAllmaras",
+    "turbulence": "on"
+  },
+  "adjoint_turbulence": {
+    "adjointRASModel": "adjointLaminar",
+    "adjointTurbulence": "off"
+  },
+  "convergence_observed": {
+    "primal": "converged in 606-924 SIMPLE iterations in all 9 runs",
+    "adjoint": "reached the 1000-iteration cap in ALL 9 runs without meeting residualControl 1e-5",
+    "note": "affects the sensitivity field (descent direction), not the tabulated drag, which comes from the converged primal"
+  },
+  "per_run": [
+    {
+      "geometry": "cyl_init",
+      "level": 5,
+      "cells": 77280,
+      "drag": 36.9013,
+      "max_nonortho": 58.571,
+      "max_skewness": 1.23934,
+      "max_aspect_ratio": 15.7391,
+      "wall_clock_s": 59.0,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 606
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_init",
+      "level": 6,
+      "cells": 275951,
+      "drag": 37.1499,
+      "max_nonortho": 55.0638,
+      "max_skewness": 1.26595,
+      "max_aspect_ratio": 10.0443,
+      "wall_clock_s": 228.4,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 676
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_init",
+      "level": 7,
+      "cells": 1416870,
+      "drag": 37.2557,
+      "max_nonortho": 61.4706,
+      "max_skewness": 1.27615,
+      "max_aspect_ratio": 10.5438,
+      "wall_clock_s": 1871.8,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 907
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_neural",
+      "level": 5,
+      "cells": 70831,
+      "drag": 30.9071,
+      "max_nonortho": 43.0447,
+      "max_skewness": 0.653787,
+      "max_aspect_ratio": 4.12441,
+      "wall_clock_s": 54.9,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 644
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_neural",
+      "level": 6,
+      "cells": 204951,
+      "drag": 30.9404,
+      "max_nonortho": 40.7487,
+      "max_skewness": 0.650274,
+      "max_aspect_ratio": 4.06584,
+      "wall_clock_s": 165.4,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 716
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_neural",
+      "level": 7,
+      "cells": 1056701,
+      "drag": 30.9999,
+      "max_nonortho": 42.7969,
+      "max_skewness": 0.641934,
+      "max_aspect_ratio": 5.06016,
+      "wall_clock_s": 1328.9,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 924
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_ffd7",
+      "level": 5,
+      "cells": 71289,
+      "drag": 31.06,
+      "max_nonortho": 62.7946,
+      "max_skewness": 1.36595,
+      "max_aspect_ratio": 9.50336,
+      "wall_clock_s": 54.5,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 641
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_ffd7",
+      "level": 6,
+      "cells": 207264,
+      "drag": 31.0976,
+      "max_nonortho": 56.5419,
+      "max_skewness": 1.19963,
+      "max_aspect_ratio": 9.17542,
+      "wall_clock_s": 166.2,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 710
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    },
+    {
+      "geometry": "cyl_final_ffd7",
+      "level": 7,
+      "cells": 1079245,
+      "drag": 31.1562,
+      "max_nonortho": 59.3571,
+      "max_skewness": 1.20995,
+      "max_aspect_ratio": 9.80047,
+      "wall_clock_s": 1358.1,
+      "solvers": {
+        "op1": {
+          "converged": true,
+          "iterations": 917
+        },
+        "adjS1": {
+          "converged": false,
+          "iterations": 1000
+        }
+      }
+    }
+  ],
+  "turbulence_note": "The primal is configured with the Spalart-Allmaras RAS model while the adjoint is laminar/frozen (adjointLaminar, adjointTurbulence off). At Re ~ 2 the eddy viscosity should be negligible, so the frozen-turbulence adjoint is consistent, but a reader who opens the case files sees the mismatch without doing that arithmetic. NOT verified numerically in this revision: no run was made with the turbulence model disabled, and max(nut)/nu was not measured."
+}

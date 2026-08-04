@@ -1,0 +1,31 @@
+NVIDIA GeForce RTX 4090
+### experiments/drag_cube/config_latent_cube.json
+  device cuda (NVIDIA GeForce RTX 4090)
+    setup_model_and_domain_s         0.50 s
+    build_lattice_s                  0.01 s
+    run_reconstruction_s           209.18 s
+    initial_volume_mesh_s            0.04 s
+    initialization TOTAL           209.73 s
+    (first meshing call            46.47 s, untimed warm-up -- excluded)
+  online loop (results_cube): 30 updates, 5568 s total, 179.6 s/iteration
+  => initialization is 3.8% of the online loop, i.e. 1.17 equivalent optimization iterations
+### experiments/drag_cube/config_latent_cube_with_cylinders.json
+  device cuda (NVIDIA GeForce RTX 4090)
+    setup_model_and_domain_s         0.11 s
+    build_lattice_s                  0.00 s
+    run_reconstruction_s           285.32 s
+    initial_volume_mesh_s            0.04 s
+    initialization TOTAL           285.48 s
+    (first meshing call             0.04 s, untimed warm-up -- excluded)
+  online loop (results_cube_with_cylinders): 33 updates, 6769 s total, 199.1 s/iteration
+  => initialization is 4.2% of the online loop, i.e. 1.43 equivalent optimization iterations
+### experiments/drag_cube/config_latent_cube_with_holes.json
+  device cuda (NVIDIA GeForce RTX 4090)
+    setup_model_and_domain_s         0.08 s
+    build_lattice_s                  0.00 s
+    run_reconstruction_s           173.23 s
+    initial_volume_mesh_s            0.01 s
+    initialization TOTAL           173.33 s
+    (first meshing call             0.01 s, untimed warm-up -- excluded)
+  online loop (results_cube_with_holes): 21 updates, 3814 s total, 173.4 s/iteration
+  => initialization is 4.5% of the online loop, i.e. 1.00 equivalent optimization iterations

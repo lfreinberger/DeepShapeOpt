@@ -1,0 +1,126 @@
+{
+  "purpose": "Evidence for the Table 2 corrections (dropout, epoch definition, training cost).",
+  "networks": {
+    "primitives_cl08": {
+      "latent_dim": 8,
+      "NetworkSpecs.dropout_prob": 0.0,
+      "NetworkSpecs.dropout_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "stray_top_level_dropout_prob": 0.2,
+      "hidden_dims": [
+        128,
+        128,
+        128,
+        128
+      ],
+      "ClampingDistance": 0.1,
+      "CodeRegularizationLambda": 0.0001,
+      "CodeBound": 1.0,
+      "num_epochs": 10000,
+      "training_duration": "4:24:51",
+      "final_loss": 0.001306119550135918,
+      "host_name": "mp",
+      "timestamp": "2026-03-11 09:23:06"
+    },
+    "primitives_cl16": {
+      "latent_dim": 16,
+      "NetworkSpecs.dropout_prob": 0.0,
+      "NetworkSpecs.dropout_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "stray_top_level_dropout_prob": 0.2,
+      "hidden_dims": [
+        128,
+        128,
+        128,
+        128
+      ],
+      "ClampingDistance": 0.1,
+      "CodeRegularizationLambda": 0.0001,
+      "CodeBound": 1.0,
+      "num_epochs": 10000,
+      "training_duration": "4:26:20",
+      "final_loss": 0.0009950023470446467,
+      "host_name": "mp",
+      "timestamp": "2026-03-11 04:52:17"
+    },
+    "primitives_cl32": {
+      "latent_dim": 32,
+      "NetworkSpecs.dropout_prob": 0.0,
+      "NetworkSpecs.dropout_layers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "stray_top_level_dropout_prob": 0.2,
+      "hidden_dims": [
+        128,
+        128,
+        128,
+        128
+      ],
+      "ClampingDistance": 0.1,
+      "CodeRegularizationLambda": 0.0001,
+      "CodeBound": 1.0,
+      "num_epochs": 10000,
+      "training_duration": "4:26:40",
+      "final_loss": 0.000848388178856112,
+      "host_name": "mp",
+      "timestamp": "2026-03-11 13:55:50"
+    }
+  },
+  "mlflow_training_runs": {
+    "rs_000_ds=2026_02_15_til=8x8x8_c=16_do=0.2": {
+      "NetworkSpecs.dropout_prob": "0.0",
+      "stray_top_level_dropout_prob": "0.2",
+      "host": "mp"
+    },
+    "rs_001_ds=2026_02_15_til=8x8x8_c=8_do=0.2": {
+      "NetworkSpecs.dropout_prob": "0.0",
+      "stray_top_level_dropout_prob": "0.2",
+      "host": "mp"
+    },
+    "rs_002_ds=2026_02_15_til=8x8x8_c=32_do=0.2": {
+      "NetworkSpecs.dropout_prob": "0.0",
+      "stray_top_level_dropout_prob": "0.2",
+      "host": "mp"
+    },
+    "rs_000_ds=2026_02_15_til=8x8x8_c=64_do=0.2": {
+      "NetworkSpecs.dropout_prob": "0.0",
+      "stray_top_level_dropout_prob": "0.2",
+      "host": "bob"
+    }
+  },
+  "gpu_model": {
+    "host": "mp",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "memory": "24564 MiB",
+    "driver": "590.48.01",
+    "how_determined": "srun -p gpu -w mp --gres=gpu:1 nvidia-smi (2026-08-04)"
+  },
+  "findings": {
+    "dropout": "Table 2 states dropout probability 0.2. The decoder is instantiated ONLY from NetworkSpecs (DeepSDFStruct/deep_sdf/workspace.py:244), where dropout_prob = 0.0. The 0.2 is a stray top-level key in specs.json that no code path reads. Confirmed in the original MLflow training runs. Dropout was therefore INACTIVE.",
+    "epoch": "One epoch = one pass over the N=100 training SCENES. ScenesPerBatch=1 and SamplesPerScene=4096 resampled per draw, so 1 epoch = 100 optimizer steps on 4096 points, and 10000 epochs = 1e6 optimizer steps -- NOT 1e4 passes over all 1.1e6 samples per scene.",
+    "lr_schedule": "Step schedule with decay interval 12000 epochs > 10000 epochs of training, so the learning rate never decayed during training."
+  }
+}

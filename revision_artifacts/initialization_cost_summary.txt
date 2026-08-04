@@ -1,0 +1,30 @@
+### experiments/drag_cube/config_latent_cube.json
+  device cuda (NVIDIA RTX 4000 SFF Ada Generation)
+    setup_model_and_domain_s         0.41 s
+    build_lattice_s                  0.00 s
+    run_reconstruction_s           168.09 s
+    initial_volume_mesh_s            0.09 s
+    initialization TOTAL           168.59 s
+    (first meshing call            20.67 s, untimed warm-up -- excluded)
+  online loop (results_cube): 30 updates, 5568 s total, 179.6 s/iteration
+  => initialization is 3.0% of the online loop, i.e. 0.94 equivalent optimization iterations
+### experiments/drag_cube/config_latent_cube_with_cylinders.json
+  device cuda (NVIDIA RTX 4000 SFF Ada Generation)
+    setup_model_and_domain_s         0.09 s
+    build_lattice_s                  0.00 s
+    run_reconstruction_s           238.13 s
+    initial_volume_mesh_s            0.10 s
+    initialization TOTAL           238.32 s
+    (first meshing call             0.10 s, untimed warm-up -- excluded)
+  online loop (results_cube_with_cylinders): 33 updates, 6769 s total, 199.1 s/iteration
+  => initialization is 3.5% of the online loop, i.e. 1.20 equivalent optimization iterations
+### experiments/drag_cube/config_latent_cube_with_holes.json
+  device cuda (NVIDIA RTX 4000 SFF Ada Generation)
+    setup_model_and_domain_s         0.09 s
+    build_lattice_s                  0.00 s
+    run_reconstruction_s           150.71 s
+    initial_volume_mesh_s            0.02 s
+    initialization TOTAL           150.82 s
+    (first meshing call             0.02 s, untimed warm-up -- excluded)
+  online loop (results_cube_with_holes): 21 updates, 3814 s total, 173.4 s/iteration
+  => initialization is 4.0% of the online loop, i.e. 0.87 equivalent optimization iterations
