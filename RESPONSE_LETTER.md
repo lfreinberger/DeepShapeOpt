@@ -245,6 +245,17 @@ and then degrades as round-off takes over, while double precision continues to c
 The analytic gradient is therefore verified to roughly three significant digits in
 float32.
 
+We emphasise what this comparison does and does not vary. In the double-precision run
+the decoder weights, the latent control vectors, the spline evaluation and the sample
+coordinates are all promoted to float64, so the entire evaluation and its
+differentiation are carried out in double precision. The weights themselves, however,
+were *trained* in single precision, so promoting them widens the same numerical values
+rather than recovering additional information. Both columns above therefore
+differentiate the **identical mathematical function**, and the comparison isolates the
+arithmetic precision of evaluating and differentiating it — which is exactly the
+question the reviewer raises about Equation (21) — rather than comparing two models of
+different accuracy.
+
 This is not a limitation in practice, because the MMA move limit is max_step = 0.02 —
 two orders of magnitude above the step size at which precision begins to matter. We now
 state this.
@@ -381,11 +392,13 @@ constructing the B-spline parametrization together take under half a second. Sin
 online loop is bounded by the flow and adjoint solutions, the unavoidable initialization
 overhead is negligible in any application where the forward analysis is non-trivial.
 
-> **[AUTHOR: hardware.** These timings were measured on an NVIDIA RTX 4000 SFF Ada. The
-> per-iteration figures are taken from the original optimization runs, which were
-> executed on different hardware, so the ratio combines two machines. This does not
-> affect the conclusion — the loop is CFD-bound and two orders of magnitude more
-> expensive per iteration — but please state the hardware you wish to report.]
+> **[AUTHOR: hardware.** The initialization timings above were measured fresh on an
+> NVIDIA RTX 4000 SFF Ada. The per-iteration figures come from the original optimization
+> runs, whose hardware is **not recorded**: `config_log.json` stores only
+> `device: "cuda"`, and the archived Slurm logs from that period carry no node
+> information. The ratio therefore combines two machines. This does not affect the
+> conclusion — the loop is CFD-bound and the initialization is a single GPU fit — but
+> please decide what to state, or re-time one case on the machine you wish to quote.]
 
 ---
 
@@ -417,9 +430,26 @@ decay during the 10 000 epochs of training.
 Training took **4 h 25 min, 4 h 26 min and 4 h 27 min** for d_lat = 8, 16 and 32
 respectively, on a single GPU.
 
-> **[AUTHOR: the GPU model was not recorded** in the training logs — only the device
-> string "cuda". Please supply the model for the machine that ran the training so it can
-> be named in the revised Table 2.]
+> **[AUTHOR: unresolved conflict over the training hardware — please settle this.]**
+>
+> You said training ran on **bob**, which is directly measured as an
+> **NVIDIA GeForce RTX 4090 (24 GB)** — the finite-difference jobs ran there and logged
+> it. But the archived training records disagree: all three
+> `trained_models/primitives_cl*/training_summary.json` files record
+> `"host_name": "mp"`, and the MLflow tag `host` for each of the three training runs is
+> likewise `mp`. The GPU model of `mp` is not recorded anywhere I can find, and `mp` and
+> `bob` have identical Slurm specifications (32 cores, 500 GB, one GPU), so the node
+> record does not disambiguate them.
+>
+> Either the runs were on `mp` and the model needs to be looked up, or they were on
+> `bob` and the recorded hostname is wrong. One command settles it:
+>
+> ```
+> srun -w mp --gres=gpu:1 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+> ```
+>
+> I have deliberately not written a GPU model into the table, because this figure goes
+> into the published record and the only contemporaneous evidence points to `mp`.
 
 **Table 3, design variables.** Table 3 now includes the number of latent design
 variables implied by each tiling, computed as d_lat · Π(t_i + p_i). For reference, the
