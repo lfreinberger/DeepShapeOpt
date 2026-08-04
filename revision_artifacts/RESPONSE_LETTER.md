@@ -88,23 +88,53 @@ lattice.
 > ambiguities rather than to curvature itself.*
 
 The reviewer is right that our original wording conflated two distinct effects, and we
-have rewritten the passage.
+have rewritten the passage. We would, however, respectfully propose a different mechanism
+for the second of them, because normal vectors do not enter this part of the method at
+any point.
 
-The revised text distinguishes (i) regions of high but smooth curvature, where the
-error reflects the finite spatial resolution of the latent control lattice, from
-(ii) neighbourhoods of edges, where the target field is not differentiable and no
-continuous latent field of any resolution can reproduce it exactly. We now attribute
-the largest local errors in Figure 10d primarily to the second mechanism, and note that
-this is consistent with the observation that refining the tiling reduces but does not
-eliminate them (Figure 9).
+**Normals play no role in the reconstruction or in its error measures.** Three steps are
+involved, and none uses a normal:
 
-> **[AUTHOR: we have *not* separated the two contributions quantitatively.** Doing so
-> would require classifying surface samples by proximity to a feature edge of the
-> ground-truth mesh and reporting the error conditional on that classification. This is
-> straightforward with the archived per-sample error fields and could be added if the
-> reviewer considers it necessary; we currently make only the qualitative distinction,
-> which we believe is what the comment asks for. Please confirm you are comfortable
-> with that scope.]
+- The ground-truth signed distance field is evaluated by an unsigned closest-point query
+  on the triangulated target, with the sign obtained separately by ray casting
+  (crossing parity) to classify points as inside or outside. Neither the magnitude nor
+  the sign is derived from a surface normal, so an ambiguous normal at an edge does not
+  make the target field ambiguous. The exact distance function is well defined at and
+  near edges for any closed surface.
+- The reconstruction problem (15) fits signed distance **values** through a clamped L¹
+  loss. No normal and no gradient of s appears in it.
+- Both error measures compare distance values: MAE_SDF in (22) is a difference of signed
+  distances at sample points, and MAE_geom in (23) is the distance of reconstructed
+  surface vertices from the target. Figure 10d likewise shows a signed-distance error.
+
+**The mechanism we now give instead.** The revised text distinguishes (i) regions of high
+but smooth curvature, where the error reflects the finite spatial resolution of the
+latent control lattice, from (ii) neighbourhoods of edges, where the *target distance
+field is not differentiable*: outside a convex edge the closest point on the surface is
+the edge itself, so ∇s_gt rotates through a finite angle across an arbitrarily thin
+region, and the field has a crease. Reproducing such a feature requires the
+representation to place its own non-smooth structure at exactly that location.
+
+This is where our answer to Comment 1 becomes relevant. The neural SDF used here is
+itself piecewise linear, so it *can* represent creases; what it cannot do is place them
+arbitrarily. Its non-smooth structure is inherited from the tile boundaries of the
+transform (10), the knots of the latent field (9) and the activation-cell boundaries of
+the decoder, none of which is aligned with the edges of an arbitrary target geometry. The
+residual error near an edge therefore measures this misalignment, and it decreases as the
+lattice is refined — consistent with Figure 9 — without vanishing at any finite
+resolution.
+
+We are grateful to the reviewer for pressing on this point: the original attribution to
+"stronger curvature" was too loose, and the distinction now drawn is sharper than the one
+we first wrote.
+
+> **[AUTHOR: this now contradicts the reviewer's suggested mechanism rather than
+> accepting it.** I believe the argument is correct — normals genuinely do not enter the
+> reconstruction path — but it is a disagreement with a referee, so please satisfy
+> yourself before sending. If you would rather quantify the claim than argue it, the
+> archived per-sample error fields would support binning the error by distance to the
+> nearest sharp edge of the target mesh, which would show directly whether the error
+> concentrates there; that is a few hours of work and I can prepare it.]
 
 ### Comment 3 — Figure 2 and the regularity assumptions
 

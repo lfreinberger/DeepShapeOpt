@@ -135,5 +135,14 @@
     "consequence": "The decoder is PIECEWISE LINEAR in its input. The coordinate transform T (Eq. 10) is piecewise linear and the manuscript latent field is a degree-1 B-spline (Eq. 9), also piecewise linear in x. Hence the composite s(x) = f(T(x), lambda(x)) is piecewise linear in x and its zero level set is a POLYHEDRAL surface: Lipschitz, normal defined a.e., creases on a measure-zero set.",
     "implication": "Gamma is Lipschitz BY CONSTRUCTION, so the standing regularity assumption is not a restriction on admissible designs. It also means the representation is NOT intrinsically smooth and can reproduce creases -- contrary to a common expectation of neural SDFs.",
     "caveat": "Piecewise linearity holds for spline degree p=1 (the manuscript setting). For p>=2 the latent field is piecewise polynomial, so s is piecewise smooth rather than piecewise linear."
+  },
+  "ground_truth_sdf_pipeline": {
+    "purpose": "Supports the reviewer-2 answer: normals do not enter the reconstruction path.",
+    "magnitude": "igl.point_mesh_squared_distance -- unsigned closest-point query on the target triangulation",
+    "sign": "trimesh.ray.ray_pyembree.RayMeshIntersector.contains_points -- ray casting (crossing parity)",
+    "source": "DeepSDFStruct/SDF.py, SDFfromMesh._compute",
+    "conclusion": "Neither the magnitude nor the sign of the ground-truth SDF is derived from a surface normal. The reconstruction loss (Eq. 15) fits VALUES, and both error measures (Eq. 22, 23) and Figure 10d compare distance values. So an ambiguous unit normal at an edge cannot be the source of the reconstruction error.",
+    "correct_mechanism": "The TARGET distance field is non-differentiable near an edge: outside a convex edge the closest surface point is the edge itself, so grad s_gt rotates through a finite angle across an arbitrarily thin region. The neural SDF is itself piecewise linear and CAN represent creases, but only where its own non-smooth structure lies -- tile boundaries of T, knots of the latent field, and decoder activation-cell boundaries -- which are not aligned with an arbitrary target's edges. The residual error measures that misalignment and decreases with lattice refinement without vanishing.",
+    "status": "Argued, NOT quantified. Binning the archived per-sample error by distance to the nearest sharp edge of the target mesh would test it directly."
   }
 }
