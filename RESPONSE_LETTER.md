@@ -301,6 +301,18 @@ manuscript.
 Relative change from L6 to L7: **0.285%, 0.192%, 0.188%** respectively. All meshes pass
 `checkMesh`; maximum non-orthogonality is 41–63° and maximum skewness below 1.3.
 
+**Parallel decomposition.** All computations reported in the manuscript and in this
+response were carried out with the same fixed decomposition: **16 subdomains, hierarchical
+method**. We now state this in the numerical-setup paragraph, for two reasons. First, it
+is required to reproduce the reported iteration counts and timings. Second, and more
+substantively, OpenFOAM's linear solvers are not decomposition-invariant — the GAMG
+preconditioner and the smoother operate per subdomain, so the iteration counts and the
+exact converged residuals depend on how the domain is split. Solutions obtained with
+different decompositions agree only to within the solver tolerance, not bit-exactly.
+Since every geometry and every refinement level above was run with an identical
+decomposition, this source of variation is common to all of them and cancels in the
+comparisons that matter, in particular the neural-SDF versus FFD margin.
+
 **Numerical uncertainty and the comparison.** On a common mesh the neural-SDF design has
 lower drag than the FFD design at every refinement level, by a margin that is stable
 across levels: **0.492% (L5), 0.506% (L6), 0.502% (L7)**. This margin exceeds the
