@@ -392,35 +392,35 @@ satisfied by both designs.
 
 We have measured this and added it to the discussion.
 
-| case | initialization | per optimization iteration | share of total |
-|---|---|---|---|
-| cube | 169 s | 179.6 s | 3.0% |
-| cube with cylinders | 238 s | 199.1 s | 3.5% |
-| perforated cube | 151 s | 173.4 s | 4.0% |
+| case | initialization | per optimization iteration | share of total | equivalent iterations |
+|---|---|---|---|---|
+| cube | 210 s | 179.6 s | 3.8% | 1.2 |
+| cube with cylinders | 285 s | 199.1 s | 4.2% | 1.4 |
+| perforated cube | 173 s | 173.4 s | 4.5% | 1.0 |
 
-The initialization stage costs roughly **one optimization iteration**, that is 3–4% of
-the total, and is dominated entirely by the latent-code fit; loading the decoder and
+The initialization stage costs roughly **one optimization iteration**, that is about 4%
+of the total, and is dominated entirely by the latent-code fit; loading the decoder and
 constructing the B-spline parametrization together take under half a second. Since the
 online loop is bounded by the flow and adjoint solutions, the unavoidable initialization
 overhead is negligible in any application where the forward analysis is non-trivial.
 
-> **[AUTHOR: hardware caveat — decide whether to state it or re-time.]**
->
-> The initialization timings above were measured fresh on an NVIDIA RTX 4000 SFF Ada,
-> whereas the training reported in Table 2 used an RTX 4090. The per-iteration figures
-> come from the original optimization runs, whose hardware is **not recorded**
-> (`config_log.json` stores only `device: "cuda"`, and the archived Slurm logs from that
-> period carry no node information).
->
-> Two reasons this does not weaken the conclusion, and both could simply be stated:
-> the online loop is bounded by the flow and adjoint solutions, which run on CPU, so the
-> GPU is largely irrelevant to the per-iteration cost; and the RTX 4000 SFF Ada is
-> substantially slower than the cluster's RTX 4090s, so the initialization share
-> reported here is if anything an **upper bound** — on the training hardware it would be
-> a smaller fraction still.
->
-> If you would prefer exact numbers on a single machine, re-timing all three cases on
-> `mp` is a ten-minute job and I can prepare it.
+The initialization timings above were measured on a single NVIDIA GeForce RTX 4090, the
+same model used for decoder training. As a check on hardware sensitivity we repeated the
+measurement on an NVIDIA RTX 4000 SFF Ada and obtained 169 s, 238 s and 151 s
+respectively, i.e. a share of 3.0–4.0% instead of 3.8–4.5%. The conclusion is therefore
+insensitive to the hardware: on both machines the initialization is equivalent to
+approximately one optimization iteration. We note that this workload does not saturate
+either GPU — each step evaluates a small decoder on 4096 sample points — so the timings
+are dominated by kernel-launch and host-side overhead rather than by floating-point
+throughput, which is why the nominally faster card is not the faster one here.
+
+> **[AUTHOR: one residual caveat, if you wish to state it.** The per-iteration figures
+> are taken from the original optimization runs, whose hardware is not recorded
+> (`config_log.json` stores only `device: "cuda"`, and the archived Slurm logs carry no
+> node information). The ratio therefore combines a fresh GPU measurement with recorded
+> loop times. Re-deriving it exactly would require re-running a full optimization, which
+> we judged unwarranted: the loop is bounded by the CPU-side flow and adjoint solutions,
+> which the GPU does not affect.]
 
 ---
 
