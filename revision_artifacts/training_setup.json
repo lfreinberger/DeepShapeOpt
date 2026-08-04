@@ -122,5 +122,18 @@
     "dropout": "Table 2 states dropout probability 0.2. The decoder is instantiated ONLY from NetworkSpecs (DeepSDFStruct/deep_sdf/workspace.py:244), where dropout_prob = 0.0. The 0.2 is a stray top-level key in specs.json that no code path reads. Confirmed in the original MLflow training runs. Dropout was therefore INACTIVE.",
     "epoch": "One epoch = one pass over the N=100 training SCENES. ScenesPerBatch=1 and SamplesPerScene=4096 resampled per draw, so 1 epoch = 100 optimizer steps on 4096 points, and 10000 epochs = 1e6 optimizer steps -- NOT 1e4 passes over all 1.1e6 samples per scene.",
     "lr_schedule": "Step schedule with decay interval 12000 epochs > 10000 epochs of training, so the learning rate never decayed during training."
+  },
+  "architecture_regularity": {
+    "purpose": "Supports the reviewer-1 answer on regularity of Gamma.",
+    "NetworkArch": "deep_sdf_decoder",
+    "activation": "ReLU",
+    "output_layer": "linear",
+    "use_tanh": false,
+    "weight_norm": true,
+    "layernorm_used": false,
+    "why_no_layernorm": "deep_sdf_decoder.py applies LayerNorm only in the `elif (not weight_norm)` branch; since weight_norm is True, LayerNorm is not instantiated. Weight normalization is a reparameterization of the weight matrix, so at fixed parameters each layer is affine.",
+    "consequence": "The decoder is PIECEWISE LINEAR in its input. The coordinate transform T (Eq. 10) is piecewise linear and the manuscript latent field is a degree-1 B-spline (Eq. 9), also piecewise linear in x. Hence the composite s(x) = f(T(x), lambda(x)) is piecewise linear in x and its zero level set is a POLYHEDRAL surface: Lipschitz, normal defined a.e., creases on a measure-zero set.",
+    "implication": "Gamma is Lipschitz BY CONSTRUCTION, so the standing regularity assumption is not a restriction on admissible designs. It also means the representation is NOT intrinsically smooth and can reproduce creases -- contrary to a common expectation of neural SDFs.",
+    "caveat": "Piecewise linearity holds for spline degree p=1 (the manuscript setting). For p>=2 the latent field is piecewise polynomial, so s is piecewise smooth rather than piecewise linear."
   }
 }

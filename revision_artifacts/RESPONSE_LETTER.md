@@ -29,32 +29,57 @@ the scripts added in the revision.
 > assumption… It would also be useful to specify how the framework behaves at points
 > where this assumption fails.*
 
-We agree and have added an explicit standing assumption at the start of Section 2.1.1.
+We agree that the standing assumption should be stated, and we have added one at the
+start of Section 2.1.1. In doing so, however, we found it important to be precise about
+*where* regularity is actually required, because no step of the algorithm itself needs
+the boundary to be smooth.
 
-We now state that Γ is assumed to be Lipschitz and piecewise C¹, so that the outward
-unit normal **n̂** exists almost everywhere on Γ. This is the regularity actually
-required by the force integral (24) and by the continuous-adjoint surface sensitivity;
-it admits the edges and corners that occur in several of our test geometries, rather
-than assuming global smoothness that our examples do not possess.
+**Where regularity is not required.** Two parts of the method are insensitive to it:
 
-We have also added a paragraph on what happens where the assumption fails. Two remarks
-are relevant:
+- *Reconstruction* (Section 2.1.4) fits the latent control vectors to sampled signed
+  distance **values** through the clamped L¹ loss (15). No normal vector and no gradient
+  of s enters this step. The ground-truth signed distance function of any closed set is
+  1-Lipschitz irrespective of boundary regularity, so the reconstruction problem is well
+  posed for arbitrary target geometries — including the edged ones used in Section 3.1.
+- *Evaluation of the objective and its sensitivity* is performed on the extracted
+  surface Γ̂, a triangulation produced by FlexiCubes, on which every face carries a
+  well-defined normal and a finite area. The discrete force integral and the discrete
+  adjoint sensitivity are therefore always computable, and sharp features appear as
+  finite dihedral angles rather than as singularities.
 
-1. The signed distance function itself remains well defined at edges and corners — it
-   is Lipschitz everywhere — but it is not differentiable there, and ∇s is undefined on
-   a set of measure zero. Since all surface integrals are taken with respect to surface
-   measure, this set does not contribute.
-2. In practice the optimizer never evaluates the exact SDF at such points. The
-   objective and its sensitivity are evaluated on the *extracted* surface Γ̂, a
-   triangulation produced by FlexiCubes, on which face normals are defined everywhere
-   and vertex normals are area-weighted averages. Sharp features of the underlying
-   zero-level set are therefore represented by a finite dihedral angle rather than by a
-   true singularity, and no special treatment is required.
+**Where it is required.** Regularity is needed for the *continuum formulation* that these
+discrete quantities approximate: for the flow problem (16) to be well posed on Ω_F(d),
+for the divergence theorem and the trace theorem used in deriving the continuous adjoint,
+and for the force integral (24) to be meaningful as a surface integral. The assumption is
+therefore about the mathematical model, not about the executability of the algorithm.
 
-We note in passing that the neural SDF is in any case a smooth approximation: the
-decoder is a finite composition of affine maps and ReLU activations, hence piecewise
-linear and differentiable almost everywhere, so genuinely singular points are not
-reproduced exactly. This is now stated.
+**The assumption we state.** We now assume Γ to be **Lipschitz**. By Rademacher's
+theorem this already guarantees that the outward unit normal n̂ exists ℋ²-almost
+everywhere on Γ, which is what (24) and the adjoint surface sensitivity require; it also
+gives the divergence and trace theorems used in the adjoint derivation. We deliberately
+do *not* assume piecewise C¹, since it is not needed for any of the above. We note
+explicitly that classical derivations of the boundary-integral (Hadamard) form of the
+shape derivative are usually carried out under stronger regularity, and that we do not
+claim that form beyond the discrete setting in which our sensitivities are computed.
+
+**The assumption is satisfied by construction.** This is worth stating, and we have added
+it: for the configuration used throughout the paper the represented geometry
+automatically belongs to this class. The decoder uses ReLU activations with a linear
+output layer and no smooth nonlinearity (weight normalization is a reparameterization of
+the weights, so each layer is affine at fixed parameters); the coordinate transform (10)
+is piecewise linear; and the latent field (9) is a degree-one B-spline, hence piecewise
+linear in x. The composite ŝ(x) = f_θ(T(x), λ(x)) is therefore **piecewise linear** in x,
+and its zero level set is a polyhedral surface: Lipschitz, with a well-defined normal
+everywhere except on a set of edges of measure zero.
+
+Two consequences follow, and we now state both. First, the standing assumption is not a
+restriction we impose on the admissible designs — it is a property the representation
+delivers. Second, and contrary to what one might expect of a neural approximation, the
+representation is **not** intrinsically smooth: it can, and does, produce creases. This
+is consistent with the interface behaviour quantified in our response to Comment 4, and
+it means that the edges present in the target geometries of Section 3.1 are not smoothed
+away by the representation itself but only by the finite resolution of the latent control
+lattice.
 
 ### Comment 2 — Figure 10a, edges versus curvature
 
