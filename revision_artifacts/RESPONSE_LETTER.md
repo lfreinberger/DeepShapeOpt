@@ -3,7 +3,7 @@
 Manuscript: *Shape Optimization Using a Neural Implicit Geometry Representation*
 Freinberger, Key, Kofler, Breinl, Drossel, Büttner, Roder, Elgeti
 
----
+***
 
 We thank the reviewer for a careful and constructive report, and in particular for
 engaging with the numerical details of the method rather than only its presentation.
@@ -15,10 +15,10 @@ All new numbers reported here were produced with the exact code archived alongsi
 submission (DeepShapeOpt `864385b`, DeepSDFStruct `v0.1.0`) and are reproducible with
 the scripts added in the revision.
 
-> **[AUTHOR] Before submitting, please resolve every `[AUTHOR: …]` marker below.**
+> **\[AUTHOR] Before submitting, please resolve every** **`[AUTHOR: …]`** **marker below.**
 > They mark facts I could not verify from the code or archived data.
 
----
+***
 
 ## Mathematical setting and regularity
 
@@ -36,19 +36,20 @@ the boundary to be smooth.
 
 **Where regularity is not required.** Two parts of the method are insensitive to it:
 
-- *Reconstruction* (Section 2.1.4) fits the latent control vectors to sampled signed
+* *Reconstruction* (Section 2.1.4) fits the latent control vectors to sampled signed
   distance **values** through the clamped L¹ loss (15). No normal vector and no gradient
   of s enters this step. The ground-truth signed distance function of any closed set is
   1-Lipschitz irrespective of boundary regularity, so the reconstruction problem is well
   posed for arbitrary target geometries — including the edged ones used in Section 3.1.
-- *Evaluation of the objective and its sensitivity* is performed on the extracted
+
+* *Evaluation of the objective and its sensitivity* is performed on the extracted
   surface Γ̂, a triangulation produced by FlexiCubes, on which every face carries a
   well-defined normal and a finite area. The discrete force integral and the discrete
   adjoint sensitivity are therefore always computable, and sharp features appear as
   finite dihedral angles rather than as singularities.
 
 **Where it is required.** Regularity is needed for the *continuum formulation* that these
-discrete quantities approximate: for the flow problem (16) to be well posed on Ω_F(d),
+discrete quantities approximate: for the flow problem (16) to be well posed on Ω\_F(d),
 for the divergence theorem and the trace theorem used in deriving the continuous adjoint,
 and for the force integral (24) to be meaningful as a surface integral. The assumption is
 therefore about the mathematical model, not about the executability of the algorithm.
@@ -68,7 +69,7 @@ automatically belongs to this class. The decoder uses ReLU activations with a li
 output layer and no smooth nonlinearity (weight normalization is a reparameterization of
 the weights, so each layer is affine at fixed parameters); the coordinate transform (10)
 is piecewise linear; and the latent field (9) is a degree-one B-spline, hence piecewise
-linear in x. The composite ŝ(x) = f_θ(T(x), λ(x)) is therefore **piecewise linear** in x,
+linear in x. The composite ŝ(x) = f\_θ(T(x), λ(x)) is therefore **piecewise linear** in x,
 and its zero level set is a polyhedral surface: Lipschitz, with a well-defined normal
 everywhere except on a set of edges of measure zero.
 
@@ -95,23 +96,25 @@ any point.
 **Normals play no role in the reconstruction or in its error measures.** Three steps are
 involved, and none uses a normal:
 
-- The ground-truth signed distance field is evaluated by an unsigned closest-point query
+* The ground-truth signed distance field is evaluated by an unsigned closest-point query
   on the triangulated target, with the sign obtained separately by ray casting
   (crossing parity) to classify points as inside or outside. Neither the magnitude nor
   the sign is derived from a surface normal, so an ambiguous normal at an edge does not
   make the target field ambiguous. The exact distance function is well defined at and
   near edges for any closed surface.
-- The reconstruction problem (15) fits signed distance **values** through a clamped L¹
+
+* The reconstruction problem (15) fits signed distance **values** through a clamped L¹
   loss. No normal and no gradient of s appears in it.
-- Both error measures compare distance values: MAE_SDF in (22) is a difference of signed
-  distances at sample points, and MAE_geom in (23) is the distance of reconstructed
+
+* Both error measures compare distance values: MAE\_SDF in (22) is a difference of signed
+  distances at sample points, and MAE\_geom in (23) is the distance of reconstructed
   surface vertices from the target. Figure 10d likewise shows a signed-distance error.
 
 **The mechanism we now give instead.** The revised text distinguishes (i) regions of high
 but smooth curvature, where the error reflects the finite spatial resolution of the
 latent control lattice, from (ii) neighbourhoods of edges, where the *target distance
 field is not differentiable*: outside a convex edge the closest point on the surface is
-the edge itself, so ∇s_gt rotates through a finite angle across an arbitrarily thin
+the edge itself, so ∇s\_gt rotates through a finite angle across an arbitrarily thin
 region, and the field has a crease. Reproducing such a feature requires the
 representation to place its own non-smooth structure at exactly that location.
 
@@ -128,7 +131,7 @@ We are grateful to the reviewer for pressing on this point: the original attribu
 "stronger curvature" was too loose, and the distinction now drawn is sharper than the one
 we first wrote.
 
-> **[AUTHOR: this now contradicts the reviewer's suggested mechanism rather than
+> **\[AUTHOR: this now contradicts the reviewer's suggested mechanism rather than
 > accepting it.** I believe the argument is correct — normals genuinely do not enter the
 > reconstruction path — but it is a disagreement with a referee, so please satisfy
 > yourself before sending. If you would rather quantify the claim than argue it, the
@@ -147,7 +150,7 @@ clarity, that the construction itself requires only the Lipschitz/piecewise-C¹
 regularity assumed in Section 2.1.1, and that the representation is applied to
 geometries with edges in Sections 3.1 and 3.2.
 
----
+***
 
 ## Comment 4 — C⁰ transformation, gradient kinks, H¹/eikonal loss, higher-degree splines
 
@@ -157,94 +160,56 @@ geometries with edges in Sections 3.1 and 3.2.
 > interfaces? … A higher-degree B-spline latent field (p ≥ 2) would presumably also be
 > an option here.*
 
-This was the most valuable comment in the report and we have investigated it
-numerically rather than answering it in the abstract. A new subsection has been added.
+We thank the reviewer for this observation, which we investigated numerically rather
+than answering in the abstract. A paragraph has been added to Section 2.1.2 after the
+discussion of Equation (10).
 
-**Where the kinks are.** From Equation (10), with v = t·x_norm, the derivative is
-dT/dx = ±2t/(b₁−b₀) almost everywhere, and the sign flips at every integer v — that is,
-exactly at the tile interfaces. These planes are known analytically and need not be
-searched for.
+Since T is only C⁰, its derivative changes sign at every voxel interface, and these
+planes are known analytically rather than needing to be located empirically. We
+therefore evaluated ∇s at pairs of points straddling each interface and compared the
+result against a control measurement on mid-tile planes, where the transform is smooth,
+restricting the comparison to a narrow band around the surface — beyond the clamping
+distance δ the training loss does not constrain the decoder, so its gradients there
+carry no information.
 
-**What we measured.** Using the same geometry (flow channel), the same pretrained
-decoder (d_lat = 32), the same 1×8×8 tiling and a fixed random seed, we evaluated ∇s at
-pairs of points straddling each interface plane and compared the result against a
-control measurement on mid-tile planes at the same separation, where the transform is
-smooth. The comparison is restricted to the near-surface band |s| < 0.02; outside the
-clamping distance δ = 0.1 the training loss (13) does not constrain the decoder, so
-gradients there carry no information.
+The outcome is that the **magnitude** of ∇s shows no interface effect at all: the jump
+across an interface is indistinguishable from the mid-tile control. The **direction**
+does change, by a small but clearly resolvable amount relative to the control, and the
+effect is strictly local to the interface planes. We now state this in the manuscript
+as a small, localized deviation rather than leaving the reader to infer that the
+representation is smooth.
 
-| variant | p | eikonal λ | recon. loss | \|∇s\| jump (interface / control) | normal turn (interface / control) |
-|---|---|---|---|---|---|
-| A (as submitted) | 1 | 0 | 6.31·10⁻⁴ | 0.0742 / 0.0772 | **6.21° / 1.71°** |
-| B | 2 | 0 | 5.16·10⁻⁴ | 0.0755 / 0.0781 | 3.85° / 1.92° |
-| C | 1 | 0.05 | 7.67·10⁻³ | 0.1368 / 0.1483 | 17.35° / 6.54° |
-| D | 2 | 0.05 | 3.67·10⁻³ | 0.1003 / 0.1037 | 5.12° / 2.30° |
+A quadratic latent field (p ≥ 2) measurably reduces the effect and slightly improves the
+reconstruction accuracy, so the reviewer's suggestion is well founded. The trade-off,
+which we now state, is that for a fixed tiling it increases the number of latent control
+variables and broadens their support; keeping the number of variables fixed instead
+would require a coarser tiling and so reduce the locality of the geometric control.
 
-**Findings.**
+We also tested an eikonal penalty during the reconstruction of the initial geometry. It
+did not help: both the normal deviation and the reconstruction accuracy became worse. We
+believe this is structural rather than incidental. The decoder used here was trained
+without a gradient-based term, so imposing |∇s| = 1 on the latent control vectors alone
+works against a fixed decoder rather than with it. A gradient-aware, H¹-type **training**
+loss is therefore the principled route and we note it as an interesting direction for
+future work. We did not pursue it in this revision for two reasons: the kink originates
+in T(x), upstream of the decoder, so no training loss can remove it entirely; and
+retraining would change the model on which every other result in the paper rests.
 
-1. The kink is measurable, and it appears in the **direction** of ∇s and not in its
-   magnitude. The relative jump in |∇s| across an interface is indistinguishable from
-   the mid-tile control (ratio 0.96).
-2. For the configuration used in the manuscript the median normal direction changes by
-   **6.2° across an interface, against 1.7° mid-tile**, a factor of 3.6. The effect is
-   therefore real but modest, and it is local to the interface planes.
-3. **A quadratic latent field (p = 2) halves it** — 3.85°, a factor of 2.0 over its
-   control — and slightly improves the reconstruction loss. The cost is 1.85× more
-   design variables (5184 → 9600 for this tiling). We now report this trade-off
-   explicitly, and we thank the reviewer for the suggestion: it is the effective lever.
-4. **Enabling the eikonal penalty during reconstruction is counterproductive.** The
-   normal jump grows to 17.4° and the reconstruction loss degrades by an order of
-   magnitude. The reason is structural: the decoder used here was trained with
-   EikonalLambda = 0, so imposing |∇s| = 1 on the latent codes alone works against a
-   fixed decoder rather than with it.
-
-**A clarification on how the kink reaches the optimizer.** The comment states that the
-shape sensitivities require the gradient of the neural SDF, the surface normal being
-∇s/|∇s|. That is the correct continuum picture — by the implicit function theorem a
-perturbation δs of the field moves the interface by δx = −δs/|∇s| along the normal — but
-we should record that our implementation never forms ∇s, so the propagation route is
-slightly different and worth stating precisely.
-
-In the differentiable chain (21), the surface is extracted by FlexiCubes from signed
-distance **values** sampled on a regular grid, and automatic differentiation propagates
-through those values. The gradient of the field is never evaluated: FlexiCubes accepts an
-optional gradient callback, which we do not supply, and the only reverse-mode
-differentiations in the optimization loop are with respect to the design variables, not
-with respect to spatial coordinates. The unit normals that multiply the adjoint surface
-sensitivity are computed from the extracted triangulation itself, as area-weighted
-averages of face normals, not from ∇s/|∇s|.
-
-The continuum relation nevertheless survives in discrete form: FlexiCubes locates each
-surface vertex by interpolating along a grid edge between corners of opposite sign, so
-the derivative of a vertex position with respect to the sampled values is inversely
-proportional to the finite difference of s along that edge — a discrete surrogate for
-1/|∇s| at the extraction resolution. A kink in ∇s therefore does influence the
-sensitivities, but through these cell-wise differences rather than through a pointwise
-gradient, and its effect is limited by the extraction grid rather than by the pointwise
-non-differentiability of the field.
-
-We therefore report the measurement above as a property of the **representation**, which
-is what the tabulated quantities characterise, and we now state explicitly in the
-manuscript that the quantity entering the optimizer is a grid-resolution difference of
-signed distance values.
-
-> **[AUTHOR: scope limitation, please note.** The table measures ∇s of the neural field,
-> obtained by automatic differentiation as a diagnostic. It does **not** directly measure
-> the two things the comment names: the normals of the extracted triangulation, and the
-> assembled sensitivity field. Both are measurable — the dihedral angles of the extracted
-> mesh binned by distance to a tile interface, and the same binning applied to the
-> per-vertex sensitivity vector — and neither was done. If you would prefer the answer to
-> address the referee's question literally rather than by the argument above, this is a
-> few hours of work and I can prepare it.] First, the kink lives in
-T(x), **upstream of the decoder**; no training loss can remove it, because it is a
-property of the coordinate map, not of the learned function. A gradient-aware loss can
-only reduce the magnitude of the jump by making the local field vary more smoothly.
-Second, our training data stores only (x, s_gt) pairs, so H¹ supervision would require
-regenerating the dataset with ground-truth normals. Retraining the decoder would also
-mean that every result in the paper referred to a different model. We therefore report
-the measurement above and leave decoder-level gradient supervision to future work.
-
----
+> **\[AUTHOR: two scope notes.]**
+>
+> 1. The measurement characterises ∇s of the represented field, i.e. the normal of the
+>    zero level set. It does **not** measure the normals of the extracted triangulation
+>    or the assembled sensitivity field, which are the two objects the referee names. The
+>    text above has been written to claim only what was measured — please keep it that
+>    way, or let me measure the other two (dihedral angles of the extracted mesh and the
+>    per-vertex sensitivity, both binned by distance to a tile interface, a few hours).
+> 2. The eikonal penalty was tested during **reconstruction only**. No decoder training
+>    run with an eikonal term exists in the archived record, so please do not state that
+>    it was tested during training.
+>
+> Quantitative backing for every claim above is in `revision_artifacts/grad_probe/`
+> (`summary.txt`, `grad_probe.json`, `grad_across_interfaces.png`) should the editor ask
+> for it.
 
 ## Comment 5 — Dropout
 
@@ -268,7 +233,7 @@ sentence in Section 2.1.5 has been removed. We regret the error and are grateful
 caught. No result changes: the trained networks, and therefore every number in the
 paper, are unaffected — only the description was wrong.
 
----
+***
 
 ## Comment 6 — Normalization and the mapping to the optimization domain
 
@@ -281,11 +246,12 @@ because writing it out revealed a point we had not previously appreciated.
 
 There are **two** stages, and only the first is isotropic:
 
-- **Stage A (physical → normalized).** A single uniform scale factor 2/L, with
+* **Stage A (physical → normalized).** A single uniform scale factor 2/L, with
   L = max extent of the design box, applied to all three axes. The design box is
-  therefore *not* stretched to fill [−1,1]³; only its longest axis reaches ±1.
-- **Stage B (normalized → decoder input).** The transformation (10) rescales **each axis
-  independently** so that every tile spans [−1,1] in the decoder's input.
+  therefore *not* stretched to fill \[−1,1]³; only its longest axis reaches ±1.
+
+* **Stage B (normalized → decoder input).** The transformation (10) rescales **each axis
+  independently** so that every tile spans \[−1,1] in the decoder's input.
 
 The net effect is that Stage B undoes the isotropy that Stage A establishes. For
 Experiment 1 the design domain is 3 × 1.6 × 1.6 with a 2×2×2 tiling, so a single tile is
@@ -293,7 +259,7 @@ physically 1.5 × 0.8 × 0.8 and is mapped onto the cube [−1,1]³: **the decod
 distances along x compressed by a factor 1.875 relative to y and z** (2.0 for the
 cube-with-cylinders domain, which is 3.2 × 1.6 × 1.6).
 
-Since the decoder was trained on primitives in an isotropic box Ω_box = [−1,1]³, it is
+Since the decoder was trained on primitives in an isotropic box Ω\_box = \[−1,1]³, it is
 queried slightly off its training distribution during optimization. We now state this
 explicitly rather than leave it implicit, and note it as a limitation: choosing tilings
 whose tiles are close to cubic keeps the decoder nearer its training regime, and is a
@@ -307,27 +273,27 @@ losses.
 3 × 1.5 × 1.5. The value used in all computations is **3 × 1.6 × 1.6**. The text has been
 corrected; no result is affected.
 
----
+***
 
 ## Comment 7 — float32 versus float64 in the composed gradient
 
 > *How important is this precision mismatch… particularly for the accuracy of the
 > composed gradient in Equation (21) and for the convergence criterion (29) with
-> ε_D = 2 × 10⁻⁴?*
+> ε\_D = 2 × 10⁻⁴?*
 
 We have quantified this. A new appendix reports a finite-difference verification of the
 differentiable geometry chain d → λ(x) → s, carried out in both single and double
 precision on the same reconstructed configuration (20 randomly chosen design variables,
 central differences, eight step sizes).
 
-| step h | float32 | float64 |
-|---|---|---|
-| 10⁻¹ | 1.677·10⁻² | 1.676·10⁻² |
-| 10⁻² | 1.723·10⁻³ | 1.715·10⁻³ |
-| 10⁻³ | 1.242·10⁻³ | 1.207·10⁻³ |
+| step h | float32    | float64    |
+| ------ | ---------- | ---------- |
+| 10⁻¹   | 1.677·10⁻² | 1.676·10⁻² |
+| 10⁻²   | 1.723·10⁻³ | 1.715·10⁻³ |
+| 10⁻³   | 1.242·10⁻³ | 1.207·10⁻³ |
 | 3·10⁻⁴ | 1.418·10⁻³ | 8.044·10⁻⁴ |
-| 10⁻⁴ | 5.040·10⁻³ | 5.557·10⁻⁴ |
-| 10⁻⁵ | 3.909·10⁻² | 2.231·10⁻⁴ |
+| 10⁻⁴   | 5.040·10⁻³ | 5.557·10⁻⁴ |
+| 10⁻⁵   | 3.909·10⁻² | 2.231·10⁻⁴ |
 
 The two are **indistinguishable for h ≥ 10⁻³**, where truncation error dominates. They
 separate only below that: single precision reaches a floor of about 1.2·10⁻³ relative
@@ -346,14 +312,14 @@ arithmetic precision of evaluating and differentiating it — which is exactly t
 question the reviewer raises about Equation (21) — rather than comparing two models of
 different accuracy.
 
-This is not a limitation in practice, because the MMA move limit is max_step = 0.02 —
+This is not a limitation in practice, because the MMA move limit is max\_step = 0.02 —
 two orders of magnitude above the step size at which precision begins to matter. We now
 state this.
 
-**On ε_D specifically**, we note that it is a criterion on the *objective*, not on the
-gradient: it bounds |J_m − J_{m−1}|/|J_0|. The objective is read from the flow solver's
+**On ε\_D specifically**, we note that it is a criterion on the *objective*, not on the
+gradient: it bounds |J\_m − J\_{m−1}|/|J\_0|. The objective is read from the flow solver's
 output at six significant digits, a relative representation error of order 10⁻⁶ — two
-orders of magnitude below ε_D. Arithmetic precision is therefore not the binding
+orders of magnitude below ε\_D. Arithmetic precision is therefore not the binding
 uncertainty on the convergence test; the discretization error of J is, and that is
 quantified in our response to Comment 8.
 
@@ -367,7 +333,7 @@ fixed connectivity, but it means the mapping from design variables to the extrac
 surface is not globally smooth. We now state this as a property of the representation
 and a caveat for gradient-based methods that assume smoothness.
 
----
+***
 
 ## Comment 8 — Mesh resolution, residual levels, and mesh independence
 
@@ -382,11 +348,11 @@ neural-SDF design and the optimized FFD (7×7×7) design — were each re-analys
 surface refinement levels. Level 6 is the setting used for every result in the
 manuscript.
 
-| geometry | L5 cells / drag | L6 cells / drag | L7 cells / drag |
-|---|---|---|---|
-| initial | 77 280 / 36.9013 | 275 951 / 37.1499 | 1 416 870 / 37.2557 |
+| geometry              | L5 cells / drag  | L6 cells / drag   | L7 cells / drag     |
+| --------------------- | ---------------- | ----------------- | ------------------- |
+| initial               | 77 280 / 36.9013 | 275 951 / 37.1499 | 1 416 870 / 37.2557 |
 | optimized, neural SDF | 70 831 / 30.9071 | 204 951 / 30.9404 | 1 056 701 / 30.9999 |
-| optimized, FFD 7×7×7 | 71 289 / 31.0600 | 207 264 / 31.0976 | 1 079 245 / 31.1562 |
+| optimized, FFD 7×7×7  | 71 289 / 31.0600 | 207 264 / 31.0976 | 1 079 245 / 31.1562 |
 
 Relative change from L6 to L7: **0.285%, 0.192%, 0.188%** respectively. All meshes pass
 `checkMesh`; maximum non-orthogonality is 41–63° and maximum skewness below 1.3.
@@ -435,7 +401,7 @@ obtained from the converged primal solution. An inexact descent direction is con
 with, and a plausible partial explanation of, the slow tail of the convergence histories
 in Figures 14 and 20. We have added this to the limitations discussion.
 
----
+***
 
 ## Comment 9 — Citation for the low-Reynolds-number argument
 
@@ -445,7 +411,7 @@ in Figures 14 and 20. We have added this to the limitations discussion.
 
 Agreed; a citation has been added.
 
-> **[AUTHOR: please select and verify the reference.** The natural citation is the
+> **\[AUTHOR: please select and verify the reference.** The natural citation is the
 > classical work on optimum profiles in Stokes flow — Pironneau, *On optimum profiles in
 > Stokes flow*, Journal of Fluid Mechanics **59** (1973) 117–128 — which derives the
 > drag-minimizing body at vanishing Reynolds number and is directly on point. Bourot,
@@ -454,7 +420,7 @@ Agreed; a citation has been added.
 > published records from here, so please confirm volume, pages and year before
 > submission, and satisfy yourself that the reference says what we claim.]
 
----
+***
 
 ## Comment 10 — Figure 18, coordinate axes and cutting planes
 
@@ -472,7 +438,7 @@ optimized neural-SDF body, so that the overlay is meaningful. We note in the cap
 that the two centroids agree to within 7·10⁻³, i.e. the centroid constraint (27) is
 satisfied by both designs.
 
----
+***
 
 ## Comment 11 — Cost of the initialization stage
 
@@ -482,11 +448,11 @@ satisfied by both designs.
 
 We have measured this and added it to the discussion.
 
-| case | initialization | per optimization iteration | share of total | equivalent iterations |
-|---|---|---|---|---|
-| cube | 210 s | 179.6 s | 3.8% | 1.2 |
-| cube with cylinders | 285 s | 199.1 s | 4.2% | 1.4 |
-| perforated cube | 173 s | 173.4 s | 4.5% | 1.0 |
+| case                | initialization | per optimization iteration | share of total | equivalent iterations |
+| ------------------- | -------------- | -------------------------- | -------------- | --------------------- |
+| cube                | 210 s          | 179.6 s                    | 3.8%           | 1.2                   |
+| cube with cylinders | 285 s          | 199.1 s                    | 4.2%           | 1.4                   |
+| perforated cube     | 173 s          | 173.4 s                    | 4.5%           | 1.0                   |
 
 The initialization stage costs roughly **one optimization iteration**, that is about 4%
 of the total, and is dominated entirely by the latent-code fit; loading the decoder and
@@ -504,7 +470,7 @@ either GPU — each step evaluates a small decoder on 4096 sample points — so 
 are dominated by kernel-launch and host-side overhead rather than by floating-point
 throughput, which is why the nominally faster card is not the faster one here.
 
-> **[AUTHOR: one residual caveat, if you wish to state it.** The per-iteration figures
+> **\[AUTHOR: one residual caveat, if you wish to state it.** The per-iteration figures
 > are taken from the original optimization runs, whose hardware is not recorded
 > (`config_log.json` stores only `device: "cuda"`, and the archived Slurm logs carry no
 > node information). The ratio therefore combines a fresh GPU measurement with recorded
@@ -512,7 +478,7 @@ throughput, which is why the nominally faster card is not the faster one here.
 > we judged unwarranted: the loop is bounded by the CPU-side flow and adjoint solutions,
 > which the GPU does not affect.]
 
----
+***
 
 ## Minor and editorial
 
@@ -521,7 +487,7 @@ been replaced with the correct short author list. We apologise for the oversight
 
 **Equation (24), factor of two.** We have adopted the standard form
 
-  σ(u, p) = −p I + 2 ρ ν · ½(∇u + ∇uᵀ),
+σ(u, p) = −p I + 2 ρ ν · ½(∇u + ∇uᵀ),
 
 and corrected the accompanying text, which previously referred to ∇u + ∇uᵀ as "the
 symmetric part of the velocity gradient". The reviewer is right that this was loose: the
@@ -539,15 +505,15 @@ passes over all 1.1 × 10⁶ samples per scene. We also now state that the learn
 schedule has a decay interval of 12 000 epochs, so the learning rate does not in fact
 decay during the 10 000 epochs of training.
 
-Training took **4 h 25 min, 4 h 26 min and 4 h 27 min** for d_lat = 8, 16 and 32
+Training took **4 h 25 min, 4 h 26 min and 4 h 27 min** for d\_lat = 8, 16 and 32
 respectively, each on a single **NVIDIA GeForce RTX 4090 (24 GB)**.
 
 **Table 3, design variables.** Table 3 now includes the number of latent design
-variables implied by each tiling, computed as d_lat · Π(t_i + p_i). For reference, the
+variables implied by each tiling, computed as d\_lat · Π(t\_i + p\_i). For reference, the
 flow-channel case at 1×8×8 uses 5184 design variables, and the shape reconstructions in
 Figure 11 use 27 040 (propeller and dog) and 37 856 (rim).
 
----
+***
 
 ## Corrections made on our own initiative
 
@@ -574,7 +540,7 @@ Additionally, and as described under Comment 8, we have restated the FFD compari
 terms of absolute drag on a common mesh, because the two optimizations were started from
 different baselines.
 
----
+***
 
 ## Reproducibility
 
@@ -586,7 +552,7 @@ the redrawn Figure 18, and the recomputation of Tables 3 and 4 from the archived
 records. Each carries a self-check that reproduces a published value before emitting new
 numbers.
 
-> **[AUTHOR: decide whether these scripts and the associated result files are to be
+> **\[AUTHOR: decide whether these scripts and the associated result files are to be
 > included in the updated Zenodo deposit, and whether the raw solver logs from the
 > mesh-independence study should be deposited with them.]**
 
