@@ -1,0 +1,43 @@
+MESH-INDEPENDENCE STUDY (reviewer comment 8)
+OpenFOAM v2506, fixed geometries, 16 ranks. Refinement levels 5/6/7;
+level 6 is the shipped configuration used for every manuscript result.
+
+geometry             level     cells       drag  max nonortho  primal it     adjoint
+cyl_init                 5     77280    36.9013         58.57        606    CAP 1000
+cyl_init                 6    275951    37.1499         55.06        676    CAP 1000
+cyl_init                 7   1416870    37.2557         61.47        907    CAP 1000
+cyl_final_neural         5     70831    30.9071         43.04        644    CAP 1000
+cyl_final_neural         6    204951    30.9404         40.75        716    CAP 1000
+cyl_final_neural         7   1056701    30.9999         42.80        924    CAP 1000
+cyl_final_ffd7           5     71289    31.0600         62.79        641    CAP 1000
+cyl_final_ffd7           6    207264    31.0976         56.54        710    CAP 1000
+cyl_final_ffd7           7   1079245    31.1562         59.36        917    CAP 1000
+
+DISCRETIZATION UNCERTAINTY (relative change in drag)
+  cyl_init             L5->L6  0.674%    L6->L7  0.285%
+  cyl_final_neural     L5->L6  0.108%    L6->L7  0.192%
+  cyl_final_ffd7       L5->L6  0.121%    L6->L7  0.188%
+
+NEURAL vs FFD, ABSOLUTE FINAL DRAG ON A COMMON MESH
+  L5: neural 30.9071   FFD 7x7x7 31.0600   neural better by 0.492%
+  L6: neural 30.9404   FFD 7x7x7 31.0976   neural better by 0.506%
+  L7: neural 30.9999   FFD 7x7x7 31.1562   neural better by 0.502%
+  -> the ranking is identical at all three levels and the margin is stable
+     (0.492 / 0.506 / 0.502 %), while per-geometry mesh uncertainty is <=0.29%.
+     Refinement moves both designs the same way, so the DIFFERENCE is better
+     converged than either absolute value.
+
+CAVEAT THE MANUSCRIPT MUST STATE: the two runs used DIFFERENT baselines
+  neural SDF   J0=37.1499  Jfinal=30.9404  reduction=16.71%  FlexiCubes res=48
+  FFD 7x7x7    J0=36.8845  Jfinal=31.0976  reduction=15.69%  FlexiCubes res=64
+  FFD 5x5x5    J0=36.8845  Jfinal=31.6468  reduction=14.20%  FlexiCubes res=64
+  The neural run starts from the RECONSTRUCTED surface (J0=37.1499); the FFD
+  runs start from the CAD surface (J0=36.8845), 0.72% lower. The reported
+  reductions are therefore relative to different starting points, and part of
+  the 16.71 vs 15.69 percentage-point gap is that offset rather than optimizer
+  performance. The defensible comparison is the absolute final drag above.
+
+ADJOINT CONVERGENCE: in all 9 runs the primal converged (606-924 iterations)
+  while the adjoint reached its 1000-iteration cap without meeting its 1e-5
+  residualControl. This affects the sensitivity field (the descent direction),
+  not the drag values tabulated here, which come from the converged primal.
