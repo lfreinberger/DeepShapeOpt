@@ -67,20 +67,23 @@ def main() -> None:
             ri, rf = runs.get((gi, lvl)), runs.get((gf, lvl))
             if not (ri and rf):
                 continue
-            red = 100.0 * (ri["drag"] - rf["drag"]) / ri["drag"]
-            rows.append((label, lvl, ri["cells"], rf["cells"], ri["drag"], rf["drag"], red))
+            norm = rf["drag"] / ri["drag"]          # normalized drag, as in Fig. 14
+            red = 100.0 * (1.0 - norm)
+            rows.append((label, lvl, ri["cells"], rf["cells"],
+                         ri["drag"], rf["drag"], norm, red))
             out.append({"method": label, "level": lvl,
                         "cells_initial": ri["cells"], "cells_final": rf["cells"],
                         "drag_initial": ri["drag"], "drag_final": rf["drag"],
+                        "normalized_drag": norm,
                         "reduction_pct": red,
                         "published_reduction_pct_L6": published if lvl == 6 else None})
 
     hdr = (f"{'method':<12}{'level':>6}{'cells init':>12}{'cells final':>13}"
-           f"{'J_initial':>12}{'J_final':>11}{'reduction':>11}")
+           f"{'J_initial':>12}{'J_final':>11}{'J/J_0':>9}{'reduction':>11}")
     print(hdr); print("-" * len(hdr))
-    for label, lvl, ci, cf, ji, jf, red in rows:
-        print(f"{label:<12}{lvl:>6}{ci:>12,}{cf:>13,}{ji:>12.4f}{jf:>11.4f}{red:>10.2f}%"
-              .replace(",", " "))
+    for label, lvl, ci, cf, ji, jf, norm, red in rows:
+        print(f"{label:<12}{lvl:>6}{ci:>12,}{cf:>13,}{ji:>12.4f}{jf:>11.4f}"
+              f"{norm:>9.4f}{red:>10.2f}%".replace(",", " "))
 
     # Gate: level 6 must reproduce the published reductions.
     print()
@@ -91,9 +94,9 @@ def main() -> None:
             print(f"  {label:<12} L6 not available -- cannot check against the manuscript")
             ok = False
             continue
-        good = abs(r[6] - published) < 0.005
+        good = abs(r[7] - published) < 0.005
         ok &= good
-        print(f"  {label:<12} L6 recomputed {r[6]:.2f}%  vs published {published:.2f}%  "
+        print(f"  {label:<12} L6 recomputed {r[7]:.2f}%  vs published {published:.2f}%  "
               f"[{'OK' if good else 'MISMATCH'}]")
     if not ok:
         print("\n  NOTE: a mismatch here means the normalization convention differs from"
@@ -101,14 +104,14 @@ def main() -> None:
 
     if args.latex:
         print("\n=== LaTeX ===")
-        print(r"\begin{tabular}{llrrrrr}")
+        print(r"\begin{tabular}{llrrrrrr}")
         print(r"\hline")
-        print(r"Method & Level & Cells (init.) & Cells (final) & $J_{0}$ & $J_{\mathrm{final}}$"
-              r" & Reduction \\")
+        print(r"Method & Level & Cells (init.) & Cells (final) & $J_{0}$ & "
+              r"$J_{\mathrm{final}}$ & $J_{\mathrm{final}}/J_{0}$ & Reduction \\")
         print(r"\hline")
-        for label, lvl, ci, cf, ji, jf, red in rows:
+        for label, lvl, ci, cf, ji, jf, norm, red in rows:
             print(f"{label} & {lvl} & {ci:,} & {cf:,} & {ji:.4f} & {jf:.4f} & "
-                  f"{red:.2f}\\% \\\\".replace(",", r"\,"))
+                  f"{norm:.4f} & {red:.2f}\\% \\\\".replace(",", r"\,"))
         print(r"\hline")
         print(r"\end{tabular}")
 

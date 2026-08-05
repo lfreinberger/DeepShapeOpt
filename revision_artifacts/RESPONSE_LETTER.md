@@ -372,16 +372,18 @@ comparisons that matter, in particular the neural-SDF versus FFD margin.
 **Drag reduction at each refinement level.** Because the two pipelines start from
 different initial geometries, we evaluated each initial geometry as well, so that every
 reduction is formed from a numerator and a denominator taken on the *same* mesh. This
-reproduces the reductions of Table 4 exactly at level 6.
+reproduces the reductions of Table 4 exactly at level 6. The normalized drag J_final/J₀
+is the quantity plotted in Figures 14 and 20, and at level 6 it agrees with the final value
+of the stored convergence histories to five decimal places.
 
-| Method | Level | Cells (init.) | Cells (final) | J₀ | J_final | Reduction |
-|---|---|---|---|---|---|---|
-| Neural SDF | 5 | 77 280 | 70 831 | 36.9013 | 30.9071 | 16.24% |
-| Neural SDF | 6 | 275 951 | 204 951 | 37.1499 | 30.9404 | 16.71% |
-| Neural SDF | 7 | 1 416 870 | 1 056 701 | 37.2557 | 30.9999 | 16.79% |
-| FFD 7×7×7 | 5 | 80 608 | 71 289 | 36.7366 | 31.0600 | 15.45% |
-| FFD 7×7×7 | 6 | 274 452 | 207 264 | 36.8845 | 31.0976 | 15.69% |
-| FFD 7×7×7 | 7 | 1 397 172 | 1 079 245 | 36.9478 | 31.1562 | 15.68% |
+| Method | Level | Cells (init.) | Cells (final) | J₀ | J_final | J_final/J₀ | Reduction |
+|---|---|---|---|---|---|---|---|
+| Neural SDF | 5 | 77 280 | 70 831 | 36.9013 | 30.9071 | 0.8376 | 16.24% |
+| Neural SDF | 6 | 275 951 | 204 951 | 37.1499 | 30.9404 | 0.8329 | 16.71% |
+| Neural SDF | 7 | 1 416 870 | 1 056 701 | 37.2557 | 30.9999 | 0.8321 | 16.79% |
+| FFD 7×7×7 | 5 | 80 608 | 71 289 | 36.7366 | 31.0600 | 0.8455 | 15.45% |
+| FFD 7×7×7 | 6 | 274 452 | 207 264 | 36.8845 | 31.0976 | 0.8431 | 15.69% |
+| FFD 7×7×7 | 7 | 1 397 172 | 1 079 245 | 36.9478 | 31.1562 | 0.8432 | 15.68% |
 
 **The comparison is not an artefact of the discretization.** The advantage of the
 proposed method over the FFD parameterization is 0.79, 1.03 and 1.12 percentage points at
