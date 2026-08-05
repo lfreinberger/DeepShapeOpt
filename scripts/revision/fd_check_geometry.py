@@ -64,6 +64,40 @@ N_COMPONENTS = 20
 SEED = 0
 
 
+def _discrepancy(g_fd: np.ndarray, g_ad: np.ndarray) -> dict:
+    """Agreement between a finite-difference and an analytic gradient.
+
+    Several statistics, because a single one is easy to misread:
+
+    * ``max_rel_diff``  -- worst component, normalized by the largest analytic
+      component. Conservative, but dominated by whichever component is worst.
+    * ``mean_rel_diff`` / ``median_rel_diff`` -- same normalization, averaged.
+      Less sensitive to a single outlier.
+    * ``rel_l2``        -- ||g_fd - g_ad||_2 / ||g_ad||_2, the usual relative
+      error of the gradient vector. Not dominated by one component and not
+      sensitive to near-zero components, so this is the fairest summary.
+
+    A single scalar denominator is used throughout rather than per-component
+    normalization, which would blow up wherever an analytic component is near
+    zero. The raw per-component differences are stored so that any other
+    statistic can be formed later without re-running.
+    """
+    diff = np.abs(g_fd - g_ad)
+    denom = float(np.max(np.abs(g_ad))) or 1.0
+    return {
+        "max_abs_diff": float(diff.max()),
+        "mean_abs_diff": float(diff.mean()),
+        "median_abs_diff": float(np.median(diff)),
+        "max_rel_diff": float(diff.max() / denom),
+        "mean_rel_diff": float(diff.mean() / denom),
+        "median_rel_diff": float(np.median(diff) / denom),
+        "rel_l2": float(np.linalg.norm(g_fd - g_ad) / np.linalg.norm(g_ad)),
+        "max_abs_grad": denom,
+        "per_component_abs_diff": diff.tolist(),
+        "grad_analytic": g_ad.tolist(),
+    }
+
+
 def _flat_param(lattice):
     (p,) = list(lattice.parametrization.parameters())
     return p
@@ -100,16 +134,11 @@ def experiment_a(lattice, opt_cfg, rec_cfg, box_norm, scaling, idx) -> dict:
             g_fd[k] /= 2 * h
         p.data = base.clone()
 
-        denom = np.max(np.abs(g_ad)) or 1.0
-        rows.append({
-            "h": h,
-            "max_abs_diff": float(np.max(np.abs(g_fd - g_ad))),
-            "max_rel_diff": float(np.max(np.abs(g_fd - g_ad)) / denom),
-            "topology_changes": topo,
-            "n_evals": 2 * len(idx),
-        })
-        print(f"    h={h:<8.0e} max rel diff {rows[-1]['max_rel_diff']:.3e}"
-              f"   topology changes {topo}/{2 * len(idx)}", flush=True)
+        rows.append({"h": h, "topology_changes": topo, "n_evals": 2 * len(idx),
+                     **_discrepancy(g_fd, g_ad)})
+        r = rows[-1]
+        print(f"    h={h:<8.0e} max {r['max_rel_diff']:.3e}   mean {r['mean_rel_diff']:.3e}"
+              f"   rel_L2 {r['rel_l2']:.3e}   topology changes {topo}/{2 * len(idx)}", flush=True)
 
     return {"reference_vertex_count": n_ref, "grad_autograd_subset": g_ad.tolist(),
             "sweep": rows}
@@ -162,14 +191,15 @@ def experiment_b(lattice, box_norm, idx, dtype: torch.dtype, n_points=10_000) ->
                         g_fd[k] += sign * float(f().item())
                 g_fd[k] /= 2 * h
             p.data = base.clone()
-            denom = np.max(np.abs(g_ad)) or 1.0
-            rows.append({"h": h,
-                         "max_abs_diff": float(np.max(np.abs(g_fd - g_ad))),
-                         "max_rel_diff": float(np.max(np.abs(g_fd - g_ad)) / denom)})
-            print(f"    h={h:<8.0e} max rel diff {rows[-1]['max_rel_diff']:.3e}", flush=True)
+            rows.append({"h": h, **_discrepancy(g_fd, g_ad)})
+            r = rows[-1]
+            print(f"    h={h:<8.0e} max {r['max_rel_diff']:.3e}   mean {r['mean_rel_diff']:.3e}"
+                  f"   rel_L2 {r['rel_l2']:.3e}", flush=True)
         best = min(rows, key=lambda r: r["max_rel_diff"])
+        best_l2 = min(rows, key=lambda r: r["rel_l2"])
         return {"dtype": str(dtype), "n_points": n_points, "sweep": rows,
-                "best_rel_diff": best["max_rel_diff"], "best_h": best["h"]}
+                "best_rel_diff": best["max_rel_diff"], "best_h": best["h"],
+                "best_rel_l2": best_l2["rel_l2"], "best_h_l2": best_l2["h"]}
     finally:
         torch.set_default_dtype(saved_default)
         p.data = saved_p

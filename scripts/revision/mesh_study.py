@@ -69,7 +69,16 @@ OBJECTIVE_PATH = "optimisation/objective/0/dragadjS1"
 # "initial" geometry is the shape after one MMA update. That is what the gate
 # compares against, so the comparison is still exact.
 GEOMETRIES = {
+    # Initial geometry of the LATENT run: the reconstructed surface, J0 = 37.1499.
     "cyl_init": ARCHIVE_HEAVY / "results_cube_with_cylinders/stl_series/shape_0001.stl",
+    # Initial geometry of the FFD run: J0 = 36.8845. This is a DIFFERENT surface --
+    # the FFD pipeline starts from the CAD geometry, not from a reconstruction --
+    # and it is required to reproduce the manuscript's FFD reduction, which is
+    # normalized by this baseline. Taken from the archived series rather than from
+    # data/shapes/cube_with_cylinders.stl, because the run re-exports the surface at
+    # its own resolution (1.18 MB vs 78 kB) and the raw CAD file is not what was meshed.
+    "cyl_init_ffd": ARCHIVE_HEAVY
+    / "results_ffd_cube_with_cylinders_7x7x7/stl_series/shape_0001.stl",
     "cyl_final_neural": ARCHIVE_LIGHT
     / "results_cube_with_cylinders/optimization/current_shape.stl",
     "cyl_final_ffd7": ARCHIVE_LIGHT
@@ -106,9 +115,13 @@ PATCH = {
 # Cell caps must grow with the level or snappy silently stops refining.
 CAPS = {5: (100_000, 2_000_000), 6: (100_000, 2_000_000), 7: (500_000, 8_000_000)}
 
+# Field names as they actually appear in these logs. NOTE: plotting_utils.py uses
+# Uaas1x/paas1, which belong to a different solver naming; those patterns match
+# nothing here and silently yield None. The adjoint fields are Uax/Uay/Uaz/pa,
+# and nuTilda appears because the primal runs Spalart-Allmaras.
 RESIDUAL_PATTERNS = {
     name: re.compile(rf"Solving for {name}, Initial residual = ([0-9eE+.\-]+)")
-    for name in ("Ux", "Uy", "Uz", "p", "Uaas1x", "Uaas1y", "Uaas1z", "paas1")
+    for name in ("Ux", "Uy", "Uz", "p", "nuTilda", "Uax", "Uay", "Uaz", "pa")
 }
 CONV_OK = re.compile(r"(\w+) solution converged in (\d+) iterations")
 CONV_CAP = re.compile(r"(\w+) solution reached max\. number of iterations (\d+)")

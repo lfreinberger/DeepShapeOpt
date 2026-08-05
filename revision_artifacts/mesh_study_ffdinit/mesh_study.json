@@ -1,0 +1,143 @@
+[
+  {
+    "geometry": "cyl_init_ffd",
+    "level": 5,
+    "run_name": "meshstudy_cyl_init_ffd_L5",
+    "stl": "/storage/lfrei/Archive/DeepShapeOpt_archive_paper/experiments/optimization/drag_optimization_cube/results_ffd_cube_with_cylinders_7x7x7/stl_series/shape_0001.stl",
+    "patched": {
+      "features_level": 5,
+      "refinementSurfaces_level": 5,
+      "refinementRegions_distance": 5,
+      "maxLocalCells": 100000,
+      "maxGlobalCells": 2000000
+    },
+    "wall_clock_s": 53.1385064125061,
+    "mesh_ok": true,
+    "cells": 80608,
+    "hexahedra": 71220,
+    "polyhedra": 8860,
+    "max_nonortho": 47.72,
+    "avg_nonortho": 9.51411,
+    "max_skewness": 0.805332,
+    "max_aspect_ratio": 8.30103,
+    "nonortho_check_ok": true,
+    "openfoam_version": "2506",
+    "openfoam_build": "_615aae61d7-20250627",
+    "final_residuals": {
+      "Ux": 7.47488e-07,
+      "Uy": 1.97297e-06,
+      "Uz": 1.97315e-06,
+      "p": 9.87577e-06,
+      "nuTilda": 4.41503e-05,
+      "Uax": 2.87968e-05,
+      "Uay": 6.39832e-05,
+      "Uaz": 6.39863e-05,
+      "pa": 0.000118013
+    },
+    "solvers": {
+      "op1": {
+        "converged": true,
+        "iterations": 609
+      },
+      "adjS1": {
+        "converged": false,
+        "iterations": 1000
+      }
+    },
+    "drag": 36.7366
+  },
+  {
+    "geometry": "cyl_init_ffd",
+    "level": 6,
+    "run_name": "meshstudy_cyl_init_ffd_L6",
+    "stl": "/storage/lfrei/Archive/DeepShapeOpt_archive_paper/experiments/optimization/drag_optimization_cube/results_ffd_cube_with_cylinders_7x7x7/stl_series/shape_0001.stl",
+    "patched": {
+      "features_level": 6,
+      "refinementSurfaces_level": 6,
+      "refinementRegions_distance": 6,
+      "maxLocalCells": 100000,
+      "maxGlobalCells": 2000000
+    },
+    "wall_clock_s": 241.9354338645935,
+    "mesh_ok": true,
+    "cells": 274452,
+    "hexahedra": 246404,
+    "polyhedra": 24040,
+    "max_nonortho": 52.8887,
+    "avg_nonortho": 8.94706,
+    "max_skewness": 1.06641,
+    "max_aspect_ratio": 9.28881,
+    "nonortho_check_ok": true,
+    "openfoam_version": "2506",
+    "openfoam_build": "_615aae61d7-20250627",
+    "final_residuals": {
+      "Ux": 5.50403e-07,
+      "Uy": 1.71241e-06,
+      "Uz": 1.71212e-06,
+      "p": 9.9501e-06,
+      "nuTilda": 3.13387e-05,
+      "Uax": 3.69303e-05,
+      "Uay": 0.00010108,
+      "Uaz": 0.000101039,
+      "pa": 0.000119539
+    },
+    "solvers": {
+      "op1": {
+        "converged": true,
+        "iterations": 684
+      },
+      "adjS1": {
+        "converged": false,
+        "iterations": 1000
+      }
+    },
+    "drag": 36.8845
+  },
+  {
+    "geometry": "cyl_init_ffd",
+    "level": 7,
+    "run_name": "meshstudy_cyl_init_ffd_L7",
+    "stl": "/storage/lfrei/Archive/DeepShapeOpt_archive_paper/experiments/optimization/drag_optimization_cube/results_ffd_cube_with_cylinders_7x7x7/stl_series/shape_0001.stl",
+    "patched": {
+      "features_level": 7,
+      "refinementSurfaces_level": 7,
+      "refinementRegions_distance": 7,
+      "maxLocalCells": 500000,
+      "maxGlobalCells": 8000000
+    },
+    "wall_clock_s": 2545.4283363819122,
+    "mesh_ok": true,
+    "cells": 1397172,
+    "hexahedra": 1303718,
+    "polyhedra": 77556,
+    "max_nonortho": 54.6045,
+    "avg_nonortho": 7.28084,
+    "max_skewness": 1.08861,
+    "max_aspect_ratio": 9.73211,
+    "nonortho_check_ok": true,
+    "openfoam_version": "2506",
+    "openfoam_build": "_615aae61d7-20250627",
+    "final_residuals": {
+      "Ux": 9.73879e-07,
+      "Uy": 2.87085e-06,
+      "Uz": 2.87053e-06,
+      "p": 9.99905e-06,
+      "nuTilda": 2.57582e-05,
+      "Uax": 0.000114935,
+      "Uay": 0.000292951,
+      "Uaz": 0.000293021,
+      "pa": 0.000180672
+    },
+    "solvers": {
+      "op1": {
+        "converged": true,
+        "iterations": 883
+      },
+      "adjS1": {
+        "converged": false,
+        "iterations": 1000
+      }
+    },
+    "drag": 36.9478
+  }
+]

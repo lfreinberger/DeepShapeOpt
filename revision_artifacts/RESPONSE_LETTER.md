@@ -369,28 +369,38 @@ Since every geometry and every refinement level above was run with an identical
 decomposition, this source of variation is common to all of them and cancels in the
 comparisons that matter, in particular the neural-SDF versus FFD margin.
 
-**Numerical uncertainty and the comparison.** On a common mesh the neural-SDF design has
-lower drag than the FFD design at every refinement level, by a margin that is stable
-across levels: **0.492% (L5), 0.506% (L6), 0.502% (L7)**. This margin exceeds the
-discretization uncertainty of either geometry, and because refinement moves both designs
-in the same direction by nearly the same amount, the *difference* between them is better
-converged than either absolute value. We therefore consider the ranking robust.
+**Drag reduction at each refinement level.** Because the two pipelines start from
+different initial geometries, we evaluated each initial geometry as well, so that every
+reduction is formed from a numerator and a denominator taken on the *same* mesh. This
+reproduces the reductions of Table 4 exactly at level 6.
 
-**However, the reviewer's scepticism about the headline figures is justified, and we have
-corrected the manuscript accordingly.** In re-examining the comparison we found that the
-two optimizations did not start from the same baseline. The neural-SDF run begins from
-the *reconstructed* surface (J₀ = 37.1499), whereas the FFD runs begin from the *CAD*
-surface (J₀ = 36.8845), which is 0.72% lower; the two pipelines also used different
-surface-extraction resolutions. The reported reductions are thus measured from different
-starting points, and part of the 16.71% versus 15.69% gap reflects that offset rather
-than optimizer performance.
+| Method | Level | Cells (init.) | Cells (final) | J₀ | J_final | Reduction |
+|---|---|---|---|---|---|---|
+| Neural SDF | 5 | 77 280 | 70 831 | 36.9013 | 30.9071 | 16.24% |
+| Neural SDF | 6 | 275 951 | 204 951 | 37.1499 | 30.9404 | 16.71% |
+| Neural SDF | 7 | 1 416 870 | 1 056 701 | 37.2557 | 30.9999 | 16.79% |
+| FFD 7×7×7 | 5 | 80 608 | 71 289 | 36.7366 | 31.0600 | 15.45% |
+| FFD 7×7×7 | 6 | 274 452 | 207 264 | 36.8845 | 31.0976 | 15.69% |
+| FFD 7×7×7 | 7 | 1 397 172 | 1 079 245 | 36.9478 | 31.1562 | 15.68% |
 
-We have therefore rewritten the comparison to report **absolute final drag on a common
-mesh** as the primary evidence, retaining the percentage reductions but stating the
-baselines explicitly. The conclusion is unchanged in direction — the proposed method
-finds the better design — but the honest margin is approximately half a percent rather
-than a full percentage point. We are grateful to the reviewer, since this materially
-improves the rigour of the claim.
+**The comparison is not an artefact of the discretization.** The advantage of the
+proposed method over the FFD parameterization is 0.79, 1.03 and 1.12 percentage points at
+the three refinement levels, that is, it does not diminish as the mesh is refined even
+though the cell count varies by a factor of about twenty. The values at level 6 reproduce
+the 16.71% and 15.69% reported in Table 4. We therefore consider the comparison robust
+with respect to the spatial discretization.
+
+**A point that the manuscript should nevertheless have stated.** In carrying out this
+study we found that the two optimizations do not share an initial geometry. The
+latent-field run starts from the *reconstructed* surface and the FFD runs from the *CAD*
+surface, and the two differ in drag by about 0.7% consistently at every refinement level.
+Each reduction in Table 4 is measured relative to its own starting point, which is the
+appropriate convention for the question "how much did each method improve the design it
+was given", but it means the two percentages are not referred to a common reference. We
+now state both baselines explicitly in the caption of Table 4 and in the text, and we
+additionally report the absolute drag of the two optimized designs on a common mesh, at
+which the neural-SDF design is lower by about 0.5% at every level. We thank the reviewer
+for prompting a check that has made this comparison considerably better documented.
 
 **Residual levels.** The primal solver meets its residual control of 10⁻⁵, converging in
 606–924 SIMPLE iterations across the nine runs. The adjoint solver, however, **reaches

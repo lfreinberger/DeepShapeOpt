@@ -1,0 +1,30 @@
+
+=== cyl_init_ffd at refinement level 5 ===
+  cells 80608  mesh_ok True  max_nonortho 47.72
+  drag  36.7366   wall 0.9 min
+    op1: converged at 609 iterations
+    adjS1: REACHED ITERATION CAP at 1000 iterations
+
+=== cyl_init_ffd at refinement level 6 ===
+  cells 274452  mesh_ok True  max_nonortho 52.8887
+  drag  36.8845   wall 4.0 min
+    op1: converged at 684 iterations
+    adjS1: REACHED ITERATION CAP at 1000 iterations
+
+=== cyl_init_ffd at refinement level 7 ===
+  cells 1397172  mesh_ok True  max_nonortho 54.6045
+  drag  36.9478   wall 42.4 min
+    op1: converged at 883 iterations
+    adjS1: REACHED ITERATION CAP at 1000 iterations
+
+=== drag vs mesh ===
+geometry             level     cells          drag            primal             adjoint
+cyl_init_ffd             5     80608       36.7366               609          1000 (CAP)
+cyl_init_ffd             6    274452       36.8845               684          1000 (CAP)
+cyl_init_ffd             7   1397172       36.9478               883          1000 (CAP)
+
+=== relative change in drag between levels ===
+  cyl_init_ffd         L5 -> L6: 0.403%
+  cyl_init_ffd         L6 -> L7: 0.172%
+
+wrote revision_artifacts/mesh_study_ffdinit/mesh_study.json

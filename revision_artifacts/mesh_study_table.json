@@ -1,0 +1,62 @@
+[
+  {
+    "method": "Neural SDF",
+    "level": 5,
+    "cells_initial": 77280,
+    "cells_final": 70831,
+    "drag_initial": 36.9013,
+    "drag_final": 30.9071,
+    "reduction_pct": 16.243872167105224,
+    "published_reduction_pct_L6": null
+  },
+  {
+    "method": "Neural SDF",
+    "level": 6,
+    "cells_initial": 275951,
+    "cells_final": 204951,
+    "drag_initial": 37.1499,
+    "drag_final": 30.9404,
+    "reduction_pct": 16.71471524822409,
+    "published_reduction_pct_L6": 16.71
+  },
+  {
+    "method": "Neural SDF",
+    "level": 7,
+    "cells_initial": 1416870,
+    "cells_final": 1056701,
+    "drag_initial": 37.2557,
+    "drag_final": 30.9999,
+    "reduction_pct": 16.791524518395835,
+    "published_reduction_pct_L6": null
+  },
+  {
+    "method": "FFD 7x7x7",
+    "level": 5,
+    "cells_initial": 80608,
+    "cells_final": 71289,
+    "drag_initial": 36.7366,
+    "drag_final": 31.06,
+    "reduction_pct": 15.452164871000592,
+    "published_reduction_pct_L6": null
+  },
+  {
+    "method": "FFD 7x7x7",
+    "level": 6,
+    "cells_initial": 274452,
+    "cells_final": 207264,
+    "drag_initial": 36.8845,
+    "drag_final": 31.0976,
+    "reduction_pct": 15.689246160311248,
+    "published_reduction_pct_L6": 15.69
+  },
+  {
+    "method": "FFD 7x7x7",
+    "level": 7,
+    "cells_initial": 1397172,
+    "cells_final": 1079245,
+    "drag_initial": 36.9478,
+    "drag_final": 31.1562,
+    "reduction_pct": 15.675087555957331,
+    "published_reduction_pct_L6": null
+  }
+]

@@ -1,0 +1,13 @@
+method       level  cells init  cells final   J_initial    J_final  reduction
+-----------------------------------------------------------------------------
+Neural SDF       5      77 280       70 831     36.9013    30.9071     16.24%
+Neural SDF       6     275 951      204 951     37.1499    30.9404     16.71%
+Neural SDF       7   1 416 870    1 056 701     37.2557    30.9999     16.79%
+FFD 7x7x7        5      80 608       71 289     36.7366    31.0600     15.45%
+FFD 7x7x7        6     274 452      207 264     36.8845    31.0976     15.69%
+FFD 7x7x7        7   1 397 172    1 079 245     36.9478    31.1562     15.68%
+
+  Neural SDF   L6 recomputed 16.71%  vs published 16.71%  [OK]
+  FFD 7x7x7    L6 recomputed 15.69%  vs published 15.69%  [OK]
+
+wrote revision_artifacts/mesh_study_table.json
