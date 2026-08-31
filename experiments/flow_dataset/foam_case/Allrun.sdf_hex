@@ -1,0 +1,49 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+# Allrun variant for mesh_pipeline "sdf_hex": the body-fitted hex mesh is
+# generated in Python directly from the SDF and already sits in
+# constant/polyMesh -- no surfaceFeatureExtract / blockMesh / snappyHexMesh.
+
+# Helper function to time each step
+timeStep() {
+    step_name="$1"
+    shift
+
+    start=$(date +%s)
+
+    "$@"
+    status=$?
+
+    end=$(date +%s)
+    elapsed=$((end - start))
+    mins=$((elapsed / 60))
+    secs=$((elapsed % 60))
+
+    if [ $status -eq 0 ]; then
+        echo "Finished: $step_name in ${mins} min ${secs} s"
+    else
+        echo "Failed: $step_name after ${mins} min ${secs} s"
+        exit $status
+    fi
+    echo "=================================================="
+}
+
+# Alternative decomposeParDict name:
+decompDict="-decomposeParDict system/decomposeParDict.20"
+
+timeStep "decomposePar" runApplication $decompDict decomposePar
+
+#- For parallel running: set the initial fields
+timeStep "restore0Dir" restore0Dir -processor
+
+timeStep "checkMesh" runParallel $decompDict checkMesh -constant
+
+timeStep "potentialFoam" runParallel $decompDict potentialFoam -writephi
+
+timeStep "main solver ($(getApplication))" runParallel $decompDict $(getApplication)
+
+timeStep "reconstructPar" runApplication reconstructPar -latestTime
+
+#------------------------------------------------------------------------------

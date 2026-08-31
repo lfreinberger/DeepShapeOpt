@@ -1,0 +1,28 @@
+type            surfaces;
+libs            ("libsampling.so");
+
+// optional, aber praktisch:
+surfaceFormat   vtk;               // oder stl, ensight, raw, ...
+
+interpolationScheme cellPoint;
+fields          (faceSensNormaladjS1ESI);
+// fields          (faceSensNormalfaceBased-unsmoothed);
+
+surfaces
+(
+    STLsurface
+    {
+        // gültiger Typ
+        type        sampledTriSurfaceMesh;
+
+        // WICHTIG: hier 'surface', nicht 'surfaceName'
+        // Datei liegt in constant/triSurface/motorBike.stl
+        surface     shape.stl;
+
+        // von welchen Daten gesampled wird:
+        // cells | insideCells | boundaryFaces
+        source      cells;
+
+        interpolate true;
+    }
+);
