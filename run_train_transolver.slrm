@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH --job-name=transolver
+#SBATCH --partition=gpu
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --time=48:00:00
+#SBATCH --output=slurm_transolver_%j.out
+
+# Transolver surrogate training on the generated flow dataset.
+
+source tests/env.sh
+
+uv run python scripts/train_transolver.py \
+    --config experiments/transolver/config_train.json

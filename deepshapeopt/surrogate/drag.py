@@ -1,8 +1,9 @@
 """Differentiable drag integration from predicted (U, p) fields.
 
-Kinematic convention matching the OpenFOAM ``force`` objective of the drag
-case (incompressible, rho = 1, ``normalise false``): ``J`` is the raw force
-integral in the given direction,
+Convention matching the OpenFOAM adjoint ``force`` objective (see
+``objectiveForce.C``: ``J = F / (0.5 * UInf^2 * Aref)``, i.e. a force
+coefficient; with the drag case's ``UInf = Aref = 1`` this is ``2 F``).
+The raw force integral in the given direction is
 
     J = sum_v A_v * ( -p_v * n_hat_v + nu * dU_t/dn |_v ) . e_dir
 
@@ -29,6 +30,8 @@ def drag_from_fields(
     cloud: QueryCloud,
     nu: float,
     direction=(1.0, 0.0, 0.0),
+    u_inf: float = 1.0,
+    a_ref: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Integrate the drag force from per-point predictions.
 
@@ -68,13 +71,15 @@ def drag_from_fields(
     area = cloud.area_normals.norm(dim=1)  # A_v (unit normals => |A_v n_hat| = A_v)
     # Pressure term uses the area-weighted normal directly (exact quadrature),
     # the viscous term the scalar vertex area.
-    J_p = -(p[:P] * (cloud.area_normals @ e_dir)).sum()
-    J_visc = ((nu * dUdn_t @ e_dir) * area).sum()
+    denom = 0.5 * u_inf**2 * a_ref  # objectiveForce.C: rhoInf NOT in denom
+    J_p = -(p[:P] * (cloud.area_normals @ e_dir)).sum() / denom
+    J_visc = ((nu * dUdn_t @ e_dir) * area).sum() / denom
     J = J_p + J_visc
 
     diagnostics = {
         "J_p": float(J_p.detach()),
         "J_visc": float(J_visc.detach()),
+        "force": float(J.detach()) * denom,
         "traction": traction,
     }
     return J, diagnostics

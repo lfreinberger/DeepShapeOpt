@@ -44,19 +44,4 @@ timePrecision   6;
 
 runTimeModifiable true;
 
-
-
-functions
-{
-    // Wall shear stress on the drag object, written with the solution fields;
-    // stored in the training dataset for a potential auxiliary tau_w head.
-    wallShearStress1
-    {
-        type            wallShearStress;
-        libs            (fieldFunctionObjects);
-        patches         (dragObject);
-        writeControl    writeTime;
-    }
-}
-
 // ************************************************************************* //

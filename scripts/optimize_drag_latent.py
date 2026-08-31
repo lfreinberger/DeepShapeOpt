@@ -135,6 +135,17 @@ def optimize_shape(experiment_path: Path, specs):
         )
 
     mesh_pipeline = opt_cfg.get("mesh_pipeline", "snappy")
+    forward_solver = opt_cfg.get("forward_solver", "openfoam")
+    if forward_solver not in ("openfoam", "transolver"):
+        raise ValueError(f"Unknown forward_solver: {forward_solver!r}")
+    if forward_solver == "transolver" and mesh_pipeline != "sdf_hex":
+        raise ValueError("forward_solver 'transolver' requires mesh_pipeline 'sdf_hex'")
+    surrogate = None
+    if forward_solver == "transolver":
+        from deepshapeopt.surrogate.predictor import TransolverSurrogate
+
+        surrogate = TransolverSurrogate.from_config(opt_cfg["surrogate"])
+        LOGGER.info("Forward solver: Transolver surrogate (no OpenFOAM calls)")
     hex_pipeline = None
     if mesh_pipeline == "sdf_hex":
         from deepshapeopt.hexmesh import SdfHexMeshPipeline
@@ -178,14 +189,16 @@ def optimize_shape(experiment_path: Path, specs):
     # is set (e.g. "/work/<user>/..." -- fast local disk, not the backed-up NFS file
     # server), keeping per-iteration OpenFOAM I/O off NFS. Kept outputs (results dir,
     # heavy_data) are unaffected. Absent -> case lives next to the template.
-    foam_runtime_root = opt_cfg.get("foam_runtime_root")
-    if foam_runtime_root:
-        LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
-    case_dir = foam_utils.prepare_foam_runtime(
-        experiment_path / "foam_case", run_name=results_name,
-        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
-    )
-    foam_utils.select_allrun(case_dir, mesh_pipeline)
+    case_dir = None
+    if forward_solver == "openfoam":
+        foam_runtime_root = opt_cfg.get("foam_runtime_root")
+        if foam_runtime_root:
+            LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
+        case_dir = foam_utils.prepare_foam_runtime(
+            experiment_path / "foam_case", run_name=results_name,
+            runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+        )
+        foam_utils.select_allrun(case_dir, mesh_pipeline)
     snapshot_dir = paths.optimization / "snapshots"
     if debug:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -218,20 +231,38 @@ def optimize_shape(experiment_path: Path, specs):
             vol_constraint = float(init_volume.item()) - volume
             dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
 
-            foam_case = hex_pipeline.run_case(case_dir, verbose=debug)
-            sens_on_orig, J_raw = hex_pipeline.load_sensitivities(
-                case_dir,
-                foam_case,
-                field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
-                objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
-            )
-            dJ = foam_utils.compute_shape_gradient(
-                opt_setup.param,
-                verts,
-                faces,
-                sens_on_orig,
-                integrated=True,
-            )
+            if forward_solver == "transolver":
+                # Differentiable forward step: Transolver fields -> drag
+                # integral -> autograd straight to the design parameters.
+                foam_case = None
+                J_t, surrogate_diag = surrogate.objective(
+                    verts, faces, hex_pipeline.sdf_at_phys
+                )
+                dJ, = torch.autograd.grad(J_t, opt_setup.param, retain_graph=True)
+                J_raw = float(J_t.detach())
+                # Predicted wall traction is the surrogate analogue of the
+                # adjoint sensitivity field: keeps debug exports/history alive.
+                sens_on_orig = surrogate_diag["traction"].detach().cpu().numpy()
+                LOGGER.debug(
+                    "Surrogate J=%.6f (pressure %.6f, viscous %.6f, %d query points)",
+                    J_raw, surrogate_diag["J_p"], surrogate_diag["J_visc"],
+                    surrogate_diag["n_points"],
+                )
+            else:
+                foam_case = hex_pipeline.run_case(case_dir, verbose=debug)
+                sens_on_orig, J_raw = hex_pipeline.load_sensitivities(
+                    case_dir,
+                    foam_case,
+                    field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
+                    objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
+                )
+                dJ = foam_utils.compute_shape_gradient(
+                    opt_setup.param,
+                    verts,
+                    faces,
+                    sens_on_orig,
+                    integrated=True,
+                )
         else:
             mesh, derivative = generate_mesh(
                 lattice.lattice_struct,
@@ -327,7 +358,8 @@ def optimize_shape(experiment_path: Path, specs):
         LOGGER.debug("Max latent variable: %.6f", opt_setup.param.abs().max().item())
 
         if debug and paths.heavy_data is not None:
-            foam_utils.export_vtk_for_iteration(foam_case, case_dir, paths.heavy_data, iteration)
+            if foam_case is not None:
+                foam_utils.export_vtk_for_iteration(foam_case, case_dir, paths.heavy_data, iteration)
             shutil.copy2(
                 paths.optimization / "current_shape.stl",
                 paths.heavy_data / "stl_series" / f"shape_{iteration:04d}.stl",
@@ -407,7 +439,7 @@ def optimize_shape(experiment_path: Path, specs):
             break
 
     logger.close()
-    if case_dir.exists():
+    if case_dir is not None and case_dir.exists():
         FoamCase(case_dir).clean()
         shutil.rmtree(case_dir, ignore_errors=True)
 
