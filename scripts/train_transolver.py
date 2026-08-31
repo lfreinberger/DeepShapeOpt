@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from deepshapeopt.config import ExperimentSpecifications
 from deepshapeopt.surrogate.dataset import (
     FlowFieldDataset,
+    Normalizer,
     calibrate_visc_scale,
     compute_norm_stats,
     split_files,
@@ -121,6 +122,10 @@ def main() -> None:
     )
     val_loader = DataLoader(val_ds, batch_size=1, num_workers=0, collate_fn=collate_single)
 
+    # Separate device-side normalizer for evaluation; the dataset's own
+    # normalizer must stay on CPU (it runs inside dataloader workers).
+    eval_norm = Normalizer(stats, device=device)
+
     model = Transolver(**model_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     logger.info("Transolver with %.2fM parameters on %s", n_params / 1e6, device)
@@ -183,7 +188,7 @@ def main() -> None:
 
         row = {"epoch": epoch, "train_loss": float(np.mean(losses)), "t": time.time() - t0}
         if epoch % 5 == 0 or epoch == epochs - 1:
-            row.update(evaluate(model, val_loader, val_ds.norm.to(device), nu, direction, device))
+            row.update(evaluate(model, val_loader, eval_norm, nu, direction, device))
             logger.info(
                 "epoch %4d loss %.4f | val p_surf %.4f U_off %.4f drag_rel %.4f [%.1f s]",
                 epoch, row["train_loss"], row["p_surf"], row["U_off"], row["drag_rel"], row["t"],
