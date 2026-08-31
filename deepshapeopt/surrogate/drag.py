@@ -32,6 +32,7 @@ def drag_from_fields(
     direction=(1.0, 0.0, 0.0),
     u_inf: float = 1.0,
     a_ref: float = 1.0,
+    visc_scale: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Integrate the drag force from per-point predictions.
 
@@ -73,7 +74,10 @@ def drag_from_fields(
     # the viscous term the scalar vertex area.
     denom = 0.5 * u_inf**2 * a_ref  # objectiveForce.C: rhoInf NOT in denom
     J_p = -(p[:P] * (cloud.area_normals @ e_dir)).sum() / denom
-    J_visc = ((nu * dUdn_t @ e_dir) * area).sum() / denom
+    # visc_scale: calibration for the one-sided FD underestimating the wall
+    # gradient of the (interpolation-smoothed) velocity field; fitted on the
+    # training targets against FOAM's wallShearStress-based drag.
+    J_visc = visc_scale * ((nu * dUdn_t @ e_dir) * area).sum() / denom
     J = J_p + J_visc
 
     diagnostics = {

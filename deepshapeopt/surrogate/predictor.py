@@ -31,6 +31,7 @@ class TransolverSurrogate:
         self.nu = float(cfg.get("nu", 1.0))
         self.u_inf = float(cfg.get("u_inf", 1.0))
         self.a_ref = float(cfg.get("a_ref", 1.0))
+        self.visc_scale = float(cfg.get("visc_scale", 1.0))
         self.direction = tuple(cfg.get("drag_direction", (1.0, 0.0, 0.0)))
         self.model.to(self.device).eval()
         self.norm.to(self.device)
@@ -77,7 +78,7 @@ class TransolverSurrogate:
         U, p = self.predict(cloud)
         J, diag = drag_from_fields(
             U, p, cloud, nu=self.nu, direction=self.direction,
-            u_inf=self.u_inf, a_ref=self.a_ref,
+            u_inf=self.u_inf, a_ref=self.a_ref, visc_scale=self.visc_scale,
         )
         diag["n_points"] = cloud.n_points
         diag["n_surface"] = cloud.n_surface

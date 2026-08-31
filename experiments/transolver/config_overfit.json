@@ -1,0 +1,68 @@
+{
+  "data_dir": "${DEEPSHAPEOPT_DATA_DIR}/flow_dataset/v1",
+  "results_dir": "experiments/transolver/results_overfit",
+  "device": "cuda",
+  "seed": 0,
+  "split": {
+    "val_fraction": 0.1,
+    "holdout_family": null
+  },
+  "model": {
+    "in_dim": 7,
+    "out_dim": 4,
+    "n_hidden": 128,
+    "n_layers": 4,
+    "n_head": 8,
+    "slice_num": 32,
+    "mlp_ratio": 2,
+    "dropout": 0.0
+  },
+  "training": {
+    "epochs": 300,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "w_p": 1.0,
+    "w_U": 1.0,
+    "grad_clip": 1.0,
+    "checkpoint_every": 50,
+    "overfit_n": 5
+  },
+  "surrogate": {
+    "shell_offsets": [
+      0.015625,
+      0.03125
+    ],
+    "n_volume_points": 8192,
+    "volume_seed": 0,
+    "domain": [
+      [
+        -5.0,
+        -5.0,
+        -5.0
+      ],
+      [
+        15.0,
+        5.0,
+        5.0
+      ]
+    ],
+    "mesh_box": [
+      [
+        -2.0,
+        -2.0,
+        -2.0
+      ],
+      [
+        2.0,
+        2.0,
+        2.0
+      ]
+    ],
+    "nu": 1.0,
+    "drag_direction": [
+      1.0,
+      0.0,
+      0.0
+    ]
+  }
+}

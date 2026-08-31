@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from deepshapeopt.config import ExperimentSpecifications
 from deepshapeopt.surrogate.dataset import (
     FlowFieldDataset,
+    calibrate_visc_scale,
     compute_norm_stats,
     split_files,
 )
@@ -134,6 +135,18 @@ def main() -> None:
 
     nu = float(sur_cfg.get("nu", 1.0))
     direction = tuple(sur_cfg.get("drag_direction", (1.0, 0.0, 0.0)))
+
+    calib_path = results_dir / "visc_calibration.json"
+    if calib_path.exists():
+        calib = json.loads(calib_path.read_text())
+    else:
+        calib = calibrate_visc_scale(train_files, nu=nu, direction=direction)
+        calib_path.write_text(json.dumps(calib, indent=2))
+    sur_cfg = {**sur_cfg, "visc_scale": calib["visc_scale"]}
+    logger.info(
+        "viscous FD calibration: scale %.4f (per-sample %.4f +/- %.4f, n=%d)",
+        calib["visc_scale"], calib["per_sample_mean"], calib["per_sample_std"], calib["n"],
+    )
     best = float("inf")
     history = []
 

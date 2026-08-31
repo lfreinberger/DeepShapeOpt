@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .query_points import ROLE_SURFACE
+from .query_points import ROLE_SURFACE, QueryCloud
 
 
 def load_sample(path: Path) -> dict:
@@ -145,3 +145,41 @@ def split_files(
     val = [rest[i] for i in perm[:n_val]] + held
     train = [rest[i] for i in perm[n_val:]]
     return train, val
+
+def calibrate_visc_scale(files: list, nu: float = 1.0, direction=(1.0, 0.0, 0.0)) -> dict:
+    """Least-squares factor c minimizing |J_foam - (J_p + c * J_visc_FD)|.
+
+    Computed from the STORED targets (not predictions): quantifies how much
+    the one-sided probe-shell difference underestimates the wall gradient of
+    the interpolation-smoothed velocity field. Stored in the checkpoint and
+    applied by the predictor at inference.
+    """
+    import torch as _torch
+
+    from .drag import drag_from_fields as _dff
+
+    num = den = 0.0
+    per_sample = []
+    for f in files:
+        s = load_sample(Path(f))
+        an = _torch.from_numpy(s["area_normals"])
+        cloud = QueryCloud(
+            feats=_torch.from_numpy(s["x"]),
+            roles=_torch.from_numpy(s["role"]),
+            n_surface=s["n_surface"],
+            unit_normals=_torch.nn.functional.normalize(an, dim=1),
+            area_normals=an,
+            delta=_torch.from_numpy(s["delta"]),
+        )
+        _, d = _dff(
+            _torch.from_numpy(s["y"][:, :3]), _torch.from_numpy(s["y"][:, 3]),
+            cloud, nu=nu, direction=direction,
+        )
+        target_visc = s["drag_foam"] - d["J_p"]
+        num += target_visc * d["J_visc"]
+        den += d["J_visc"] ** 2
+        per_sample.append(target_visc / d["J_visc"] if abs(d["J_visc"]) > 1e-12 else float("nan"))
+    c = num / max(den, 1e-12)
+    arr = np.asarray(per_sample, dtype=float)
+    return {"visc_scale": float(c), "per_sample_mean": float(np.nanmean(arr)),
+            "per_sample_std": float(np.nanstd(arr)), "n": len(files)}
