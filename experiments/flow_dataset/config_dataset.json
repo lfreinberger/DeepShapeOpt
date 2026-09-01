@@ -4,12 +4,31 @@
     "mesh_path": "__PER_SAMPLE__",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
     "model_checkpoint": "latest",
-    "tiling": [2, 2, 2],
-    "spline_degree": [1, 1, 1],
-    "design_domain": [[-1.5, -0.8, -0.8], [1.5, 0.8, 0.8]],
+    "tiling": [
+      2,
+      2,
+      2
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -1.5,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.5,
+        0.8,
+        0.8
+      ]
+    ],
     "n_uniform_samples": 100000,
     "n_surface_samples": 500000,
-    "lr": 5e-3,
+    "lr": 0.005,
     "num_iterations": 15,
     "batch_size": 4096,
     "code_reg_lambda": 0.0,
@@ -25,9 +44,31 @@
     "mesh_resolution": 48,
     "mesh_pipeline": "sdf_hex",
     "sdf_hex": {
-      "domain": [[-5.0, -5.0, -5.0], [15.0, 5.0, 5.0]],
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
       "base_cell_size": 1.0,
-      "mesh_box": [[-2.0, -2.0, -2.0], [2.0, 2.0, 2.0]],
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
       "interface_level": 2,
       "max_level": 5,
       "snap_iters": 4,
@@ -37,20 +78,49 @@
     "foam_runtime_root": "/work/lfrei/DeepShapeOpt"
   },
   "dataset": {
-    "output_dir": "${DEEPSHAPEOPT_DATA_DIR}/flow_dataset/v1",
+    "output_dir": "/storage/lfrei/training_data/flow_dataset/v1",
     "n_shapes": 60,
     "jitter_per_shape": 2,
     "jitter_std": 0.05,
     "geometry_margin": 0.15,
     "nu": 1.0,
-    "drag_direction": [1.0, 0.0, 0.0],
+    "drag_direction": [
+      1.0,
+      0.0,
+      0.0
+    ],
     "objective_path": "optimisation/objective/0/dragadjS1",
     "surrogate": {
-      "shell_offsets": [0.015625, 0.03125],
+      "shell_offsets": [
+        0.015625,
+        0.03125
+      ],
       "n_volume_points": 8192,
       "volume_seed": 0,
-      "domain": [[-5.0, -5.0, -5.0], [15.0, 5.0, 5.0]],
-      "mesh_box": [[-2.0, -2.0, -2.0], [2.0, 2.0, 2.0]]
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "data_dir": "${DEEPSHAPEOPT_DATA_DIR}/flow_dataset/v1",
+  "data_dir": "/storage/lfrei/training_data/flow_dataset/v1",
   "results_dir": "experiments/transolver/results_overfit_big",
   "device": "cuda",
   "seed": 0,
