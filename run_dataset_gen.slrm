@@ -1,23 +1,24 @@
 #!/bin/bash
 #SBATCH --job-name=flowdata
-#SBATCH --partition=cluster
+#SBATCH --partition=cpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=12
 #SBATCH --time=24:00:00
-#SBATCH --array=0-39
+#SBATCH --array=0-3
 #SBATCH --output=slurm_flowdata_%A_%a.out
 
-# Flow-field dataset generation for the Transolver surrogate.
-# Each array task generates SHAPES_PER_TASK shape seeds (x (1+jitter) variants).
-# SEED_OFFSET skips the seeds already generated locally (0-59); the current
-# settings cover seeds 60-299 = 720 new samples with the correlated jitter.
+# Flow-field dataset generation for the Transolver surrogate on the CPU
+# partition (karen/plankton, no GPU: reconstruction runs with --device cpu).
+# 4 array tasks x 30 shape seeds cover seeds 60-179 (= 240 samples at
+# 1 base + 1 jitter). Resumable: existing npz are skipped.
 
 source tests/env.sh
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
-SHAPES_PER_TASK=6
+SHAPES_PER_TASK=30
 SEED_OFFSET=60
 START=$((SEED_OFFSET + SLURM_ARRAY_TASK_ID * SHAPES_PER_TASK))
 
 uv run python scripts/generate_flow_dataset.py \
     --config experiments/flow_dataset/config_dataset.json \
-    --start "$START" --count "$SHAPES_PER_TASK"
+    --start "$START" --count "$SHAPES_PER_TASK" --device cpu

@@ -225,6 +225,11 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=0, help="first shape seed")
     parser.add_argument("--count", type=int, default=None, help="number of shape seeds")
     parser.add_argument(
+        "--device",
+        default=None,
+        help="override reconstruction.device (e.g. 'cpu' for GPU-less slurm nodes)",
+    )
+    parser.add_argument(
         "--geometry-only",
         action="store_true",
         help="generate STLs + reconstructions + snapped wall meshes only "
@@ -237,6 +242,8 @@ def main() -> None:
 
     specs = ExperimentSpecifications(args.config)
     rec_cfg = dict(specs["reconstruction"])
+    if args.device:
+        rec_cfg["device"] = args.device
     opt_cfg = dict(specs["optimization"])
     ds_cfg = dict(specs["dataset"])
     config_dir = Path(args.config).resolve().parent
