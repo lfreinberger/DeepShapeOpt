@@ -48,17 +48,26 @@ def configure_foam_runtime(
     case_dir: Path,
     constraint_enabled: bool,
     section_patches: list[tuple[str, float]] | None = None,
+    as1_active: bool = True,
 ) -> dict[str, str]:
     """Derive adjoint-time directories from optimisationDict and patch the runtime case.
 
     Reads primal/adjoint ``nIters`` from ``system/optimisationDict`` and computes the
-    time directory each adjoint solver will write to:
-    ``t_as1 = p_n + as1_n`` and ``t_as2 = t_as1 + as2_n``.
+    time directory each *active* adjoint solver will write to: the solvers run back to
+    back, so ``t_as1 = p_n + as1_n`` and ``t_as2 = t_as1 + as2_n`` (or ``p_n + as2_n``
+    when as1 is inactive). These are predictions: an adjoint solver that satisfies its
+    ``residualControl`` before ``nIters`` shifts every later write time -- use
+    :func:`resolve_adjoint_time` when reading the fields back.
 
     Also mutates the runtime copy:
-      - ``optimisationDict``: sets ``am1.as2.active`` to ``constraint_enabled``
+      - ``optimisationDict``: sets ``am1.as1.active`` to ``as1_active`` and
+        ``am1.as2.active`` to ``constraint_enabled`` (an inactive solver is skipped
+        entirely, which also avoids solving a degenerate adjoint -- e.g. a uniformity
+        objective on a flow that is already uniform stops after one step)
       - ``controlDict``: forces ``purgeWrite = 0`` so no needed time dir is purged
-      - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the derived times
+      - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the open time range
+        ``"<p_n>:"`` (every time written after the primal), so ``reconstructPar`` covers
+        the adjoint end times wherever they actually land
 
     When ``section_patches`` is provided (list of ``(patch_name, target_fraction)`` pairs),
     additionally:
@@ -72,26 +81,35 @@ def configure_foam_runtime(
     Should be called once after ``prepare_foam_runtime`` copies the template.
     Operating on the template directly would dirty the git-tracked files.
 
-    Returns a mapping ``{"as1": "300"}`` or ``{"as1": "300", "as2": "500"}``.
+    Returns a mapping of the active solvers to their predicted write times, e.g.
+    ``{"as1": "300"}``, ``{"as1": "300", "as2": "500"}`` or ``{"as2": "500"}``.
     """
     opt_path = case_dir / "system" / "optimisationDict"
     ctrl_path = case_dir / "system" / "controlDict"
     allrun_path = case_dir / "Allrun"
+
+    if not (as1_active or constraint_enabled):
+        raise ValueError("configure_foam_runtime: at least one adjoint solver must be active")
 
     opt = FoamFile(opt_path)
     p_n = int(opt["primalSolvers", "p1", "solutionControls", "nIters"])
     as1_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as1", "solutionControls", "nIters"])
     as2_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls", "nIters"])
 
+    opt["adjointManagers", "am1", "adjointSolvers", "as1", "active"] = bool(as1_active)
     opt["adjointManagers", "am1", "adjointSolvers", "as2", "active"] = bool(constraint_enabled)
 
     if section_patches is not None:
         _inject_section_partition_into_runtime(case_dir, opt, section_patches)
 
-    t_as1 = p_n + as1_n
-    adjoint_times = {"as1": str(t_as1)}
+    t = p_n
+    adjoint_times: dict[str, str] = {}
+    if as1_active:
+        t += as1_n
+        adjoint_times["as1"] = str(t)
     if constraint_enabled:
-        adjoint_times["as2"] = str(t_as1 + as2_n)
+        t += as2_n
+        adjoint_times["as2"] = str(t)
 
     ctrl = FoamFile(ctrl_path)
     ctrl["purgeWrite"] = 0
@@ -100,9 +118,45 @@ def configure_foam_runtime(
     text = allrun_path.read_text()
     if marker not in text:
         raise RuntimeError(f"{allrun_path}: missing {marker} marker in Allrun template")
-    allrun_path.write_text(text.replace(marker, ",".join(adjoint_times.values())))
+    allrun_path.write_text(text.replace(marker, f"{p_n}:"))
 
     return adjoint_times
+
+
+def resolve_adjoint_time(case_dir: Path, field_name: str, expected_time: str | None) -> str:
+    """Name of the (reconstructed) time directory that actually holds ``field_name``.
+
+    ``expected_time`` is the prediction from :func:`configure_foam_runtime`. It is wrong
+    whenever an adjoint solver stops before its ``nIters`` (``residualControl``): every
+    later solver then writes at an earlier time. If the field is not at the predicted
+    time, the latest time directory containing it is used and a warning names the shift.
+    """
+    case_dir = Path(case_dir)
+    if expected_time is not None and (case_dir / str(expected_time) / field_name).is_file():
+        return str(expected_time)
+
+    candidates = []
+    for d in case_dir.iterdir():
+        if not d.is_dir() or not (d / field_name).is_file():
+            continue
+        try:
+            candidates.append((float(d.name), d.name))
+        except ValueError:
+            continue
+    if not candidates:
+        raise FileNotFoundError(
+            f"{field_name} not found in any time directory of {case_dir} "
+            f"(predicted time: {expected_time}). Check log.adjointOptimisationFoam: "
+            "was the solver active, and did reconstructPar cover its final time?"
+        )
+    _, found = max(candidates)
+    if expected_time is not None:
+        logger.warning(
+            "Adjoint field %s is not at the predicted time %s; using %s "
+            "(an adjoint solver stopped before nIters, e.g. via residualControl).",
+            field_name, expected_time, found,
+        )
+    return found
 
 
 def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
@@ -822,7 +876,16 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
     An iterations.vtm.series index maps ParaView time to the iteration number.
     """
 
-    case.run(["foamToVTK", "-latestTime"])
+    # Run with the OpenFOAM environment sourced (foamlib's case.run needs
+    # foamToVTK already on PATH, which only holds in fully-loaded shells).
+    subprocess.run(
+        "source $WM_PROJECT_DIR/etc/bashrc >/dev/null 2>&1; "
+        "foamToVTK -latestTime > log.foamToVTK 2>&1",
+        cwd=case_dir,
+        shell=True,
+        executable="/bin/bash",
+        check=True,
+    )
 
     vtk_series_dir = Path(vtk_series_dir) / "vtk_series"
     vtk_series_dir.mkdir(parents=True, exist_ok=True)
