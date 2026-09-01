@@ -100,6 +100,7 @@ def main() -> None:
         val_fraction=cfg["split"].get("val_fraction", 0.1),
         holdout_family=cfg["split"].get("holdout_family"),
         seed=int(cfg.get("seed", 0)),
+        min_surface_points=int(cfg["split"].get("min_surface_points", 0)),
     )
     overfit_n = tr_cfg.get("overfit_n")
     if overfit_n:

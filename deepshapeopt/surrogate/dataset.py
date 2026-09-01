@@ -129,10 +129,28 @@ class FlowFieldDataset(Dataset):
 
 
 def split_files(
-    files: list[Path], val_fraction: float = 0.1, holdout_family: str | None = None, seed: int = 0
+    files: list[Path],
+    val_fraction: float = 0.1,
+    holdout_family: str | None = None,
+    seed: int = 0,
+    min_surface_points: int = 0,
 ) -> tuple[list[Path], list[Path]]:
-    """Random split plus (optionally) an entire held-out geometry family."""
+    """Random split plus (optionally) an entire held-out geometry family.
+
+    ``min_surface_points`` drops degenerate samples (jitter-collapsed shapes
+    with a handful of wall points) from both splits.
+    """
     files = sorted(Path(f) for f in files)
+    if min_surface_points > 0:
+        kept = [f for f in files if int(np.load(f)["n_surface"]) >= min_surface_points]
+        if len(kept) < len(files):
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "split_files: dropped %d degenerate samples (< %d wall points)",
+                len(files) - len(kept), min_surface_points,
+            )
+        files = kept
     if holdout_family:
         fam = {f: json.loads(str(np.load(f)["meta"]))["family"] for f in files}
         held = [f for f in files if fam[f] == holdout_family]

@@ -5,7 +5,8 @@
   "seed": 0,
   "split": {
     "val_fraction": 0.1,
-    "holdout_family": "capsule"
+    "holdout_family": "capsule",
+    "min_surface_points": 200
   },
   "model": {
     "in_dim": 7,
@@ -19,8 +20,8 @@
   },
   "training": {
     "epochs": 500,
-    "lr": 1e-3,
-    "weight_decay": 1e-5,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
     "w_p": 1.0,
     "w_U": 1.0,
     "grad_clip": 1.0,
@@ -28,12 +29,41 @@
     "overfit_n": null
   },
   "surrogate": {
-    "shell_offsets": [0.015625, 0.03125],
+    "shell_offsets": [
+      0.015625,
+      0.03125
+    ],
     "n_volume_points": 8192,
     "volume_seed": 0,
-    "domain": [[-5.0, -5.0, -5.0], [15.0, 5.0, 5.0]],
-    "mesh_box": [[-2.0, -2.0, -2.0], [2.0, 2.0, 2.0]],
+    "domain": [
+      [
+        -5.0,
+        -5.0,
+        -5.0
+      ],
+      [
+        15.0,
+        5.0,
+        5.0
+      ]
+    ],
+    "mesh_box": [
+      [
+        -2.0,
+        -2.0,
+        -2.0
+      ],
+      [
+        2.0,
+        2.0,
+        2.0
+      ]
+    ],
     "nu": 1.0,
-    "drag_direction": [1.0, 0.0, 0.0]
+    "drag_direction": [
+      1.0,
+      0.0,
+      0.0
+    ]
   }
 }

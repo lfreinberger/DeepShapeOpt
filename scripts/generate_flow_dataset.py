@@ -159,6 +159,12 @@ def generate_sample(
 
     hex_result = hex_pipeline.build()
     verts = hex_result.surface_points
+    min_pts = int(ds_cfg.get("min_surface_points", 200))
+    if verts.shape[0] < min_pts:
+        raise RuntimeError(
+            f"degenerate geometry: only {verts.shape[0]} wall points "
+            f"(< {min_pts}); jitter likely collapsed the shape"
+        )
     foam_case = hex_pipeline.run_case(case_dir, verbose=False)
     sens, J = hex_pipeline.load_sensitivities(
         case_dir, foam_case, objective_path=ds_cfg["objective_path"]
