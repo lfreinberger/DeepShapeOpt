@@ -4,17 +4,19 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=24:00:00
-#SBATCH --array=0-9
+#SBATCH --array=0-39
 #SBATCH --output=slurm_flowdata_%A_%a.out
 
 # Flow-field dataset generation for the Transolver surrogate.
 # Each array task generates SHAPES_PER_TASK shape seeds (x (1+jitter) variants).
-# Adjust --array and SHAPES_PER_TASK to cover dataset.n_shapes in the config.
+# SEED_OFFSET skips the seeds already generated locally (0-59); the current
+# settings cover seeds 60-299 = 720 new samples with the correlated jitter.
 
 source tests/env.sh
 
 SHAPES_PER_TASK=6
-START=$((SLURM_ARRAY_TASK_ID * SHAPES_PER_TASK))
+SEED_OFFSET=60
+START=$((SEED_OFFSET + SLURM_ARRAY_TASK_ID * SHAPES_PER_TASK))
 
 uv run python scripts/generate_flow_dataset.py \
     --config experiments/flow_dataset/config_dataset.json \

@@ -145,7 +145,14 @@ def optimize_shape(experiment_path: Path, specs):
         from deepshapeopt.surrogate.predictor import TransolverSurrogate
 
         surrogate = TransolverSurrogate.from_config(opt_cfg["surrogate"])
-        LOGGER.info("Forward solver: Transolver surrogate (no OpenFOAM calls)")
+        reanchor_every = int(opt_cfg["surrogate"].get("reanchor_every", 0))
+        if reanchor_every > 0:
+            LOGGER.info(
+                "Forward solver: Transolver surrogate with FOAM re-anchoring "
+                "every %d iterations", reanchor_every,
+            )
+        else:
+            LOGGER.info("Forward solver: Transolver surrogate (no OpenFOAM calls)")
     hex_pipeline = None
     if mesh_pipeline == "sdf_hex":
         from deepshapeopt.hexmesh import SdfHexMeshPipeline
@@ -189,8 +196,12 @@ def optimize_shape(experiment_path: Path, specs):
     # is set (e.g. "/work/<user>/..." -- fast local disk, not the backed-up NFS file
     # server), keeping per-iteration OpenFOAM I/O off NFS. Kept outputs (results dir,
     # heavy_data) are unaffected. Absent -> case lives next to the template.
+    reanchor_every = (
+        int(opt_cfg["surrogate"].get("reanchor_every", 0))
+        if forward_solver == "transolver" else 0
+    )
     case_dir = None
-    if forward_solver == "openfoam":
+    if forward_solver == "openfoam" or reanchor_every > 0:
         foam_runtime_root = opt_cfg.get("foam_runtime_root")
         if foam_runtime_root:
             LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
@@ -207,6 +218,7 @@ def optimize_shape(experiment_path: Path, specs):
     convergence_obj_tol = opt_cfg.get("convergence_obj_tol", opt_cfg.get("convergence_ch_tol"))
     convergence_window = opt_cfg.get("convergence_window", 3)
 
+    anchor_scale = 1.0
     history_constraint, history_objective = [], []
     history_grad_norm, history_obj_change, history_mma_ch = [], [], []
     history_vol_constraint, history_sens_norm = [], []
@@ -231,15 +243,25 @@ def optimize_shape(experiment_path: Path, specs):
             vol_constraint = float(init_volume.item()) - volume
             dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
 
+            foam_this_iter = forward_solver == "openfoam" or (
+                reanchor_every > 0 and iteration % reanchor_every == 0
+            )
             if forward_solver == "transolver":
                 # Differentiable forward step: Transolver fields -> drag
                 # integral -> autograd straight to the design parameters.
-                foam_case = None
                 J_t, surrogate_diag = surrogate.objective(
                     verts, faces, hex_pipeline.sdf_at_phys
                 )
+                if surrogate_diag.get("visc_clamped"):
+                    LOGGER.warning(
+                        "Viscous drag clamped to 0 (raw %.4f): surrogate is "
+                        "out of distribution here", surrogate_diag["J_visc_raw"],
+                    )
+            if forward_solver == "transolver" and not foam_this_iter:
+                foam_case = None
                 dJ, = torch.autograd.grad(J_t, opt_setup.param, retain_graph=True)
-                J_raw = float(J_t.detach())
+                dJ = anchor_scale * dJ
+                J_raw = anchor_scale * float(J_t.detach())
                 # Predicted wall traction is the surrogate analogue of the
                 # adjoint sensitivity field: keeps debug exports/history alive.
                 sens_on_orig = surrogate_diag["traction"].detach().cpu().numpy()
@@ -263,6 +285,16 @@ def optimize_shape(experiment_path: Path, specs):
                     sens_on_orig,
                     integrated=True,
                 )
+                if forward_solver == "transolver":
+                    # Re-anchor: measure the surrogate's drift against the
+                    # true objective and rescale the surrogate between anchors.
+                    J_surr = float(J_t.detach())
+                    if abs(J_surr) > 1e-9:
+                        anchor_scale = float(J_raw) / J_surr
+                    LOGGER.info(
+                        "Re-anchor @ iter %d: J_foam=%.4f J_surr=%.4f scale=%.4f",
+                        iteration, float(J_raw), J_surr, anchor_scale,
+                    )
         else:
             mesh, derivative = generate_mesh(
                 lattice.lattice_struct,

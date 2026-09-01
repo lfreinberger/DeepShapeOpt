@@ -77,12 +77,19 @@ def drag_from_fields(
     # visc_scale: calibration for the one-sided FD underestimating the wall
     # gradient of the (interpolation-smoothed) velocity field; fitted on the
     # training targets against FOAM's wallShearStress-based drag.
-    J_visc = visc_scale * ((nu * dUdn_t @ e_dir) * area).sum() / denom
+    J_visc_raw = visc_scale * ((nu * dUdn_t @ e_dir) * area).sum() / denom
+    # Physics guard: total viscous drag cannot be negative for an external
+    # body. Clamping removes the optimizer's incentive to exploit unphysical
+    # velocity predictions far from the training distribution (the failure
+    # mode observed in the first pure-surrogate trial run).
+    J_visc = J_visc_raw.clamp_min(0.0)
     J = J_p + J_visc
 
     diagnostics = {
         "J_p": float(J_p.detach()),
         "J_visc": float(J_visc.detach()),
+        "J_visc_raw": float(J_visc_raw.detach()),
+        "visc_clamped": bool(J_visc_raw.detach() < 0),
         "force": float(J.detach()) * denom,
         "traction": traction,
     }
