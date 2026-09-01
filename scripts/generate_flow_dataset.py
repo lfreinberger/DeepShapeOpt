@@ -135,6 +135,30 @@ def extract_targets(case_dir: Path, cloud, surface_points: torch.Tensor) -> dict
     }
 
 
+def variant_param(
+    seed: int, variant: int, base_param: torch.Tensor, ds_cfg: dict
+) -> torch.Tensor:
+    """Design parameters of one sample variant (0 = the reconstruction).
+
+    Correlated jitter: a shared low-frequency mode across all control points
+    (smooth global shape change) plus a smaller iid part (unit variance:
+    0.8^2 + 0.6^2 = 1). Amplitude is calibrated against real optimizer
+    steps: the benchmark run's MMA steps have median ||dz|| ~ 0.15, and
+    ||eps|| ~ jitter_std * sqrt(n_ctrl * latent_dim) * mag, so the default
+    jitter_std = 0.01 with mag in [0.5, 2] spans roughly 1-4 MMA steps.
+    """
+    if variant == 0:
+        return base_param
+    gen = torch.Generator(device="cpu").manual_seed(seed * 100 + variant)
+    z_global = torch.randn(1, base_param.shape[1], generator=gen)
+    z_local = torch.randn(base_param.shape, generator=gen)
+    mag = 0.5 + 1.5 * float(torch.rand(1, generator=gen))
+    eps = (
+        mag * float(ds_cfg["jitter_std"]) * (0.8 * z_global + 0.6 * z_local)
+    ).to(base_param.device, base_param.dtype)
+    return base_param + eps
+
+
 def generate_sample(
     seed: int,
     variant: int,
@@ -147,20 +171,7 @@ def generate_sample(
     meta: dict,
 ) -> dict:
     """Mesh + solve + extract one (possibly jittered) variant; write the npz."""
-    if variant == 0:
-        param = base_param
-    else:
-        gen = torch.Generator(device="cpu").manual_seed(seed * 100 + variant)
-        # Correlated jitter: a shared low-frequency mode across all control
-        # points (smooth global shape change, like an MMA step) plus a smaller
-        # iid part; iid-only noise produced far rougher shapes than the
-        # optimizer ever visits (unit variance: 0.8^2 + 0.6^2 = 1).
-        z_global = torch.randn(1, base_param.shape[1], generator=gen)
-        z_local = torch.randn(base_param.shape, generator=gen)
-        eps = (
-            float(ds_cfg["jitter_std"]) * (0.8 * z_global + 0.6 * z_local)
-        ).to(base_param.device, base_param.dtype)
-        param = base_param + eps
+    param = variant_param(seed, variant, base_param, ds_cfg)
     lattice_struct.parametrization.set_param(param)
 
     hex_result = hex_pipeline.build()
@@ -213,6 +224,12 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--start", type=int, default=0, help="first shape seed")
     parser.add_argument("--count", type=int, default=None, help="number of shape seeds")
+    parser.add_argument(
+        "--geometry-only",
+        action="store_true",
+        help="generate STLs + reconstructions + snapped wall meshes only "
+        "(no OpenFOAM, no npz) -- for inspecting the shape distribution",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -239,22 +256,27 @@ def main() -> None:
     )
     sdf = SDFfromDeepSDF(model)
 
-    runtime_root = opt_cfg.get("foam_runtime_root")
-    case_dir = foam_utils.prepare_foam_runtime(
-        config_dir / "foam_case",
-        run_name=f"flow_dataset_s{start}",
-        runtime_root=Path(runtime_root) if runtime_root else None,
-    )
-    foam_utils.select_allrun(case_dir, "sdf_hex")
-    logger.info("Foam runtime case: %s", case_dir)
+    case_dir = None
+    if not args.geometry_only:
+        runtime_root = opt_cfg.get("foam_runtime_root")
+        case_dir = foam_utils.prepare_foam_runtime(
+            config_dir / "foam_case",
+            run_name=f"flow_dataset_s{start}",
+            runtime_root=Path(runtime_root) if runtime_root else None,
+        )
+        foam_utils.select_allrun(case_dir, "sdf_hex")
+        logger.info("Foam runtime case: %s", case_dir)
 
     n_done = n_failed = 0
     try:
         for seed in range(start, start + n_shapes):
-            todo = [
-                v for v in range(n_variants)
-                if not (out_dir / f"sample_{seed:05d}_{v}.npz").exists()
-            ]
+            if args.geometry_only:
+                todo = list(range(n_variants))
+            else:
+                todo = [
+                    v for v in range(n_variants)
+                    if not (out_dir / f"sample_{seed:05d}_{v}.npz").exists()
+                ]
             if not todo:
                 continue
 
@@ -292,6 +314,24 @@ def main() -> None:
                 lattice.lattice_struct, model_setup, opt_cfg, sdir
             )
 
+            if args.geometry_only:
+                import trimesh
+
+                for variant in todo:
+                    param = variant_param(seed, variant, base_param, ds_cfg)
+                    lattice.lattice_struct.parametrization.set_param(param)
+                    hex_result = hex_pipeline.build()
+                    pts = hex_result.surface_points.detach().cpu().numpy()
+                    tris = hex_result.wall_tris_local.cpu().numpy()
+                    wall_path = sdir / f"wall_variant_{variant}.stl"
+                    trimesh.Trimesh(pts, tris, process=False).export(wall_path)
+                    n_done += 1
+                    logger.info(
+                        "sample_%05d_%d geometry-only: family=%-12s P=%5d -> %s",
+                        seed, variant, geo.family, pts.shape[0], wall_path,
+                    )
+                continue
+
             for variant in todo:
                 name = f"sample_{seed:05d}_{variant}"
                 t0 = time.time()
@@ -323,7 +363,8 @@ def main() -> None:
                     n_failed += 1
                     logger.error("%s FAILED:\n%s", name, traceback.format_exc(limit=8))
     finally:
-        shutil.rmtree(case_dir, ignore_errors=True)
+        if case_dir is not None:
+            shutil.rmtree(case_dir, ignore_errors=True)
 
     logger.info("Done: %d samples written, %d failed.", n_done, n_failed)
     if n_failed:

@@ -80,8 +80,8 @@
   "dataset": {
     "output_dir": "/storage/lfrei/training_data/flow_dataset/v1",
     "n_shapes": 60,
-    "jitter_per_shape": 2,
-    "jitter_std": 0.05,
+    "jitter_per_shape": 1,
+    "jitter_std": 0.01,
     "geometry_margin": 0.15,
     "nu": 1.0,
     "drag_direction": [
