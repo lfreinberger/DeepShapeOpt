@@ -92,7 +92,10 @@ def main() -> None:
     results_dir = Path(cfg["results_dir"])
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    files = sorted(Path(cfg["data_dir"]).glob("sample_*.npz"))
+    files = sorted(
+        f for pat in ("sample_*.npz", "traj_*.npz")
+        for f in Path(cfg["data_dir"]).glob(pat)
+    )
     if not files:
         raise SystemExit(f"no samples found in {cfg['data_dir']}")
     train_files, val_files = split_files(

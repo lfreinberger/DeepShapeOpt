@@ -151,8 +151,14 @@ def generate_sample(
         param = base_param
     else:
         gen = torch.Generator(device="cpu").manual_seed(seed * 100 + variant)
-        eps = float(ds_cfg["jitter_std"]) * torch.randn(
-            base_param.shape, generator=gen
+        # Correlated jitter: a shared low-frequency mode across all control
+        # points (smooth global shape change, like an MMA step) plus a smaller
+        # iid part; iid-only noise produced far rougher shapes than the
+        # optimizer ever visits (unit variance: 0.8^2 + 0.6^2 = 1).
+        z_global = torch.randn(1, base_param.shape[1], generator=gen)
+        z_local = torch.randn(base_param.shape, generator=gen)
+        eps = (
+            float(ds_cfg["jitter_std"]) * (0.8 * z_global + 0.6 * z_local)
         ).to(base_param.device, base_param.dtype)
         param = base_param + eps
     lattice_struct.parametrization.set_param(param)

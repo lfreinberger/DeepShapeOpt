@@ -406,6 +406,14 @@ def optimize_shape(experiment_path: Path, specs):
                 paths.optimization,
             )
         torch.save(list(lattice.lattice_struct.parametrization.parameters()), paths.optimization / "parameters.pt")
+        # Per-iteration snapshot (few kB): the visited-shape trajectory, used
+        # for surrogate training-data harvesting (generate_trajectory_dataset).
+        series_dir = paths.optimization / "parameters_series"
+        series_dir.mkdir(exist_ok=True)
+        torch.save(
+            list(lattice.lattice_struct.parametrization.parameters()),
+            series_dir / f"param_{iteration:04d}.pt",
+        )
 
         log_iteration_summary(
             LOGGER,

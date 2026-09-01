@@ -47,7 +47,10 @@ def main() -> None:
     )
     device = surrogate.device
 
-    files = sorted(Path(cfg["data_dir"]).glob("sample_*.npz"))
+    files = sorted(
+        f for pat in ("sample_*.npz", "traj_*.npz")
+        for f in Path(cfg["data_dir"]).glob(pat)
+    )
     _, val_files = split_files(
         files,
         val_fraction=cfg["split"].get("val_fraction", 0.1),

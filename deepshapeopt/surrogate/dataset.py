@@ -141,6 +141,15 @@ def split_files(
     with a handful of wall points) from both splits.
     """
     files = sorted(Path(f) for f in files)
+    # Trajectory-harvested samples (traj_*.npz) go to training only: they
+    # come from surrogate-driven optimization runs and must never leak into
+    # the validation metrics.
+    forced_train = [f for f in files if f.name.startswith("traj_")]
+    files = [f for f in files if not f.name.startswith("traj_")]
+    if min_surface_points > 0:
+        forced_train = [
+            f for f in forced_train if int(np.load(f)["n_surface"]) >= min_surface_points
+        ]
     if min_surface_points > 0:
         kept = [f for f in files if int(np.load(f)["n_surface"]) >= min_surface_points]
         if len(kept) < len(files):
@@ -161,7 +170,7 @@ def split_files(
     perm = rng.permutation(len(rest))
     n_val = max(1, int(round(val_fraction * len(rest)))) if rest else 0
     val = [rest[i] for i in perm[:n_val]] + held
-    train = [rest[i] for i in perm[n_val:]]
+    train = [rest[i] for i in perm[n_val:]] + forced_train
     return train, val
 
 def calibrate_visc_scale(files: list, nu: float = 1.0, direction=(1.0, 0.0, 0.0)) -> dict:
