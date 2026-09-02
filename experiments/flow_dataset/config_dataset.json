@@ -121,6 +121,11 @@
           2.0
         ]
       ]
-    }
+    },
+    "volume_target_range": [
+      0.7,
+      1.4
+    ],
+    "small_body_fraction": 0.25
   }
 }

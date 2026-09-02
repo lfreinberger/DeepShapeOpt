@@ -61,8 +61,23 @@ def sample_geometry(
     margin: float = 0.15,
     families=FAMILIES,
     max_rotation_deg: float = 30.0,
+    volume_target_range=(0.7, 1.4),
+    small_body_fraction: float = 0.25,
+    small_volume_range=(0.15, 0.7),
 ) -> GeometrySample:
-    """Generate one deterministic primitive geometry.
+    """Generate one deterministic primitive geometry at a targeted volume.
+
+    The shape is built at a nominal size, rotated, then scaled uniformly to
+    hit a sampled target volume (the DeepSDF reconstruction preserves volume
+    to ~1%, so the target carries through to the training sample). Volume
+    targeting matters because the drag optimization runs under a volume
+    constraint at V ~ 1: radius-uniform sampling put only 9% of shapes above
+    V = 0.9, leaving the optimizer's operating regime nearly uncovered.
+
+    A ``small_body_fraction`` of samples is drawn from ``small_volume_range``
+    instead, to keep small-body coverage. Shapes that would leave the design
+    box after scaling are clipped back (the achieved volume is recorded in
+    ``meta["volume"]``).
 
     Parameters
     ----------
@@ -70,6 +85,8 @@ def sample_geometry(
     design_domain : [[xmin, ymin, zmin], [xmax, ymax, zmax]] physical box.
     margin : physical clearance kept to every design-domain face (must cover
         the interface refinement band of the hex mesh pipeline).
+    volume_target_range : (lo, hi) target volume of the main population.
+    small_body_fraction : share of samples drawn from ``small_volume_range``.
     """
     rng = np.random.default_rng(seed)
     family = families[int(rng.integers(len(families)))]
@@ -131,7 +148,29 @@ def sample_geometry(
         raise ValueError(family)
 
     mesh.apply_transform(_random_rotation(rng, max_rotation_deg))
+
+    # Scale to the target volume, then clip back into the design box.
+    if rng.random() < small_body_fraction:
+        v_target = float(rng.uniform(*small_volume_range))
+    else:
+        v_target = float(rng.uniform(*volume_target_range))
+    mesh.apply_scale((v_target / mesh.volume) ** (1.0 / 3.0))
     scale_applied = _fit_into_box(mesh, half)
+    # The design box is elongated (2.7 x 1.3 x 1.3 for the drag case), so
+    # isotropic growth hits the y/z faces long before the target volume is
+    # reached. Recover the deficit by stretching along the roomy axes -- a
+    # property of the box, independent of what the optimum looks like.
+    for axis in np.argsort(-(half / np.abs(mesh.bounds).max(axis=0))):
+        deficit = v_target / mesh.volume
+        if deficit <= 1.001:
+            break
+        room = half[axis] / np.abs(mesh.bounds).max(axis=0)[axis]
+        factor = min(deficit, room)
+        if factor <= 1.001:
+            continue
+        stretch = np.ones(3)
+        stretch[axis] = factor
+        mesh.apply_scale(stretch)
     mesh.apply_translation(center)
 
     if not mesh.is_watertight:
@@ -141,6 +180,7 @@ def sample_geometry(
         {
             "aspect": aspect.tolist(),
             "scale_clip": scale_applied,
+            "volume_target": v_target,
             "volume": float(mesh.volume),
             "bounds": mesh.bounds.tolist(),
         }

@@ -302,6 +302,8 @@ def main() -> None:
                 seed,
                 rec_cfg["design_domain"],
                 margin=float(ds_cfg.get("geometry_margin", 0.15)),
+                volume_target_range=tuple(ds_cfg.get("volume_target_range", (0.7, 1.4))),
+                small_body_fraction=float(ds_cfg.get("small_body_fraction", 0.25)),
             )
             stl_path = sdir / "shape.stl"
             geo.mesh.export(stl_path)
