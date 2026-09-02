@@ -106,7 +106,7 @@
     },
     "forward_solver": "transolver",
     "surrogate": {
-      "checkpoint": "experiments/transolver/results_v1/best.pt",
+      "checkpoint": "experiments/transolver/results_v2/best.pt",
       "device": "cuda",
       "shell_offsets": [
         0.015625,
