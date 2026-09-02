@@ -37,7 +37,9 @@ from deepshapeopt.surrogate.transolver import Transolver
 logger = logging.getLogger("train_transolver")
 
 
-def drag_metric(batch: dict, pred_raw: torch.Tensor, nu: float, direction) -> float:
+def drag_metric(
+    batch: dict, pred_raw: torch.Tensor, nu: float, direction, visc_scale: float = 1.0
+) -> float:
     """Relative drag error of one sample from de-normalized predictions."""
     P = int(batch["n_surface"])
     role = batch["role"]
@@ -50,12 +52,15 @@ def drag_metric(batch: dict, pred_raw: torch.Tensor, nu: float, direction) -> fl
         area_normals=batch["area_normals"],
         delta=batch["delta"],
     )
-    J, _ = drag_from_fields(pred_raw[:, :3], pred_raw[:, 3], cloud, nu=nu, direction=direction)
+    J, _ = drag_from_fields(
+        pred_raw[:, :3], pred_raw[:, 3], cloud, nu=nu, direction=direction,
+        visc_scale=visc_scale,
+    )
     J_ref = batch["drag_foam"]
     return float(abs(float(J) - J_ref) / (abs(J_ref) + 1e-12))
 
 
-def evaluate(model, loader, norm, nu, direction, device) -> dict:
+def evaluate(model, loader, norm, nu, direction, device, visc_scale: float = 1.0) -> dict:
     model.eval()
     m = {"p_surf": [], "U_off": [], "drag_rel": []}
     with torch.no_grad():
@@ -68,7 +73,7 @@ def evaluate(model, loader, norm, nu, direction, device) -> dict:
             m["p_surf"].append(float(rel_l2(pred[:, 3], batch["y"][:, 3], surf & valid)))
             m["U_off"].append(float(rel_l2(pred[:, :3], batch["y"][:, :3], off)))
             m["drag_rel"].append(
-                drag_metric(batch, norm.denorm_y(pred), nu, direction)
+                drag_metric(batch, norm.denorm_y(pred), nu, direction, visc_scale)
             )
     return {k: float(np.mean(v)) for k, v in m.items()}
 
@@ -192,7 +197,12 @@ def main() -> None:
 
         row = {"epoch": epoch, "train_loss": float(np.mean(losses)), "t": time.time() - t0}
         if epoch % 5 == 0 or epoch == epochs - 1:
-            row.update(evaluate(model, val_loader, eval_norm, nu, direction, device))
+            row.update(
+                evaluate(
+                    model, val_loader, eval_norm, nu, direction, device,
+                    visc_scale=float(sur_cfg.get("visc_scale", 1.0)),
+                )
+            )
             logger.info(
                 "epoch %4d loss %.4f | val p_surf %.4f U_off %.4f drag_rel %.4f [%.1f s]",
                 epoch, row["train_loss"], row["p_surf"], row["U_off"], row["drag_rel"], row["t"],

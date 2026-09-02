@@ -33,6 +33,7 @@ def drag_from_fields(
     u_inf: float = 1.0,
     a_ref: float = 1.0,
     visc_scale: float = 1.0,
+    pressure_scale: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Integrate the drag force from per-point predictions.
 
@@ -73,7 +74,10 @@ def drag_from_fields(
     # Pressure term uses the area-weighted normal directly (exact quadrature),
     # the viscous term the scalar vertex area.
     denom = 0.5 * u_inf**2 * a_ref  # objectiveForce.C: rhoInf NOT in denom
-    J_p = -(p[:P] * (cloud.area_normals @ e_dir)).sum() / denom
+    # pressure_scale / visc_scale absorb the trained network's systematic
+    # offsets (see scripts/calibrate_surrogate_bias.py); both are 1.0 for
+    # ground-truth fields.
+    J_p = -pressure_scale * (p[:P] * (cloud.area_normals @ e_dir)).sum() / denom
     # visc_scale: calibration for the one-sided FD underestimating the wall
     # gradient of the (interpolation-smoothed) velocity field; fitted on the
     # training targets against FOAM's wallShearStress-based drag.

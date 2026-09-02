@@ -83,6 +83,8 @@ def main() -> None:
                 y_raw[:, :3], y_raw[:, 3], cloud,
                 nu=surrogate.nu, direction=surrogate.direction,
                 u_inf=surrogate.u_inf, a_ref=surrogate.a_ref,
+                visc_scale=surrogate.visc_scale,
+                pressure_scale=surrogate.pressure_scale,
             )
             rows.append({
                 "sample": Path(b["path"]).name,
