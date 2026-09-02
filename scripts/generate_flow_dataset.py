@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import shutil
@@ -307,6 +308,17 @@ def main() -> None:
             )
             stl_path = sdir / "shape.stl"
             geo.mesh.export(stl_path)
+
+            # Invalidate a cached reconstruction whose geometry no longer
+            # matches (the sampler changed): rec_cfg["reuse_parameter"] would
+            # otherwise silently fit the CFD run to the previous shape.
+            stamp = rec_dir / "shape.sha1"
+            digest = hashlib.sha1(stl_path.read_bytes()).hexdigest()
+            if stamp.exists() and stamp.read_text().strip() != digest:
+                logger.warning("seed %d: geometry changed, discarding cached reconstruction", seed)
+                shutil.rmtree(rec_dir)
+                rec_dir.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(digest)
 
             rec_cfg_s = dict(rec_cfg)
             rec_cfg_s["mesh_path"] = str(stl_path)
