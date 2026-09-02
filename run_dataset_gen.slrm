@@ -16,9 +16,10 @@ source tests/env.sh
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 SHAPES_PER_TASK=30
-SEED_OFFSET=60
+SEED_OFFSET=${SEED_OFFSET:-60}   # override: sbatch --export=ALL,SEED_OFFSET=0 ...
 START=$((SEED_OFFSET + SLURM_ARRAY_TASK_ID * SHAPES_PER_TASK))
 
 uv run python scripts/generate_flow_dataset.py \
     --config experiments/flow_dataset/config_dataset.json \
-    --start "$START" --count "$SHAPES_PER_TASK" --device cpu
+    --start "$START" --count "$SHAPES_PER_TASK" --device cpu \
+    --run-tag "${SLURM_ARRAY_JOB_ID}"

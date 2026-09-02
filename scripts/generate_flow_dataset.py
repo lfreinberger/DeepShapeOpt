@@ -225,6 +225,13 @@ def main() -> None:
     parser.add_argument("--start", type=int, default=0, help="first shape seed")
     parser.add_argument("--count", type=int, default=None, help="number of shape seeds")
     parser.add_argument(
+        "--run-tag",
+        default="",
+        help="unique suffix for the transient foam case dir (e.g. the slurm "
+        "job id); /work is shared across nodes, so concurrent submissions "
+        "of the same seed range would collide without it",
+    )
+    parser.add_argument(
         "--device",
         default=None,
         help="override reconstruction.device (e.g. 'cpu' for GPU-less slurm nodes)",
@@ -268,7 +275,7 @@ def main() -> None:
         runtime_root = opt_cfg.get("foam_runtime_root")
         case_dir = foam_utils.prepare_foam_runtime(
             config_dir / "foam_case",
-            run_name=f"flow_dataset_s{start}",
+            run_name=f"flow_dataset_s{start}" + (f"_{args.run_tag}" if args.run_tag else ""),
             runtime_root=Path(runtime_root) if runtime_root else None,
         )
         foam_utils.select_allrun(case_dir, "sdf_hex")
