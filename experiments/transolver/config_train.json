@@ -1,6 +1,6 @@
 {
   "data_dir": "/storage/lfrei/training_data/flow_dataset/v1",
-  "results_dir": "experiments/transolver/results_v2",
+  "results_dir": "experiments/transolver/results_v3",
   "device": "cuda",
   "seed": 0,
   "split": {
