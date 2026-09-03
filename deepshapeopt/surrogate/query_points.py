@@ -131,6 +131,26 @@ def build_query_cloud(
     shell_offsets = cfg.get("shell_offsets", [0.015625, 0.03125])
     delta0 = float(shell_offsets[0])
 
+    # The shell offsets are absolute distances tied to the wall cell size the
+    # model was trained on (h_fine = base_cell_size / 2^max_level). Running a
+    # differently refined mesh silently rescales the wall-gradient finite
+    # difference -- at one level coarser the viscous drag more than doubles.
+    with torch.no_grad():
+        e = torch.stack([
+            (verts[faces[:, 1]] - verts[faces[:, 0]]).norm(dim=1),
+            (verts[faces[:, 2]] - verts[faces[:, 1]]).norm(dim=1),
+            (verts[faces[:, 0]] - verts[faces[:, 2]]).norm(dim=1),
+        ])
+        h_wall = float(e.median())
+    ratio = h_wall / (2.0 * delta0)
+    if not 0.5 < ratio < 2.0:
+        logger.warning(
+            "Wall spacing %.4g does not match shell_offsets %s (ratio %.2f): the "
+            "surrogate was trained at one wall refinement; check sdf_hex.max_level "
+            "or rescale shell_offsets.",
+            h_wall, list(shell_offsets), ratio,
+        )
+
     with torch.no_grad():
         probe = verts + delta0 * normals
         frac_fluid = (sdf_fn(probe) > 0).float().mean().item()
