@@ -73,7 +73,7 @@
         ]
       ],
       "interface_level": 2,
-      "max_level": 4,
+      "max_level": 5,
       "snap_iters": 4,
       "max_disp_frac": 0.7,
       "enable_fast_path": true
