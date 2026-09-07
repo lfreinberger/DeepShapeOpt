@@ -1,12 +1,11 @@
 {
   "data_dir": "/storage/lfrei/training_data/flow_dataset/v1",
-  "results_dir": "experiments/transolver/results_v4_tau",
+  "results_dir": "experiments/transolver/results_overfit_big_tau",
   "device": "cuda",
   "seed": 0,
   "split": {
     "val_fraction": 0.1,
-    "holdout_family": "capsule",
-    "min_surface_points": 200
+    "holdout_family": null
   },
   "model": {
     "in_dim": 7,
@@ -19,14 +18,14 @@
     "dropout": 0.0
   },
   "training": {
-    "epochs": 500,
-    "lr": 0.001,
+    "epochs": 2000,
+    "lr": 0.0008,
     "weight_decay": 1e-05,
     "w_p": 1.0,
     "w_U": 1.0,
     "grad_clip": 1.0,
-    "checkpoint_every": 25,
-    "overfit_n": null,
+    "checkpoint_every": 200,
+    "overfit_n": 5,
     "w_tau": 1.0
   },
   "surrogate": {

@@ -148,11 +148,14 @@ def optimize_shape(experiment_path: Path, specs):
         reanchor_every = int(opt_cfg["surrogate"].get("reanchor_every", 0))
         if reanchor_every > 0:
             LOGGER.info(
-                "Forward solver: Transolver surrogate with FOAM re-anchoring "
-                "every %d iterations", reanchor_every,
+                "Forward solver: Transolver surrogate (viscous mode %s) with FOAM "
+                "re-anchoring every %d iterations", surrogate.viscous_mode, reanchor_every,
             )
         else:
-            LOGGER.info("Forward solver: Transolver surrogate (no OpenFOAM calls)")
+            LOGGER.info(
+                "Forward solver: Transolver surrogate (viscous mode %s, no OpenFOAM calls)",
+                surrogate.viscous_mode,
+            )
     hex_pipeline = None
     if mesh_pipeline == "sdf_hex":
         from deepshapeopt.hexmesh import SdfHexMeshPipeline

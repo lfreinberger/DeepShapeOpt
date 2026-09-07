@@ -1,10 +1,11 @@
 """Evaluate a trained Transolver surrogate on the held-out validation split.
 
-Reports per-sample relative L2 errors for p (surface) and U (off-surface),
-the drag error of the differentiable drag integral on predicted fields vs the
-OpenFOAM objective, and the Spearman rank correlation of predicted vs true
-drag (what shape *ranking* the optimizer would see). Writes ``evaluation.csv``
-into the training results dir.
+Reports per-sample relative L2 errors for p (surface), U (off-surface) and,
+for 7-channel checkpoints, tau_w (surface), the drag error of the
+differentiable drag integral on predicted fields vs the OpenFOAM objective,
+and the Spearman rank correlation of predicted vs true drag (what shape
+*ranking* the optimizer would see). Writes ``evaluation.csv`` into the
+training results dir.
 
 Usage:
     uv run python scripts/evaluate_transolver.py \
@@ -23,11 +24,9 @@ import numpy as np
 import torch
 
 from deepshapeopt.config import ExperimentSpecifications
-from deepshapeopt.surrogate.dataset import FlowFieldDataset, split_files
-from deepshapeopt.surrogate.drag import drag_from_fields
+from deepshapeopt.surrogate.dataset import FlowFieldDataset, cloud_from_batch, split_files
 from deepshapeopt.surrogate.losses import rel_l2
 from deepshapeopt.surrogate.predictor import TransolverSurrogate
-from deepshapeopt.surrogate.query_points import QueryCloud
 
 logger = logging.getLogger("evaluate_transolver")
 
@@ -46,6 +45,7 @@ def main() -> None:
         {**cfg["surrogate"], "checkpoint": str(ckpt), "device": cfg.get("device", "cuda")}
     )
     device = surrogate.device
+    tau_mode = surrogate.viscous_mode == "tau"
 
     files = sorted(
         f for pat in ("sample_*.npz", "traj_*.npz")
@@ -57,10 +57,11 @@ def main() -> None:
         holdout_family=cfg["split"].get("holdout_family"),
         seed=int(cfg.get("seed", 0)),
         min_surface_points=int(cfg["split"].get("min_surface_points", 0)),
+        require_tau=tau_mode,
     )
     stats = json.loads((results_dir / "dataset_stats.json").read_text())
     ds = FlowFieldDataset(val_files, stats)
-    logger.info("Evaluating %d validation samples", len(ds))
+    logger.info("Evaluating %d validation samples (viscous mode %s)", len(ds), surrogate.viscous_mode)
 
     rows = []
     with torch.no_grad():
@@ -72,27 +73,20 @@ def main() -> None:
             surf = role == 0
             off = (~surf) & valid
 
-            an = b["area_normals"]
-            cloud = QueryCloud(
-                feats=b["x"], roles=role.to(torch.int8), n_surface=int(b["n_surface"]),
-                unit_normals=torch.nn.functional.normalize(an, dim=1),
-                area_normals=an, delta=b["delta"],
-            )
             y_raw = surrogate.norm.denorm_y(pred)
-            J, parts = drag_from_fields(
-                y_raw[:, :3], y_raw[:, 3], cloud,
-                nu=surrogate.nu, direction=surrogate.direction,
-                u_inf=surrogate.u_inf, a_ref=surrogate.a_ref,
-                visc_scale=surrogate.visc_scale,
-                pressure_scale=surrogate.pressure_scale,
-            )
+            J, d = surrogate.drag_from_prediction(y_raw, cloud_from_batch(b))
             rows.append({
                 "sample": Path(b["path"]).name,
                 "family": b["family"],
                 "p_surf_relL2": float(rel_l2(pred[:, 3], y[:, 3], surf & valid)),
                 "U_off_relL2": float(rel_l2(pred[:, :3], y[:, :3], off)),
+                "tau_surf_relL2": (
+                    float(rel_l2(pred[:, 4:7], y[:, 4:7], surf & valid)) if tau_mode else float("nan")
+                ),
                 "J_pred": float(J),
                 "J_foam": float(b["drag_foam"]),
+                "J_p": d["J_p"],
+                "J_visc": d["J_visc"],
             })
 
     for r in rows:
@@ -110,13 +104,16 @@ def main() -> None:
     jf = np.array([r["J_foam"] for r in rows])
     rho = float(spearmanr(jp, jf).statistic) if len(rows) > 2 else float("nan")
 
-    print(f"\n{'sample':<22} {'family':<12} {'p_relL2':>8} {'U_relL2':>8} {'J_pred':>9} {'J_foam':>9} {'dJ_rel':>7}")
+    print(f"\n{'sample':<22} {'family':<12} {'p_relL2':>8} {'U_relL2':>8} {'tau_relL2':>9} "
+          f"{'J_pred':>9} {'J_foam':>9} {'dJ_rel':>7}")
     for r in rows:
         print(f"{r['sample']:<22} {r['family']:<12} {r['p_surf_relL2']:8.4f} "
-              f"{r['U_off_relL2']:8.4f} {r['J_pred']:9.4f} {r['J_foam']:9.4f} "
-              f"{100 * r['drag_rel_err']:6.1f}%")
+              f"{r['U_off_relL2']:8.4f} {r['tau_surf_relL2']:9.4f} {r['J_pred']:9.4f} "
+              f"{r['J_foam']:9.4f} {100 * r['drag_rel_err']:6.1f}%")
+    tau_txt = (f" | mean tau relL2 {np.mean([r['tau_surf_relL2'] for r in rows]):.4f}"
+               if tau_mode else "")
     print(f"\nmean p relL2 {np.mean([r['p_surf_relL2'] for r in rows]):.4f} | "
-          f"mean U relL2 {np.mean([r['U_off_relL2'] for r in rows]):.4f} | "
+          f"mean U relL2 {np.mean([r['U_off_relL2'] for r in rows]):.4f}{tau_txt} | "
           f"drag rel err mean {100 * np.mean([r['drag_rel_err'] for r in rows]):.1f}% "
           f"median {100 * np.median([r['drag_rel_err'] for r in rows]):.1f}% | "
           f"Spearman rho {rho:.4f}")

@@ -2,9 +2,14 @@
 
 ``TransolverSurrogate.objective`` is the drop-in replacement for the OpenFOAM
 forward step in the optimization loop: it assembles the query cloud from the
-(differentiable) wall surface, predicts (U, p), integrates the drag and
+(differentiable) wall surface, predicts the fields, integrates the drag and
 returns a scalar objective carrying the autograd graph back to the design
 parameters.
+
+The viscous drag source follows the checkpoint: 7 target channels
+(``[U, p, tau_w]``) -> "tau" mode (predicted wall shear stress), 4 channels
+(``[U, p]``) -> "fd" mode (probe-shell finite difference). The mode is
+derived from the checkpoint and cannot be overridden by a run config.
 """
 
 from __future__ import annotations
@@ -26,7 +31,6 @@ class TransolverSurrogate:
     def __init__(self, model: Transolver, normalizer: Normalizer, cfg: dict):
         self.model = model
         self.norm = normalizer
-        self.cfg = cfg
         self.device = torch.device(cfg.get("device", "cuda"))
         self.nu = float(cfg.get("nu", 1.0))
         self.u_inf = float(cfg.get("u_inf", 1.0))
@@ -34,6 +38,15 @@ class TransolverSurrogate:
         self.visc_scale = float(cfg.get("visc_scale", 1.0))
         self.pressure_scale = float(cfg.get("pressure_scale", 1.0))
         self.direction = tuple(cfg.get("drag_direction", (1.0, 0.0, 0.0)))
+        mode = "tau" if normalizer.n_y >= 7 else "fd"
+        requested = cfg.get("viscous_mode")
+        if requested and requested != mode:
+            logger.warning(
+                "viscous_mode %r requested, but the checkpoint has %d target "
+                "channels; using %r", requested, normalizer.n_y, mode,
+            )
+        self.viscous_mode = mode
+        self.cfg = {**cfg, "viscous_mode": mode}
         self.model.to(self.device).eval()
         self.norm.to(self.device)
 
@@ -46,25 +59,51 @@ class TransolverSurrogate:
         """
         ckpt_path = Path(cfg["checkpoint"])
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        out_dim = int(ckpt["model_cfg"].get("out_dim", 4))
+        n_y = len(ckpt["norm_stats"]["mean_y"])
+        if out_dim != n_y:
+            raise ValueError(
+                f"{ckpt_path}: model out_dim {out_dim} != {n_y} normalization "
+                "channels (stale dataset_stats.json at training time?)"
+            )
         model = Transolver(**ckpt["model_cfg"])
         model.load_state_dict(ckpt["model_state"])
         normalizer = Normalizer(ckpt["norm_stats"])
         merged = {**ckpt.get("surrogate_cfg", {}), **cfg}
+        surrogate = cls(model, normalizer, merged)
         logger.info(
-            "Loaded Transolver surrogate from %s (epoch %s, val %s)",
-            ckpt_path, ckpt.get("epoch"), ckpt.get("val_metric"),
+            "Loaded Transolver surrogate from %s (epoch %s, viscous_mode %s, val %s)",
+            ckpt_path, ckpt.get("epoch"), surrogate.viscous_mode, ckpt.get("val_metric"),
         )
-        return cls(model, normalizer, merged)
+        return surrogate
 
-    def predict(self, cloud) -> tuple[torch.Tensor, torch.Tensor]:
-        """De-normalized predictions on a query cloud: ``(U [N,3], p [N])``.
+    def predict_raw(self, cloud) -> torch.Tensor:
+        """De-normalized prediction ``[N, n_y]`` on a query cloud.
 
         Differentiable w.r.t. the cloud features (model weights stay frozen).
         """
         feats = self.norm.norm_x(cloud.feats.to(self.device))
         out = self.model(feats[None])[0]
-        y = self.norm.denorm_y(out)
-        return y[:, :3], y[:, 3]
+        return self.norm.denorm_y(out)
+
+    def predict(self, cloud) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """``(U [N,3], p [N], tau_w [N,3] | None)`` -- tau only in "tau" mode."""
+        y = self.predict_raw(cloud)
+        tau = y[:, 4:7] if self.viscous_mode == "tau" else None
+        return y[:, :3], y[:, 3], tau
+
+    def drag_from_prediction(self, y_raw: torch.Tensor, cloud) -> tuple[torch.Tensor, dict]:
+        """Drag integral of a de-normalized prediction with this surrogate's
+        calibration; the single place that knows the ``drag_from_fields``
+        arguments (used by the optimizer, training metric, evaluation,
+        bias calibration and field export)."""
+        return drag_from_fields(
+            y_raw[:, :3], y_raw[:, 3], cloud,
+            nu=self.nu, direction=self.direction,
+            u_inf=self.u_inf, a_ref=self.a_ref,
+            visc_scale=self.visc_scale, pressure_scale=self.pressure_scale,
+            tau_w=y_raw[:, 4:7] if self.viscous_mode == "tau" else None,
+        )
 
     def objective(
         self, surface_points: torch.Tensor, wall_tris: torch.Tensor, sdf_fn
@@ -76,12 +115,8 @@ class TransolverSurrogate:
         the pressure/viscous split.
         """
         cloud = build_query_cloud(surface_points, wall_tris, sdf_fn, self.cfg)
-        U, p = self.predict(cloud)
-        J, diag = drag_from_fields(
-            U, p, cloud, nu=self.nu, direction=self.direction,
-            u_inf=self.u_inf, a_ref=self.a_ref, visc_scale=self.visc_scale,
-            pressure_scale=self.pressure_scale,
-        )
+        y = self.predict_raw(cloud)
+        J, diag = self.drag_from_prediction(y, cloud)
         diag["n_points"] = cloud.n_points
         diag["n_surface"] = cloud.n_surface
         return J, diag

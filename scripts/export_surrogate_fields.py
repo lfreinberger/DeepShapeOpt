@@ -1,22 +1,25 @@
-"""Export the surrogate's predicted (U, p) fields of one optimization
-iteration for ParaView.
+"""Export the surrogate's predicted fields of one optimization iteration for
+ParaView.
 
 Rebuilds the sdf_hex wall mesh for a parameter snapshot from
 ``<results>/optimization/parameters_series/``, assembles the surrogate query
-cloud, predicts (U, p) with the Transolver checkpoint of the run config and
-writes into ``<results>/optimization/surrogate_fields/``:
+cloud, predicts with the Transolver checkpoint of the run config and writes
+into ``<results>/optimization/surrogate_fields/``:
 
 - ``wall_iterNNNN.vtp``   -- wall surface (triangles) with p_pred, traction
-  (pressure + viscous, force per area on the body), its drag component,
-  and the unit normals
+  (pressure + viscous, force per area on the body, same calibration scales
+  as J), its drag component, the unit normals and -- for 7-channel
+  checkpoints -- the predicted wall shear stress ``tau_w_pred`` (OpenFOAM
+  convention, comparable to ``wallShearStress_foam``) and its per-vertex
+  drag contribution ``tau_drag_pred``
 - ``cloud_iterNNNN.vtp``  -- every query point (wall, two probe shells,
   volume) with U_pred, |U_pred|, p_pred, role (0 wall, 1/2 shells, 3 volume)
   and the SDF feature; view as points / glyphs or Delaunay3D it in ParaView
 
 With ``--with-foam`` the same shape is additionally solved with OpenFOAM
 (one primal+adjoint run), the FOAM fields are probed onto the identical
-query points (U_foam, p_foam, and the differences U_err, p_err) and the
-foamToVTK output is copied next to it as ``foam_iterNNNN/``.
+query points (U_foam, p_foam, the differences U_err, p_err, and in tau mode
+tau_w_err) and the foamToVTK output is copied next to it as ``foam_iterNNNN/``.
 
 Usage:
     uv run python scripts/export_surrogate_fields.py \
@@ -45,7 +48,6 @@ from deepshapeopt.shape_optimization import (
     run_reconstruction,
     setup_model_and_domain,
 )
-from deepshapeopt.surrogate.drag import drag_from_fields
 from deepshapeopt.surrogate.predictor import TransolverSurrogate
 from deepshapeopt.surrogate.query_points import build_query_cloud
 
@@ -109,18 +111,15 @@ def main() -> None:
 
     # --- surrogate prediction ---------------------------------------------
     surrogate = TransolverSurrogate.from_config(opt_cfg["surrogate"])
+    tau_mode = surrogate.viscous_mode == "tau"
     with torch.no_grad():
         cloud = build_query_cloud(verts_t, faces_t, hex_pipeline.sdf_at_phys, surrogate.cfg)
-        U, p = surrogate.predict(cloud)
-        J, diag = drag_from_fields(
-            U, p, cloud, nu=surrogate.nu, direction=surrogate.direction,
-            u_inf=surrogate.u_inf, a_ref=surrogate.a_ref,
-            visc_scale=surrogate.visc_scale, pressure_scale=surrogate.pressure_scale,
-        )
+        y = surrogate.predict_raw(cloud)
+        J, diag = surrogate.drag_from_prediction(y, cloud)
     P = cloud.n_surface
     pts = cloud.feats[:, :3].detach().cpu().numpy()
     sdf = cloud.feats[:, 3].detach().cpu().numpy()
-    U_np, p_np = U.cpu().numpy(), p.cpu().numpy()
+    U_np, p_np = y[:, :3].cpu().numpy(), y[:, 3].cpu().numpy()
     roles = cloud.roles.cpu().numpy().astype(np.int32)
     normals = cloud.unit_normals.detach().cpu().numpy()
     traction = diag["traction"].detach().cpu().numpy()
@@ -134,6 +133,12 @@ def main() -> None:
     wall.field_data["J_surrogate"] = [float(J)]
     wall.field_data["J_pressure"] = [diag["J_p"]]
     wall.field_data["J_viscous"] = [diag["J_visc"]]
+    wall.field_data["viscous_mode"] = [surrogate.viscous_mode]
+    if tau_mode:
+        tau_pred = y[:P, 4:7].cpu().numpy()
+        wall.point_data["tau_w_pred"] = tau_pred
+        # OpenFOAM's wallShearStress points opposite to the body traction.
+        wall.point_data["tau_drag_pred"] = -(tau_pred @ e_dir)
 
     cloud_pd = pv.PolyData(pts.astype(np.float64))
     cloud_pd.point_data["U_pred"] = U_np
@@ -176,6 +181,12 @@ def main() -> None:
         wall.point_data["p_err"] = p_np[:P] - targets["p"][:P]
         wall.point_data["wallShearStress_foam"] = targets["tau_w"]
         wall.field_data["J_foam"] = [float(J_foam)]
+        if tau_mode:
+            err = tau_pred - targets["tau_w"]
+            wall.point_data["tau_w_err"] = err
+            wall.field_data["tau_relL2"] = [
+                float(np.linalg.norm(err) / max(np.linalg.norm(targets["tau_w"]), 1e-12))
+            ]
         LOGGER.info("J_foam = %.4f", float(J_foam))
 
     wall_path = out_dir / f"wall_iter{it:04d}.vtp"
@@ -184,7 +195,7 @@ def main() -> None:
     cloud_pd.save(cloud_path)
 
     print(f"iteration {it}: J_surrogate = {float(J):.4f} "
-          f"(pressure {diag['J_p']:.3f}, viscous {diag['J_visc']:.3f}), "
+          f"(pressure {diag['J_p']:.3f}, viscous {diag['J_visc']:.3f}, mode {surrogate.viscous_mode}), "
           f"{cloud.n_points} query points ({P} wall)")
     if args.with_foam:
         print(f"              J_foam      = {float(J_foam):.4f}")

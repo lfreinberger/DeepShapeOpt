@@ -21,13 +21,16 @@ def field_loss(
     valid: torch.Tensor,
     w_p: float = 1.0,
     w_U: float = 1.0,
+    w_tau: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Combined loss on normalized fields.
 
     Pressure is supervised on the wall surface (role 0, where the drag
     integral needs it) plus all valid off-surface points at lower implicit
     weight through the shared denominator; velocity only off-surface (it is
-    identically zero on the wall by no-slip).
+    identically zero on the wall by no-slip). With 7 target channels the
+    wall shear stress (channels 4:7) is supervised on the wall only -- the
+    off-wall rows are zero padding and never enter the loss.
     """
     surf = role == 0
     off = (~surf) & valid
@@ -44,4 +47,8 @@ def field_loss(
         "p_off": float(l_p_off.detach()),
         "U_off": float(l_U.detach()),
     }
+    if pred.shape[1] >= 7:
+        l_tau = rel_l2(pred[:, 4:7], target[:, 4:7], surf & valid)
+        loss = loss + w_tau * l_tau
+        parts["tau_surf"] = float(l_tau.detach())
     return loss, parts
