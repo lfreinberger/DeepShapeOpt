@@ -122,31 +122,38 @@ class PhysicalSDF:
     # ------------------------------------------------------------------
 
     def check_sign_convention(self, probe_point, expect: str = "solid") -> None:
-        """Assert the SDF sign at a known probe point.
+        """Assert the SDF sign at a known probe point (see :func:`check_sign_convention`)."""
+        check_sign_convention(self, probe_point, expect=expect)
 
-        ``expect="solid"`` requires ``phi < 0`` (probe inside the solid);
-        ``expect="fluid"`` requires ``phi > 0`` (probe in the flow region).
-        """
-        if expect not in ("solid", "fluid"):
-            raise ValueError(f"expect must be 'solid' or 'fluid', got {expect!r}")
-        x = torch.as_tensor(
-            np.asarray(probe_point, dtype=np.float32).reshape(1, 3), device=self.device
+
+def check_sign_convention(sdf, probe_point, expect: str = "solid") -> None:
+    """Assert the sign of ``sdf.phi`` at a known probe point.
+
+    Works for any object with the :class:`PhysicalSDF` query interface
+    (``phi`` + ``device``).  ``expect="solid"`` requires ``phi < 0`` (probe
+    inside the solid); ``expect="fluid"`` requires ``phi > 0`` (probe in the
+    flow region).
+    """
+    if expect not in ("solid", "fluid"):
+        raise ValueError(f"expect must be 'solid' or 'fluid', got {expect!r}")
+    x = torch.as_tensor(
+        np.asarray(probe_point, dtype=np.float32).reshape(1, 3), device=sdf.device
+    )
+    with torch.no_grad():
+        val = float(sdf.phi(x).item())
+    ok = val < 0.0 if expect == "solid" else val > 0.0
+    if not ok:
+        want = "< 0 (solid)" if expect == "solid" else "> 0 (fluid)"
+        raise RuntimeError(
+            f"SDF sign convention check failed: phi({probe_point}) = {val:.4e} "
+            f"expected {want}. The hex mesh pipeline assumes phi > 0 in "
+            "the fluid. Set sdf_hex.sign_probe_point to a point inside the "
+            f"{expect}, check sdf_hex.fluid_side, or disable the check "
+            "with sdf_hex.check_sign: false."
         )
-        with torch.no_grad():
-            val = float(self.phi(x).item())
-        ok = val < 0.0 if expect == "solid" else val > 0.0
-        if not ok:
-            want = "< 0 (solid)" if expect == "solid" else "> 0 (fluid)"
-            raise RuntimeError(
-                f"SDF sign convention check failed: phi({probe_point}) = {val:.4e} "
-                f"expected {want}. The hex mesh pipeline assumes phi > 0 in "
-                "the fluid. Set sdf_hex.sign_probe_point to a point inside the "
-                f"{expect}, check sdf_hex.fluid_side, or disable the check "
-                "with sdf_hex.check_sign: false."
-            )
-        logger.debug(
-            "SDF sign convention OK: phi(%s) = %.4e (%s)", probe_point, val, expect
-        )
+    logger.debug(
+        "SDF sign convention OK: phi(%s) = %.4e (%s)", probe_point, val, expect
+    )
 
 
 class CompositeSDF:
@@ -222,3 +229,21 @@ class CompositeSDF:
         if np.any(~mask):
             out[~mask] = self.outer.phi_ext_np(points[~mask])
         return out
+
+
+def surface_displacement(
+    sdf, x_old: torch.Tensor, grad_eps: float = 1e-10
+) -> np.ndarray:
+    """Signed normal displacement of the zero level set at former surface points.
+
+    ``x_old`` [N, 3] are physical points that lay on the wall *before* a design
+    update; ``sdf`` is the field *after* it (``phi_and_grad`` interface). To first
+    order the wall moved by ``d = phi(x_old) / |grad phi(x_old)|`` along the normal,
+    in physical units. The sign follows the field's convention: with the pipeline's
+    "positive = fluid", ``d > 0`` means the old wall point now lies in the fluid, i.e.
+    the channel got wider there.
+    """
+    x = torch.as_tensor(x_old, device=sdf.device, dtype=torch.float32).detach()
+    f, g = sdf.phi_and_grad(x)
+    g_norm = g.norm(dim=1).clamp_min(float(np.sqrt(grad_eps)))
+    return (f / g_norm).detach().cpu().numpy().astype(np.float64)

@@ -44,11 +44,82 @@ def prepare_foam_runtime(
     return runtime_dir
 
 
+SOLVER_PATHS = {
+    "p1": ("primalSolvers", "p1", "solutionControls"),
+    "as1": ("adjointManagers", "am1", "adjointSolvers", "as1", "solutionControls"),
+    "as2": ("adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls"),
+}
+# Fields each primal solver actually solves. `simpleControl::criteriaSatisfied`
+# only checks fields that are BOTH solved and matched by a listed regex, so a
+# missing entry silently drops that equation from the criterion -- which is how
+# a run with an unconverged energy equation would report "converged".
+PRIMAL_FIELDS = {"simple": {"p", "U"}, "simpleHeatTransfer": {"p", "U", "T"}}
+WRITE_NEVER = 10 ** 9
+
+
+def _apply_solver_convergence(opt, cfg: dict, case_dir: Path) -> None:
+    """Write the ``solver_convergence`` config block into the runtime dicts.
+
+    Modes: ``as_template`` (leave everything alone), ``fixed`` (write nIters and
+    DELETE residualControl, so an early exit is structurally impossible instead
+    of numerically improbable), ``residual`` (nIters as a cap plus thresholds).
+    Must run BEFORE the nIters are read for the time prediction.
+    """
+    mode = cfg.get("mode", "as_template")
+    if mode == "as_template":
+        return
+    if mode not in ("fixed", "residual"):
+        raise ValueError(f"solver_convergence.mode must be 'as_template', 'fixed' "
+                         f"or 'residual', got {mode!r}")
+
+    for name, spec in (cfg.get("solvers") or {}).items():
+        if name not in SOLVER_PATHS:
+            raise ValueError(f"solver_convergence: unknown solver {name!r}; "
+                             f"valid: {sorted(SOLVER_PATHS)}")
+        base = SOLVER_PATHS[name]
+        if spec.get("n_iters") is not None:
+            opt[base + ("nIters",)] = int(spec["n_iters"])
+
+        if mode == "fixed":
+            try:
+                del opt[base + ("residualControl",)]
+            except (KeyError, TypeError):
+                pass
+            continue
+
+        residuals = spec.get("residuals")
+        if not residuals:
+            raise ValueError(f"solver_convergence: mode 'residual' needs "
+                             f"'residuals' for solver {name!r}")
+        if name == "p1":
+            solver = str(opt["primalSolvers", "p1", "solver"])
+            expected = PRIMAL_FIELDS.get(solver, {"p", "U"})
+            missing = expected - set(residuals)
+            if missing:
+                raise ValueError(
+                    f"solver_convergence: primal solver {solver!r} also solves "
+                    f"{sorted(missing)}; without a threshold those equations are "
+                    "not part of the convergence criterion and the run would "
+                    "report convergence with them unconverged")
+        # Regex keys must carry literal quotes -- an unquoted key is a literal
+        # keyword to OpenFOAM and would never match a field.
+        opt[base + ("residualControl",)] = {
+            f'"{field}.*"': float(value) for field, value in residuals.items()
+        }
+
+    if cfg.get("write_only_end_states", mode == "residual"):
+        # Only the forced end-of-solver writes remain, so the time directories
+        # are an unambiguous record of where each solver stopped -- and
+        # reconstructPar has three of them instead of one per writeInterval.
+        FoamFile(case_dir / "system" / "controlDict")["writeInterval"] = WRITE_NEVER
+
+
 def configure_foam_runtime(
     case_dir: Path,
     constraint_enabled: bool,
     section_patches: list[tuple[str, float]] | None = None,
     as1_active: bool = True,
+    solver_convergence: dict | None = None,
 ) -> dict[str, str]:
     """Derive adjoint-time directories from optimisationDict and patch the runtime case.
 
@@ -66,8 +137,13 @@ def configure_foam_runtime(
         objective on a flow that is already uniform stops after one step)
       - ``controlDict``: forces ``purgeWrite = 0`` so no needed time dir is purged
       - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the open time range
-        ``"<p_n>:"`` (every time written after the primal), so ``reconstructPar`` covers
-        the adjoint end times wherever they actually land
+        ``"1:"``, so ``reconstructPar`` covers every write whatever the solvers do.
+        It must NOT start at ``p_n``: when the primal exits early on
+        ``residualControl`` the adjoint end times move down with it and can fall
+        BELOW that bound, in which case reconstructPar produces nothing and
+        :func:`resolve_adjoint_time` -- which can only find what was reconstructed --
+        raises. ``deltaT`` is 1 and iteration 1 can never satisfy the criterion, so
+        the earliest possible write is time 2 and ``1:`` cannot clip a real one.
 
     When ``section_patches`` is provided (list of ``(patch_name, target_fraction)`` pairs),
     additionally:
@@ -77,6 +153,10 @@ def configure_foam_runtime(
         ``geometry.shape.stl.regions`` and ``castellatedMeshControls.refinementSurfaces.
         extrusion_die.regions``, replacing them with one entry per section (inheriting
         the prior outlet refinement level).
+
+    ``solver_convergence`` is the experiment's config block; it is applied to the
+    runtime dicts FIRST, so the predicted times use the values that will actually
+    run. See :func:`_apply_solver_convergence`.
 
     Should be called once after ``prepare_foam_runtime`` copies the template.
     Operating on the template directly would dirty the git-tracked files.
@@ -92,6 +172,8 @@ def configure_foam_runtime(
         raise ValueError("configure_foam_runtime: at least one adjoint solver must be active")
 
     opt = FoamFile(opt_path)
+    if solver_convergence:
+        _apply_solver_convergence(opt, solver_convergence, case_dir)
     p_n = int(opt["primalSolvers", "p1", "solutionControls", "nIters"])
     as1_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as1", "solutionControls", "nIters"])
     as2_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls", "nIters"])
@@ -118,7 +200,7 @@ def configure_foam_runtime(
     text = allrun_path.read_text()
     if marker not in text:
         raise RuntimeError(f"{allrun_path}: missing {marker} marker in Allrun template")
-    allrun_path.write_text(text.replace(marker, f"{p_n}:"))
+    allrun_path.write_text(text.replace(marker, "1:"))
 
     return adjoint_times
 
@@ -144,6 +226,19 @@ def resolve_adjoint_time(case_dir: Path, field_name: str, expected_time: str | N
         except ValueError:
             continue
     if not candidates:
+        # Distinguish "the solver never wrote it" from "it was written but not
+        # reconstructed" -- the second is a reconstructPar time-range problem and
+        # the message should say so instead of sending the reader to the solver log.
+        decomposed = sorted(
+            d.name for d in (case_dir / "processor0").iterdir()
+            if d.is_dir() and (d / field_name).is_file()
+        ) if (case_dir / "processor0").is_dir() else []
+        if decomposed:
+            raise FileNotFoundError(
+                f"{field_name} exists in processor0 at time(s) {', '.join(decomposed)} "
+                f"but was not reconstructed into {case_dir} (predicted time: "
+                f"{expected_time}). reconstructPar's -time range missed it."
+            )
         raise FileNotFoundError(
             f"{field_name} not found in any time directory of {case_dir} "
             f"(predicted time: {expected_time}). Check log.adjointOptimisationFoam: "
@@ -157,6 +252,59 @@ def resolve_adjoint_time(case_dir: Path, field_name: str, expected_time: str | N
             field_name, expected_time, found,
         )
     return found
+
+
+# The two termination messages of SIMPLEControlSingleRun carry DIFFERENT
+# quantities, which is the whole difficulty of reading them:
+#   "<solver> solution converged in <T> iterations"      -> T is the GLOBAL time
+#   "<solver> solution reached max. number of iterations <N>" -> N is the solver's
+#                                                               own iteration count
+# The solvers run back to back on one time axis, so walking the matches in file
+# order with a running start converts both into local counts.
+RX_CONVERGED = re.compile(
+    r"^(\w+) solution converged in ([0-9.eE+-]+) iterations", re.M)
+RX_MAXITERS = re.compile(
+    r"^(\w+) solution reached max\. number of iterations ([0-9]+)", re.M)
+
+
+def parse_solver_iterations(log_path: Path) -> dict[str, dict]:
+    """How many iterations each solver in ``log.adjointOptimisationFoam`` ran.
+
+    Returns ``{"p1": {"iters": int, "end_time": int, "reason": str}, ...}``;
+    solvers that were inactive print nothing and are simply absent. Nothing else
+    in the pipeline records this -- the predicted times in
+    :func:`configure_foam_runtime` are only right while every solver runs its
+    full ``nIters``.
+    """
+    log_path = Path(log_path)
+    if not log_path.is_file():
+        return {}
+    text = log_path.read_text(errors="ignore")
+
+    events = []
+    for m in RX_CONVERGED.finditer(text):
+        events.append((m.start(), m.group(1), float(m.group(2)), "converged"))
+    for m in RX_MAXITERS.finditer(text):
+        events.append((m.start(), m.group(1), float(m.group(2)), "max_iters"))
+    events.sort()
+
+    out, start = {}, 0.0
+    for _pos, solver, value, reason in events:
+        end = value if reason == "converged" else start + value
+        out[solver] = {"iters": int(round(end - start)),
+                       "end_time": int(round(end)), "reason": reason}
+        start = end
+    return out
+
+
+def format_solver_iterations(info: dict[str, dict], caps: dict[str, int] | None = None) -> str:
+    """One-line summary for the run log, e.g. ``p1 412/2000 converged, as1 ...``."""
+    caps = caps or {}
+    parts = []
+    for name, d in info.items():
+        cap = f"/{caps[name]}" if name in caps else ""
+        parts.append(f"{name} {d['iters']}{cap} {d['reason']}")
+    return ", ".join(parts) if parts else "(keine Abbruchmeldung im Log)"
 
 
 def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
@@ -743,11 +891,20 @@ def save_points_with_vectors(points, vectors, out_path: Path, scalars=None):
         cloud[name] = np.asarray(arr, dtype=float)
     cloud.save(out_path)
 
-def read_objective(case_path: Path, objective_path):
+def read_objective(case_path: Path, objective_path, with_start_time: bool = False):
+    """Objective value from ``optimisation/objective/0/<name>``.
+
+    Column 0 is the time at which the row was written, which is the moment the
+    objective manager updated the value -- i.e. the START time of that adjoint
+    solver, equal to the END of the solver before it (verified: the as1 file
+    starts at the primal's end, the as2 file at as1's end). With
+    ``with_start_time`` it is returned alongside J, which makes it a free
+    detector for a primal that stopped early.
+    """
     path = case_path / objective_path
-    data = np.loadtxt(path, comments="#")
-    J_last = data[1]   # last iteration's J
-    return J_last
+    data = np.atleast_2d(np.loadtxt(path, comments="#"))[-1]
+    J_last = data[1]
+    return (J_last, int(round(float(data[0])))) if with_start_time else J_last
 
 
 def compute_vertex_normals(verts: torch.Tensor, faces: torch.Tensor, invert_normals: bool) -> torch.Tensor:
@@ -866,9 +1023,15 @@ def compute_shape_gradient(param, verts, faces, sens_on_orig, invert_normals=Fal
     )
     return dJ
 
-def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int):
+def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int,
+                             time_value: str | None = None):
     """
-    Export the latest OpenFOAM time step as a per-iteration VTK multiblock.
+    Export one OpenFOAM time step as a per-iteration VTK multiblock.
+
+    ``time_value`` should be the time the fields were actually read from (see
+    :func:`resolve_adjoint_time`). Without it the export falls back to
+    ``-latestTime``, which silently exports time 0 -- the initial fields, dressed
+    up as this design iteration -- whenever reconstructPar missed the real write.
 
     Copies foamToVTK's whole time directory (internal.vtu + boundary/<patch>.vtp)
     to vtk_series/iter_NNNN/ and rewrites the accompanying .vtm so every boundary
@@ -878,9 +1041,10 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
 
     # Run with the OpenFOAM environment sourced (foamlib's case.run needs
     # foamToVTK already on PATH, which only holds in fully-loaded shells).
+    selector = f"-time {time_value}" if time_value is not None else "-latestTime"
     subprocess.run(
         "source $WM_PROJECT_DIR/etc/bashrc >/dev/null 2>&1; "
-        "foamToVTK -latestTime > log.foamToVTK 2>&1",
+        f"foamToVTK {selector} > log.foamToVTK 2>&1",
         cwd=case_dir,
         shell=True,
         executable="/bin/bash",
@@ -899,6 +1063,11 @@ def export_vtk_for_iteration(case, case_dir: Path, vtk_series_dir: Path, e: int)
         raise RuntimeError(f"No VTK subdirectories in {vtk_root}")
 
     latest_vtk_dir = max(vtk_dirs, key=lambda p: p.stat().st_mtime)
+    if latest_vtk_dir.name.endswith("_0"):
+        logger.warning(
+            "export_vtk_for_iteration: exporting time 0 for iteration %d -- the "
+            "requested time (%s) was not in the case, so this is the INITIAL "
+            "field, not the solution.", e, time_value)
     src_vtm = latest_vtk_dir.with_suffix(".vtm")
     if not src_vtm.exists():
         raise RuntimeError(f"Multiblock file not found: {src_vtm}")

@@ -83,7 +83,8 @@ class OptimizationLogger:
             vol_constraint, center_constraint, jacobian_constraint,
             cfd_constraint, cfd_constraint_name, constraint_target,
             volume, grad_norm, sens_norm, mma_ch, max_param,
-            obj_change, sens_to_grad_ratio,
+            obj_change, step_inf, step_ratio, wall_disp_max_mm, wall_disp_mean_mm,
+            sens_to_grad_ratio,
             conservative_max_proj_dist, conservative_l1_ratio,
             conservative_vec_norm_ratio,
             n_reoriented_tets, warnings (str)
@@ -189,6 +190,14 @@ class OptimizationLogger:
             lines.append(f"  Max param value:      {row['max_param']:.6f}")
         if "obj_change" in row:
             lines.append(f"  Obj change (rel):     {row['obj_change']:.6e}")
+        if "step_inf" in row:
+            lines.append(f"  Design step (inf):    {row['step_inf']:.6e}")
+        if "step_ratio" in row:
+            lines.append(f"  Step / max_step:      {row['step_ratio']:.4f}")
+        if "wall_disp_max_mm" in row:
+            lines.append(f"  Wall disp max [mm]:   {row['wall_disp_max_mm']:.6e}")
+        if "wall_disp_mean_mm" in row:
+            lines.append(f"  Wall disp mean [mm]:  {row['wall_disp_mean_mm']:+.6e}")
         if "sens_to_grad_ratio" in row:
             lines.append(f"  Sens/grad ratio:      {row['sens_to_grad_ratio']:.6e}")
 
