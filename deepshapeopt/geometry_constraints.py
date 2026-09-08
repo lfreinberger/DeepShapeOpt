@@ -435,7 +435,7 @@ def taper_penalty_sdf(
     Returns ``(P_value_tensor, dP_param, n_band, n_blunt_band)`` where ``P_value_tensor``
     is detached and ``dP_param`` is ``dP/dparam`` (both ready to feed the optimizer).
     """
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
     import math as _math
 
     device = param.device
@@ -603,7 +603,7 @@ def undercut_penalty_sdf(
     iteration still yields a cloud (viol ~ 0 everywhere), so "clean" and "export broken"
     stay distinguishable.
     """
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
     import math as _math
 
     device = param.device
@@ -807,7 +807,7 @@ def min_wall_thickness_penalty_sdf(
     thin_grad_dir)`` where ``W_value_tensor`` is detached, ``dW_param`` is ``dW/dparam``, and the
     trailing arrays (detached numpy) describe the flagged thin-wall points for a debug VTP.
     """
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
 
     device = param.device
     box_norm = frame.box_norm.to(device=device, dtype=torch.float32)
@@ -1056,7 +1056,7 @@ def min_steg_length_penalty_sdf(
     ParaView to isolate the offenders. ``n_flagged`` counts thin AND short (``viol > 0.05``; the
     tolerance keeps epsilon violations from counting).
     """
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
 
     if formulation not in ("penalty", "ks_margin"):
         raise ValueError(

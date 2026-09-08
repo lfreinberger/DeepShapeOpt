@@ -34,12 +34,10 @@ from deepshapeopt.latent_pca import (
     compute_latent_pca,
     gather_training_latents,
 )
-from deepshapeopt.reconstruction import (
-    build_parameter_spline,
-    export_reconstructed_artifacts,
-    fit_lattice_to_sdf,
-    sample_sdf,
-)
+from DeepSDFStruct.mesh import export_reconstructed_artifacts
+from DeepSDFStruct.geom_reconstruction import build_parameter_spline, sample_gt_sdf
+
+from deepshapeopt.reconstruction import fit_lattice_to_sdf
 
 LOGGER = logging.getLogger("pca_reconstruction_study")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -114,7 +112,11 @@ def main() -> None:
     from DeepSDFStruct.lattice_structure import LatticeSDFStruct
     from DeepSDFStruct.parametrization import SplineParametrization
     from DeepSDFStruct.pretrained_models import get_model
-    from DeepSDFStruct.SDF import SDFfromDeepSDF, normalize_mesh_to_unit_cube
+    from DeepSDFStruct.SDF import (
+        SDFfromDeepSDF,
+        SDFfromMesh,
+        normalize_mesh_to_unit_cube,
+    )
     from DeepSDFStruct.torch_spline import TorchScaling
 
     results_name = specs.get("results_name", "results")
@@ -172,9 +174,9 @@ def main() -> None:
 
     # --- Fixed held-out evaluation sample set (shared across all k) --------
     torch.manual_seed(0)
-    eval_sdf = sample_sdf(
-        mesh, bounds,
-        n_uniform_samples=args.eval_uniform, n_surface_samples=args.eval_surface,
+    eval_sdf = sample_gt_sdf(
+        SDFfromMesh(mesh, scale=False), mesh, bounds,
+        n_uniform=args.eval_uniform, n_surface=args.eval_surface,
         device=device, stds=rec_cfg.get("samples_surface_stds", [0.005, 0.0001]),
         box_constrained=False,
     )

@@ -239,7 +239,7 @@ def part3_sdf(args) -> None:
     print("\n=== Part 3: sdf ks_margin (real lattice) ===")
     import deepshapeopt.config as dso_config
     from deepshapeopt.config import ExperimentSpecifications
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
     from deepshapeopt.shape_optimization import build_lattice, setup_model_and_domain
 
     from deepshapeopt.config import make_setup_name

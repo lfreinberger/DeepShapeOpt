@@ -179,7 +179,7 @@ def make_frozen(ls, frame, param, pts_phys, ks_w, *, flow_dir, min_length_mm,
     exactly as in min_steg_length_penalty_sdf; the value-match check below catches
     any drift between this reimplementation and production.
     """
-    from deepshapeopt.reconstruction import with_float32_lattice
+    from DeepSDFStruct.utils import with_float32_lattice
 
     device = param.device
     scale = float(frame.scale)

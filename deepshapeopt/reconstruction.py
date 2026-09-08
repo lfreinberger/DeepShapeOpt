@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 """
-Reconstruction utilities and the standalone reconstruction pipeline.
+Config-driven wrapper around ``DeepSDFStruct.geom_reconstruction``.
 
-Public API:
-- ``fit_lattice_to_sdf``: core fit step — sample the ground-truth SDF,
-  call ``reconstruct_from_samples``, and export sample VTPs. Shared by both
-  the standalone pipeline and the in-optimization phase.
-- ``reconstruct_shape``: standalone pipeline used by ``scripts/reconstruct.py``.
-- ``export_reconstructed_artifacts`` / ``with_float32_lattice``: post-fit
-  export helpers shared with ``shape_optimization.run_reconstruction``
-  (the in-optimization reconstruction phase, which lives there because it
-  also handles ``reuse_parameter`` caching).
+The reconstruction itself -- normalizing the mesh, building the B-spline of
+latent codes, sampling the ground-truth SDF and fitting the lattice -- lives in
+:class:`DeepSDFStruct.geom_reconstruction.LocalShapesReconstructor`. What stays here
+is everything specific to running one as a *DeepShapeOpt experiment*:
+
+- ``reconstruct_shape``: the standalone pipeline behind ``scripts/reconstruct.py``
+  -- experiment paths, spec snapshots, error metrics, MLflow.
+- ``fit_lattice_to_sdf``: the fit step plus this repo's debug VTP exports.
+  Shared with the in-optimization phase (``shape_optimization.run_reconstruction``,
+  which lives there because it also handles ``reuse_parameter`` caching).
+- ``build_reconstruction_lattice``: config-dict front end to
+  ``LocalShapesReconstructor.build_struct``, shared with the latent-edit GUI.
+
+Reusable helpers that used to live here now come from DeepSDFStruct:
+``build_parameter_spline`` and ``sample_gt_sdf`` from
+``DeepSDFStruct.geom_reconstruction``, ``export_reconstructed_artifacts`` from
+``DeepSDFStruct.mesh``, and ``with_float32_lattice`` from ``DeepSDFStruct.utils``.
 """
 import json
 import logging
@@ -20,7 +28,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import splinepy
 import torch
 
 logger = logging.getLogger(__name__)
@@ -32,65 +39,16 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# Building blocks (used by both standalone reconstruction and optimization)
+# Building blocks used by the optimization phase
 # ---------------------------------------------------------------------------
 
-def build_parameter_spline(
-    spline_degrees: list[int],
-    tiling: tuple[int, int, int],
-    latent_dim: int,
-    bounds: np.ndarray | None = None,
-) -> splinepy.BSpline:
-    """Build a parameter BSpline with specified degrees and tiling.
-
-    Parameters
-    ----------
-    spline_degrees : list of 3 ints
-        Polynomial degree per spatial dimension.
-    tiling : tuple of 3 ints
-        Number of knot spans (boxes) per dimension. Knots are inserted
-        uniformly within each dimension.
-    latent_dim : int
-        Dimensionality of the control point vectors (e.g. latent vector size).
-    bounds : (2, 3) array-like or None
-        [[xmin, ymin, zmin], [xmax, ymax, zmax]]. Defines the physical
-        domain of the spline. If None, defaults to [0, 1]^3.
-    """
-    if bounds is not None:
-        bounds = np.asarray(bounds)
-        mins = bounds[0]
-        maxs = bounds[1]
-    else:
-        mins = np.array([0.0, 0.0, 0.0])
-        maxs = np.array([1.0, 1.0, 1.0])
-
-    knot_vectors = [
-        [mins[i]] * (spline_degrees[i] + 1) + [maxs[i]] * (spline_degrees[i] + 1)
-        for i in range(3)
-    ]
-
-    n_ctrl_per_dim = [len(knot_vectors[i]) - spline_degrees[i] - 1 for i in range(3)]
-    n_ctrl_total = int(np.prod(n_ctrl_per_dim))
-    control_points = np.zeros((n_ctrl_total, latent_dim))
-
-    param_spline_sp = splinepy.BSpline(
-        spline_degrees,
-        knot_vectors,
-        control_points,
-    )
-
-    for i_box, n_box in enumerate(tiling):
-        knots = np.linspace(mins[i_box], maxs[i_box], n_box + 1)[1:-1]
-        if len(knots) == 0:
-            continue
-        logger.debug("Inserting %d knots at %s into spline dim %d", n_box - 1, knots, i_box)
-        param_spline_sp.insert_knots(i_box, knots)
-
-    return param_spline_sp
-
-
 def init_spline_parameters(param_spline, mean=0.0, std=0.001):
-    """Initialize all trainable parameters of the spline."""
+    """Initialize all trainable parameters of the spline.
+
+    Used by the optimization workflow, which deliberately starts from small
+    random codes rather than the mean trained code that
+    ``LocalShapesReconstructor.build_struct`` uses.
+    """
     for p in param_spline.parameters():
         torch.nn.init.normal_(p, mean=mean, std=std)
 
@@ -103,16 +61,16 @@ def fit_lattice_to_sdf(
     output_dir: Path,
     lightweight_output_dir: Path | None = None,
     save_vtp: bool = True,
-    use_mlflow: bool = False,
-    mlflow_metric_prefix: str | None = None,
-    mlflow_log_every_n_steps: int = 10,
     box_constrained: bool = True,
     samples_series_dir: Path | None = None,
 ):
     """Core fit step: sample ground-truth SDF, fit the lattice, export VTPs.
 
-    Shared by both the standalone pipeline (`reconstruct_shape`) and the
-    in-optimization phase (`shape_optimization.run_reconstruction`).
+    A config-dict front end to
+    :meth:`DeepSDFStruct.geom_reconstruction.LocalShapesReconstructor.fit_samples`
+    that adds this repo's debug exports. Shared by both the standalone pipeline
+    (`reconstruct_shape`) and the in-optimization phase
+    (`shape_optimization.run_reconstruction`).
 
     Parameters
     ----------
@@ -124,10 +82,9 @@ def fit_lattice_to_sdf(
         (2, 3) bounding box for sampling.
     rec_cfg : dict
         Reconstruction config section. Expected keys: ``lr``,
-        ``num_iterations``, ``batch_size``, ``n_uniform_samples``,
-        ``n_surface_samples``. Optional: ``samples_surface_stds``,
-        ``code_reg_lambda``, ``code_bound``, ``grad_clip``,
-        ``eikonal_lambda``, ``device``.
+        ``num_iterations``, ``batch_size``. Optional: ``n_uniform_samples``,
+        ``n_surface_samples``, ``samples_surface_stds``, ``code_reg_lambda``,
+        ``code_bound``, ``grad_clip``, ``eikonal_lambda``, ``device``.
     output_dir : Path
         Directory for heavy data exports (VTP files).
     lightweight_output_dir : Path or None
@@ -135,14 +92,8 @@ def fit_lattice_to_sdf(
         If None, defaults to ``output_dir``.
     save_vtp : bool
         Whether to export VTP sample files.
-    use_mlflow : bool
-        Whether to log metrics to MLflow.
-    mlflow_metric_prefix : str or None
-        Prefix for MLflow metric names.
-    mlflow_log_every_n_steps : int
-        How often to log reconstruction loss to MLflow.
     box_constrained : bool
-        If True, clamp surface samples to bounds before fitting.
+        If True, reject surface samples outside ``bounds`` before fitting.
     samples_series_dir : Path or None
         If set and ``rec_cfg["export_rec_samples_series"]`` is truthy, export a
         contiguously numbered ``rec_sdf_samples_{frame:04d}.vtp`` series here
@@ -153,10 +104,10 @@ def fit_lattice_to_sdf(
 
     Returns
     -------
-    dict with keys: ``params``, ``final_loss``, ``num_steps``,
-    ``surface_samples`` (SampledSDF, only if save_vtp).
+    dict with keys: ``params``, ``loss_history``, ``final_loss``, ``num_steps``.
     """
-    from DeepSDFStruct.deep_sdf.reconstruction import reconstruct_from_samples
+    from DeepSDFStruct.geom_reconstruction import LocalShapesReconstructor, sample_gt_sdf
+    from DeepSDFStruct.SDF import SDFfromMesh
     from DeepSDFStruct.sampling import save_points_to_vtp
 
     def _export_rec_samples(samples_ps, path):
@@ -169,28 +120,27 @@ def fit_lattice_to_sdf(
     stds = rec_cfg.get("samples_surface_stds", [0.025, 0.0001])
     n_uniform_samples = int(rec_cfg.get("n_uniform_samples", 100000))
     n_surface_samples = int(rec_cfg.get("n_surface_samples", 500000))
-    lr = float(rec_cfg["lr"])
-    num_iterations = int(rec_cfg["num_iterations"])
-    batch_size = int(rec_cfg["batch_size"])
-    code_reg_lambda = float(rec_cfg.get("code_reg_lambda", 0.0))
-    code_bound = rec_cfg.get("code_bound", None)
-    grad_clip = rec_cfg.get("grad_clip", None)
-    eikonal_lambda = float(rec_cfg.get("eikonal_lambda", 0.0))
 
     output_dir = Path(output_dir)
-    lightweight_output_dir = Path(lightweight_output_dir) if lightweight_output_dir is not None else output_dir
+    lightweight_output_dir = (
+        Path(lightweight_output_dir)
+        if lightweight_output_dir is not None
+        else output_dir
+    )
 
     # --- Sample ground truth SDF ---
-    sdf_samples = sample_sdf(
-        mesh, bounds,
-        n_uniform_samples=n_uniform_samples,
-        n_surface_samples=n_surface_samples,
+    gt_sdf = SDFfromMesh(mesh, scale=False)
+    sdf_samples = sample_gt_sdf(
+        gt_sdf,
+        mesh,
+        bounds,
+        n_uniform=n_uniform_samples,
+        n_surface=n_surface_samples,
         stds=stds,
         device=device,
         box_constrained=box_constrained,
     )
 
-    surface_samples = None
     if save_vtp:
         gt_points_all = torch.hstack(
             (sdf_samples.samples.detach(), sdf_samples.distances.detach())
@@ -236,22 +186,22 @@ def fit_lattice_to_sdf(
                 _write_frame()
 
     # --- Run fitting ---
-    recon_result = reconstruct_from_samples(
+    # The lattice is already built, so drive the fit step directly rather than
+    # going through fit_mesh (which would rebuild the structure from scratch).
+    recon_result = LocalShapesReconstructor.fit_samples(
         lattice_struct,
         sdf_samples,
-        lr=lr,
-        loss_fn="ClampedL1",
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        use_tanh_on_gt=False,
+        lr=float(rec_cfg["lr"]),
+        num_iterations=int(rec_cfg["num_iterations"]),
+        batch_size=int(rec_cfg["batch_size"]),
+        code_reg_lambda=float(rec_cfg.get("code_reg_lambda", 0.0)),
+        code_bound=rec_cfg.get("code_bound", None),
+        grad_clip=rec_cfg.get("grad_clip", None),
+        eikonal_lambda=float(rec_cfg.get("eikonal_lambda", 0.0)),
+        loss_fn=rec_cfg.get("loss_fn", "ClampedL1"),
+        clamp_val=float(rec_cfg.get("clamp_val", 0.1)),
         loss_plot_path=lightweight_output_dir / "loss_plot.png",
         loss_csv_path=lightweight_output_dir / "loss_history.csv",
-        optimizer_name="adam",
-        deformation_function=None,
-        code_reg_lambda=code_reg_lambda,
-        code_bound=code_bound,
-        grad_clip=grad_clip,
-        eikonal_lambda=eikonal_lambda,
         step_callback=step_callback,
     )
 
@@ -262,95 +212,6 @@ def fit_lattice_to_sdf(
         )
 
     return recon_result
-
-
-def sample_sdf(mesh, bounds, n_uniform_samples, n_surface_samples, device, stds, box_constrained=True):
-    """Sample points and SDF values from the ground truth mesh.
-
-    Parameters
-    ----------
-    mesh : trimesh.Trimesh
-        Ground truth mesh (should already be in the target coordinate system).
-    bounds : torch.Tensor
-        (2, 3) bounding box for uniform sampling.
-    n_uniform_samples : int
-        Number of uniform random samples within bounds.
-    n_surface_samples : int
-        Number of near-surface samples.
-    device : str
-        Torch device.
-    stds : list of 2 floats
-        Standard deviations for surface noise perturbation.
-    box_constrained : bool
-        If True, use box-constrained surface sampling (clips samples to bounds).
-        If False, use unconstrained surface sampling.
-    """
-    from DeepSDFStruct.SDF import SDFfromMesh
-    from DeepSDFStruct.sampling import SampledSDF, random_sample_sdf, sample_mesh_surface
-
-    gt_sdf = SDFfromMesh(mesh, scale=False)
-
-    uniform_samples = random_sample_sdf(
-        gt_sdf,
-        bounds,
-        n_samples=n_uniform_samples,
-        type="uniform",
-        device=device,
-    )
-
-    surface_samples = sample_mesh_surface(
-        gt_sdf,
-        mesh,
-        n_samples=n_surface_samples,
-        stds=stds,
-        device=device,
-    )
-
-    if box_constrained:
-        # Rejection sampling: keep only surface samples inside bounds
-        bmin = bounds[0].to(surface_samples.samples.device)
-        bmax = bounds[1].to(surface_samples.samples.device)
-
-        inside = ((surface_samples.samples >= bmin) & (surface_samples.samples <= bmax)).all(dim=1)
-        n_accepted = inside.sum().item()
-        acceptance_rate = n_accepted / surface_samples.samples.shape[0] if n_accepted > 0 else 0.0
-
-        all_samples = [surface_samples.samples[inside]]
-        all_distances = [surface_samples.distances[inside]]
-        n_collected = n_accepted
-
-        max_rounds = 10
-        for _ in range(max_rounds):
-            if n_collected >= n_surface_samples:
-                break
-            n_needed = n_surface_samples - n_collected
-            oversample_factor = max(1.0 / max(acceptance_rate, 0.01), 2.0)
-            n_to_sample = int(n_needed * oversample_factor * 1.5)
-
-            extra = sample_mesh_surface(gt_sdf, mesh, n_samples=n_to_sample, stds=stds, device=device)
-            inside_extra = ((extra.samples >= bmin) & (extra.samples <= bmax)).all(dim=1)
-            all_samples.append(extra.samples[inside_extra])
-            all_distances.append(extra.distances[inside_extra])
-
-            n_new = inside_extra.sum().item()
-            n_collected += n_new
-            if n_new > 0:
-                acceptance_rate = n_new / extra.samples.shape[0]
-
-        final_samples = torch.cat(all_samples, dim=0)[:n_surface_samples]
-        final_distances = torch.cat(all_distances, dim=0)[:n_surface_samples]
-        logger.debug(
-            "Box-constrained sampling (rejection): %d/%d surface samples inside bounds (acceptance rate ~%.1f%%)",
-            final_samples.shape[0], n_surface_samples, acceptance_rate * 100,
-        )
-        if final_samples.shape[0] < n_surface_samples:
-            logger.warning(
-                "Only collected %d of %d requested surface samples inside bounds",
-                final_samples.shape[0], n_surface_samples,
-            )
-        surface_samples = SampledSDF(samples=final_samples, distances=final_distances)
-
-    return uniform_samples + surface_samples
 
 
 def fit_box_to_unit_cube(box_bounds: torch.Tensor, eps: float = 1e-12):
@@ -383,106 +244,8 @@ def fit_box_to_unit_cube(box_bounds: torch.Tensor, eps: float = 1e-12):
 
 
 # ---------------------------------------------------------------------------
-# Post-fit export helpers (shared by both pipelines)
-# ---------------------------------------------------------------------------
-
-def with_float32_lattice(lattice_struct, bounds, fn):
-    """Run *fn(bounds_f32)* with the lattice temporarily cast to float32.
-
-    DeepSDF/FlexiCubes mesh generation requires float32; the outer
-    optimization keeps parameters in float64. This helper performs the
-    local cast around ``fn`` and restores the original dtype afterwards.
-    """
-    params = list(lattice_struct.parametrization.parameters())
-    saved_params = [p.data for p in params]
-    for p in params:
-        p.data = p.data.float()
-
-    saved_bounds = lattice_struct.bounds.data
-    lattice_struct.bounds.data = lattice_struct.bounds.data.float()
-
-    saved_default_dtype = torch.get_default_dtype()
-    torch.set_default_dtype(torch.float32)
-
-    try:
-        return fn(bounds.float())
-    finally:
-        torch.set_default_dtype(saved_default_dtype)
-        for p, s in zip(params, saved_params):
-            p.data = s
-        lattice_struct.bounds.data = saved_bounds
-
-
-def export_reconstructed_artifacts(
-    lattice_struct,
-    output_dir: Path,
-    *,
-    mesh_resolution: int,
-    bounds: torch.Tensor,
-    device,
-    scaling=None,
-    extend_bounds: bool = True,
-    sdf_grid_N: int = 64,
-    sdf_grid_name: str = "reconstructed_sdf_grid.vtk",
-    param_mesh_name: str = "reconstructed_mesh_parameterspace.stl",
-    physical_mesh_name: str = "reconstructed_mesh.stl",
-    export_sdf_grid: bool = True,
-    export_param_mesh: bool = True,
-) -> Path:
-    """Export SDF grid + param-space STL + (if scaling) physical-space STL.
-
-    Wraps generation in :func:`with_float32_lattice`. Returns the path of the
-    physical-space mesh (or the param-space mesh if no ``scaling`` was given).
-    """
-    from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh, export_sdf_grid_vtk
-
-    output_dir = Path(output_dir)
-
-    def _export(bounds_f32):
-        if export_sdf_grid:
-            export_sdf_grid_vtk(
-                lattice_struct, N=sdf_grid_N,
-                filename=str(output_dir / sdf_grid_name),
-                bounds=bounds_f32,
-            )
-
-        if export_param_mesh:
-            ps_mesh, ps_deriv = create_3D_mesh(
-                lattice_struct, mesh_resolution,
-                mesh_type="surface", differentiate=False,
-                device=device, bounds=bounds_f32,
-                extend_bounds=extend_bounds,
-            )
-            export_surface_mesh(
-                str(output_dir / param_mesh_name), ps_mesh.to_gus(), ps_deriv,
-            )
-
-        if scaling is None:
-            return output_dir / param_mesh_name
-
-        phys_mesh, phys_deriv = create_3D_mesh(
-            lattice_struct, mesh_resolution,
-            mesh_type="surface", differentiate=False,
-            device=device, bounds=bounds_f32,
-            deformation_function=scaling,
-            extend_bounds=extend_bounds,
-        )
-        export_surface_mesh(
-            str(output_dir / physical_mesh_name), phys_mesh.to_gus(), phys_deriv,
-        )
-        return output_dir / physical_mesh_name
-
-    return with_float32_lattice(lattice_struct, bounds, _export)
-
-
-# ---------------------------------------------------------------------------
 # Private helpers for reconstruct_shape
 # ---------------------------------------------------------------------------
-
-def _read_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
 
 def _write_json(path: Path, obj: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,13 +381,10 @@ def _log_reconstruction_to_mlflow(
 def build_reconstruction_lattice(specs: ExperimentSpecifications, device=None):
     """Build the DeepSDF lattice for a reconstruction experiment.
 
-    Loads the pretrained model and input mesh, normalizes the mesh to the unit
-    cube, builds the parametrized B-spline whose control points are the local
-    latent codes, and initializes every control point to the mean trained
-    latent vector (the same well-conditioned starting point used by the
-    standalone reconstruction). This is the shared construction step used by
-    both :func:`reconstruct_shape` and the interactive latent-edit GUI, so the
-    two always agree on tiling, bounds, and ordering.
+    Config-dict front end to
+    :meth:`DeepSDFStruct.geom_reconstruction.LocalShapesReconstructor.build_struct`.
+    Shared by :func:`reconstruct_shape` and the interactive latent-edit GUI, so
+    the two always agree on tiling, bounds, and ordering.
 
     Parameters
     ----------
@@ -643,11 +403,7 @@ def build_reconstruction_lattice(specs: ExperimentSpecifications, device=None):
         ``create_mesh_N``, ``mesh_path``, ``device``.
     """
     import trimesh
-    from DeepSDFStruct.pretrained_models import get_model
-    from DeepSDFStruct.SDF import SDFfromDeepSDF, normalize_mesh_to_unit_cube
-    from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-    from DeepSDFStruct.parametrization import SplineParametrization
-    from DeepSDFStruct.torch_spline import TorchScaling
+    from DeepSDFStruct.geom_reconstruction import LocalShapesReconstructor
 
     rec_cfg = specs["reconstruction"]
     device = device if device is not None else rec_cfg.get("device", "cuda")
@@ -655,71 +411,29 @@ def build_reconstruction_lattice(specs: ExperimentSpecifications, device=None):
     spline_degree = rec_cfg.get("spline_degree", [1, 1, 1])
     create_mesh_N = int(rec_cfg["create_mesh_N"])
     mesh_path = Path(rec_cfg["mesh_path"]).resolve()
-    model_path = str(rec_cfg["model_path"])
-    checkpoint = str(rec_cfg.get("model_checkpoint", "latest"))
 
-    if "cuda" in str(device) and not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA requested in config, but torch.cuda.is_available() is False."
-        )
-
-    # --- Load and normalize mesh ---
-    mesh_orig = trimesh.load_mesh(str(mesh_path))
-    mesh_norm, scale, shift = normalize_mesh_to_unit_cube(mesh_orig.copy())
-
-    bounds = torch.tensor(mesh_norm.bounds, device=device, dtype=torch.float32)
-    scaling = TorchScaling(
-        scale_factors=scale,
-        translation=shift,
-        bounds=bounds,
+    recon = LocalShapesReconstructor(
+        str(rec_cfg["model_path"]),
+        checkpoint=str(rec_cfg.get("model_checkpoint", "latest")),
         device=device,
     )
 
-    # --- Load model ---
-    model = get_model(model_path, checkpoint=checkpoint, device=device)
-    sdf = SDFfromDeepSDF(model)
-
-    # --- Build spline of latent codes ---
-    mins = bounds[0].detach().cpu().numpy()
-    maxs = bounds[1].detach().cpu().numpy()
-    latent_dim = model._trained_latent_vectors[0].shape[0]
-
-    param_spline_sp = build_parameter_spline(
-        spline_degrees=spline_degree,
-        tiling=tiling,
-        latent_dim=latent_dim,
-        bounds=np.stack([mins, maxs]),
-    )
-
-    param_spline = SplineParametrization(param_spline_sp, device=model.device)
-    # Initialize every lattice control point to the mean of the trained latent
-    # vectors. The decoder is only well-conditioned inside the learned latent
-    # manifold; starting from ~0 lands in a flat/degenerate region where the
-    # inference-time code optimization stalls (pronounced at small latent dims).
-    control_points = param_spline.torch_spline.control_points
-    trained_codes = torch.stack(list(model._trained_latent_vectors), dim=0)
-    mean_code = trained_codes.mean(dim=0).to(
-        device=control_points.device, dtype=control_points.dtype
-    )
-    param_spline.set_param(mean_code.expand(control_points.shape))
-
-    lattice_struct = LatticeSDFStruct(
-        tiling=tiling, microtile=sdf, parametrization=param_spline, bounds=bounds
-    )
+    mesh_orig = trimesh.load_mesh(str(mesh_path))
+    built = recon.build_struct(mesh_orig, tiling, spline_degree=spline_degree)
 
     return {
-        "lattice_struct": lattice_struct,
-        "param_spline": param_spline,
-        "param_spline_sp": param_spline_sp,
-        "scaling": scaling,
-        "bounds": bounds,
-        "model": model,
-        "sdf": sdf,
+        "lattice_struct": built.struct,
+        "param_spline": built.param_spline,
+        "param_spline_sp": built.param_spline_sp,
+        "scaling": built.scaling,
+        "bounds": built.bounds,
+        "model": recon.model,
+        "sdf": recon.microtile,
         "mesh_orig": mesh_orig,
-        "mesh_norm": mesh_norm,
-        "scale": scale,
-        "shift": shift,
-        "latent_dim": latent_dim,
+        "mesh_norm": built.mesh_norm,
+        "scale": built.scale,
+        "shift": built.shift,
+        "latent_dim": recon.latent_dim,
         "tiling": tiling,
         "spline_degree": spline_degree,
         "create_mesh_N": create_mesh_N,
@@ -758,6 +472,7 @@ def reconstruct_shape(
         export_knot_grid_paramspace,
         export_control_lattice_paramspace,
     )
+    from DeepSDFStruct.mesh import export_reconstructed_artifacts
     from deepshapeopt.config import make_experiment_paths, ensure_experiment_dirs
     from deepshapeopt.runtime import is_debug_enabled
 
@@ -769,7 +484,6 @@ def reconstruct_shape(
     device = rec_cfg.get("device", "cuda")
     mesh_device = rec_cfg.get("mesh_device", device)
     tiling = rec_cfg["tiling"]
-    spline_degree = rec_cfg.get("spline_degree", [1, 1, 1])
     create_mesh_N = int(rec_cfg["create_mesh_N"])
     n_surface_samples = int(rec_cfg.get("n_surface_samples", 500000))
     samples_surface_stds = rec_cfg.get("samples_surface_stds", [0.025, 0.0001])
@@ -786,7 +500,6 @@ def reconstruct_shape(
 
     # --- Case name ---
     mesh_path = Path(rec_cfg["mesh_path"]).resolve()
-    model_path = str(rec_cfg["model_path"])
     checkpoint = str(rec_cfg.get("model_checkpoint", "latest"))
 
     if case_name is None:
@@ -856,9 +569,6 @@ def reconstruct_shape(
         output_dir=heavy_dir,
         lightweight_output_dir=local_dir,
         save_vtp=save_vtp,
-        use_mlflow=use_mlflow,
-        mlflow_metric_prefix=metric_prefix,
-        mlflow_log_every_n_steps=mlflow_log_every_n_steps,
         box_constrained=False,
         samples_series_dir=heavy_dir / "rec_sdf_samples_series",
     )
