@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import shutil
 import time
 from pathlib import Path
 
 import numpy as np
-import splinepy
 import torch
 import trimesh
 from foamlib import FoamCase
@@ -20,12 +18,14 @@ from DeepSDFStruct.export_knot_grid import (
     export_control_lattice_physical,
     export_control_volume_physical,
 )
-from DeepSDFStruct.mesh import TorchSpline, create_3D_mesh, export_surface_mesh
+from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh
 from DeepSDFStruct.optimization import MMA
 
 import deepshapeopt.config as config
 import deepshapeopt.foam_utils as foam_utils
 from deepshapeopt.config import ExperimentSpecifications
+from deepshapeopt.domain_frame import DomainFrame
+from deepshapeopt.ffd import build_ffd_deformation, min_jacobian_det_ks
 from deepshapeopt.logging import OptimizationLogger
 from deepshapeopt.mesh import compute_tet_mesh_volume_centroid
 from deepshapeopt.plotting_utils import (
@@ -47,75 +47,6 @@ from deepshapeopt.shape_optimization import load_sensitivities, mask_gradients
 LOGGER = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXPERIMENT_PATH = PROJECT_ROOT / "experiments" / "drag_cube"
-
-
-class FFDDeformation(torch.nn.Module):
-    """Map points through a displacement spline over the design domain."""
-
-    def __init__(self, disp_spline_sp, design_domain, device="cpu", dtype=torch.float32):
-        super().__init__()
-        self.disp = TorchSpline(disp_spline_sp, device=device, dtype=dtype)
-        mins = torch.tensor(design_domain[0], device=device, dtype=dtype)
-        maxs = torch.tensor(design_domain[1], device=device, dtype=dtype)
-        self.register_buffer("domain_min", mins)
-        self.register_buffer("domain_max", maxs)
-        self.register_buffer("domain_size", maxs - mins)
-
-    @property
-    def control_points(self):
-        return self.disp.control_points
-
-    def forward(self, queries: torch.Tensor):
-        queries = queries.to(device=self.control_points.device, dtype=self.control_points.dtype)
-        xi = (queries - self.domain_min) / self.domain_size
-        return queries + self.disp(xi)
-
-
-def make_clamped_knots_unit(degree, n_control_points):
-    n_internal = n_control_points - degree - 1
-    parts = [torch.zeros(degree + 1)]
-    if n_internal > 0:
-        parts.append(torch.linspace(0.0, 1.0, n_internal + 2)[1:-1])
-    parts.append(torch.ones(degree + 1))
-    return torch.cat(parts)
-
-
-def define_control_points(design_domain, n_control_points, device="cpu", dtype=torch.float32):
-    mins = torch.as_tensor(design_domain[0], device=device, dtype=dtype)
-    maxs = torch.as_tensor(design_domain[1], device=device, dtype=dtype)
-    ncp = torch.as_tensor(n_control_points, dtype=dtype, device=device)
-    xs = torch.linspace(mins[0], maxs[0], int(ncp[0].item()), device=device, dtype=dtype)
-    ys = torch.linspace(mins[1], maxs[1], int(ncp[1].item()), device=device, dtype=dtype)
-    zs = torch.linspace(mins[2], maxs[2], int(ncp[2].item()), device=device, dtype=dtype)
-    X, Y, Z = torch.meshgrid(xs, ys, zs, indexing="ij")
-    return torch.stack(
-        [
-            X.permute(2, 1, 0).reshape(-1),
-            Y.permute(2, 1, 0).reshape(-1),
-            Z.permute(2, 1, 0).reshape(-1),
-        ],
-        dim=1,
-    )
-
-
-def compute_min_jacobian_det(deformation_ffd, n_samples_per_dim=6, ks_rho=50.0):
-    """Return a smooth lower-bound surrogate for the minimum FFD Jacobian."""
-    device = deformation_ffd.control_points.device
-    dtype = deformation_ffd.control_points.dtype
-
-    lin = torch.linspace(0.0, 1.0, n_samples_per_dim, device=device, dtype=dtype)
-    gx, gy, gz = torch.meshgrid(lin, lin, lin, indexing="ij")
-    xi = torch.stack([gx.reshape(-1), gy.reshape(-1), gz.reshape(-1)], dim=1).requires_grad_(True)
-    displacement = deformation_ffd.disp(xi)
-    jac_disp = torch.stack(
-        [torch.autograd.grad(displacement[:, i].sum(), xi, create_graph=True)[0] for i in range(3)],
-        dim=1,
-    )
-    inv_size = (1.0 / deformation_ffd.domain_size).view(1, 1, 3)
-    jacobian = torch.eye(3, device=device, dtype=dtype).unsqueeze(0) + jac_disp * inv_size
-    det_j = torch.linalg.det(jacobian)
-    LOGGER.debug("Sampled min det(J_FFD): %.4f", det_j.min().item())
-    return -torch.logsumexp(-ks_rho * det_j, dim=0) / ks_rho
 
 
 def optimize_shape(experiment_path: Path, specs):
@@ -153,19 +84,16 @@ def optimize_shape(experiment_path: Path, specs):
 
     mesh_orig = trimesh.load(rec_cfg["mesh_path"])
     sdf_mesh = SDFfromMesh(mesh_orig, scale=False)
-    spline_degree = rec_cfg["spline_degree"]
-    n_control_points = rec_cfg["n_control_points"]
-    knot_vectors = [make_clamped_knots_unit(spline_degree[i], n_control_points[i]) for i in range(3)]
-    control_point_coords = define_control_points(design_domain, n_control_points, device=rec_cfg["device"], dtype=dtype)
-
-    disp_spline_sp = splinepy.BSpline(
-        degrees=spline_degree,
-        knot_vectors=[kv.tolist() for kv in knot_vectors],
-        control_points=np.zeros_like(control_point_coords.cpu().numpy()),
+    # FFD displacement spline over the design domain (library implementation; the
+    # control lattice for the exports is the spline's Greville lattice).
+    frame = DomainFrame.from_design_domain(rec_cfg["design_domain"], device=rec_cfg["device"])
+    ffd = build_ffd_deformation(
+        {"n_control_points": rec_cfg["n_control_points"], "spline_degree": rec_cfg["spline_degree"]},
+        frame, device=rec_cfg["device"], dtype=dtype,
     )
-    deformation_ffd = FFDDeformation(disp_spline_sp, rec_cfg["design_domain"], device=rec_cfg["device"], dtype=dtype)
-    with torch.no_grad():
-        deformation_ffd.control_points.zero_()
+    deformation_ffd = ffd.deformation
+    n_control_points = ffd.n_control_points
+    control_point_coords = ffd.greville_phys
     param = deformation_ffd.control_points
 
     mesh_resolution = opt_cfg["mesh_resolution"]
@@ -325,7 +253,7 @@ def optimize_shape(experiment_path: Path, specs):
             constraints.append(center_constraint.reshape(()))
 
         if use_jacobian_constraint:
-            min_det_ks = compute_min_jacobian_det(deformation_ffd, n_samples_per_dim=jacobian_samples)
+            min_det_ks, _ = min_jacobian_det_ks(deformation_ffd, n_samples_per_dim=jacobian_samples)
             jac_constraint = jacobian_threshold - min_det_ks
             dJac = torch.autograd.grad(jac_constraint, param, retain_graph=True)[0]
             grad_list.append(dJac)
