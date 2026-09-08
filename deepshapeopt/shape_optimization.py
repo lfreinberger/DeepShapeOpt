@@ -17,20 +17,20 @@ import torch
 import trimesh
 
 from DeepSDFStruct.lattice_structure import LatticeSDFStruct
-from DeepSDFStruct.mesh import create_3D_mesh, export_surface_mesh
+from DeepSDFStruct.mesh import (
+    create_3D_mesh,
+    export_reconstructed_artifacts,
+    export_surface_mesh,
+)
 from DeepSDFStruct.parametrization import SplineParametrization
 from DeepSDFStruct.pretrained_models import get_model
+from DeepSDFStruct.geom_reconstruction import build_parameter_spline
 from DeepSDFStruct.SDF import SDFfromDeepSDF
+from DeepSDFStruct.utils import with_float32_lattice
 
 from deepshapeopt.domain_frame import DomainFrame
 from deepshapeopt.parameters import locked_indices_from_bboxes, make_locked_masks
-from deepshapeopt.reconstruction import (
-    build_parameter_spline,
-    export_reconstructed_artifacts,
-    fit_lattice_to_sdf,
-    init_spline_parameters,
-    with_float32_lattice,
-)
+from deepshapeopt.reconstruction import fit_lattice_to_sdf, init_spline_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +52,12 @@ class ModelSetup:
         return self.frame.design_domain
 
 
-def setup_model_and_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
-    """Load DeepSDF model, build the domain frame, prepare reference mesh."""
-    model = get_model(
-        model=rec_cfg["model_path"],
-        checkpoint=rec_cfg["model_checkpoint"],
-        device=rec_cfg["device"],
-    )
+def setup_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
+    """Build the domain frame and load the reference mesh (no DeepSDF model).
 
+    Used on its own by parametrizations that need no network (FFD);
+    :func:`setup_model_and_domain` adds the DeepSDF model on top.
+    """
     frame = DomainFrame.from_design_domain(
         rec_cfg["design_domain"], device=rec_cfg["device"]
     )
@@ -70,9 +68,21 @@ def setup_model_and_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
     mesh_orig = trimesh.load(rec_cfg["mesh_path"])
     frame.normalize_mesh(mesh_orig).export(rec_results_path / "gt_mesh_normalized.stl")
 
+    return ModelSetup(model=None, sdf=None, frame=frame, mesh_orig=mesh_orig)
+
+
+def setup_model_and_domain(rec_cfg: dict, rec_results_path: Path) -> ModelSetup:
+    """Load DeepSDF model, build the domain frame, prepare reference mesh."""
+    model = get_model(
+        model=rec_cfg["model_path"],
+        checkpoint=rec_cfg["model_checkpoint"],
+        device=rec_cfg["device"],
+    )
+
+    domain = setup_domain(rec_cfg, rec_results_path)
     sdf = SDFfromDeepSDF(model)
 
-    return ModelSetup(model=model, sdf=sdf, frame=frame, mesh_orig=mesh_orig)
+    return ModelSetup(model=model, sdf=sdf, frame=domain.frame, mesh_orig=domain.mesh_orig)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +120,9 @@ def build_lattice(rec_cfg: dict, model, sdf, frame: DomainFrame) -> LatticeSetup
         microtile=sdf,
         parametrization=param_spline,
         bounds=box_norm,
+        # "hat" (default, mirrored triangle wave, C0 seams at tile planes) or
+        # "cosine" (smooth seams); see DeepSDFStruct.lattice_structure.transform.
+        tiling_map=rec_cfg.get("tiling_map", "hat"),
     )
 
     return LatticeSetup(
@@ -227,18 +240,40 @@ class OptSetup:
     mask_locked_coeff: torch.Tensor | None = None
 
 
+def design_parameter(design_module) -> torch.nn.Parameter:
+    """Control-point tensor ``(n_ctrl, dim)`` of a design parametrization.
+
+    Accepts a ``LatticeSDFStruct`` (its ``parametrization`` module holds the latent
+    control points) or any ``torch.nn.Module`` whose first parameter is the
+    control-point tensor (e.g. :class:`deepshapeopt.ffd.FFDDeformation`).
+    """
+    module = getattr(design_module, "parametrization", design_module)
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError(
+            "design_module must be a LatticeSDFStruct or an nn.Module holding the "
+            f"control points, got {type(design_module).__name__}"
+        )
+    return next(module.parameters())
+
+
 def setup_optimizer(
-    lattice_struct: LatticeSDFStruct,
+    design_module: LatticeSDFStruct | torch.nn.Module,
     param_spline_sp: splinepy.BSpline,
     opt_cfg: dict,
     rec_cfg: dict,
     lock_bboxes: list | None = None,
     n_constraints: int = 1,
 ) -> OptSetup:
-    """Create the MMA optimizer, optionally locking selected control points."""
+    """Create the MMA optimizer, optionally locking selected control points.
+
+    ``design_module`` provides the control points (see :func:`design_parameter`);
+    ``param_spline_sp`` is the splinepy spline they belong to (its Greville points,
+    in the spline's own knot coordinates, decide which control points ``lock_bboxes``
+    lock).
+    """
     from DeepSDFStruct.optimization import MMA
 
-    param = next(lattice_struct.parametrization.parameters())
+    param = design_parameter(design_module)
 
     locked_idx = locked_indices_from_bboxes(
         param_spline_sp, lock_bboxes or [],
@@ -384,7 +419,12 @@ def load_sensitivities(
     """
     import deepshapeopt.foam_utils as foam_utils
 
-    time_step = foam_case[time_index]
+    if isinstance(time_index, str) and loading_method != "map":
+        # A time *name* predicted by configure_foam_runtime: verify it (an adjoint
+        # solver that stopped early shifts the write times) instead of indexing blindly.
+        time_step = foam_utils.resolve_adjoint_time(case_dir, field_name, time_index)
+    else:
+        time_step = foam_case[time_index]
     return_diagnostics = bool(kwargs.get("return_diagnostics", False))
     sens_diag: dict[str, Any] = {}
 
