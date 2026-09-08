@@ -17,11 +17,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from DeepSDFStruct.utils import with_float32_lattice
+
 from deepshapeopt.config import ExperimentSpecifications, make_experiment_paths
-from deepshapeopt.reconstruction import (
-    build_reconstruction_lattice,
-    with_float32_lattice,
-)
+from deepshapeopt.reconstruction import build_reconstruction_lattice
 
 logger = logging.getLogger(__name__)
 
