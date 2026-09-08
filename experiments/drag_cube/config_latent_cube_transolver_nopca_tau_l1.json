@@ -1,5 +1,5 @@
 {
-  "results_name": "results_cube_adjoint_baseline",
+  "results_name": "results_cube_transolver_nopca_tau_l1",
   "reconstruction": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
     "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
@@ -39,11 +39,12 @@
     "reuse_parameter": true,
     "export_rec_samples_series": false,
     "export_rec_samples_fine_until_epoch": 1,
-    "export_rec_samples_fine_every": 3
+    "export_rec_samples_fine_every": 3,
+    "loss_fn": "L1"
   },
   "optimization": {
     "debug": true,
-    "num_iter": 20,
+    "num_iter": 60,
     "mesh_resolution": 48,
     "mesh_pipeline": "sdf_hex",
     "sdf_hex": {
@@ -73,7 +74,7 @@
         ]
       ],
       "interface_level": 2,
-      "max_level": 4,
+      "max_level": 5,
       "snap_iters": 4,
       "max_disp_frac": 0.7,
       "enable_fast_path": true
@@ -97,13 +98,48 @@
     "convergence_obj_tol": 0.0002,
     "convergence_window": 3,
     "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
-    "sensitivity": {
-      "loading_method": "conservative",
-      "field_name": "pointSensVecadjS1ESI",
-      "objective_path": "optimisation/objective/0/dragadjS1",
-      "invert_normals": true
-    },
-    "forward_solver": "openfoam",
-    "foam_runtime_root": "/work/lfrei/DeepShapeOpt"
+    "forward_solver": "transolver",
+    "foam_runtime_root": "/work/lfrei/DeepShapeOpt",
+    "surrogate": {
+      "checkpoint": "experiments/transolver/results_v4_tau/best.pt",
+      "device": "cuda",
+      "shell_offsets": [
+        0.015625,
+        0.03125
+      ],
+      "n_volume_points": 8192,
+      "volume_seed": 0,
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
+      "nu": 1.0,
+      "drag_direction": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "reanchor_every": 10
+    }
   }
 }
