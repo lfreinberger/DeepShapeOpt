@@ -143,12 +143,22 @@ class TriMeshSDF:
             return np.where(inside, 1.0, -1.0)
         return np.where(inside, -1.0, 1.0)
 
-    def _dist_and_closest(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Unsigned distance to the wall triangles and the closest points."""
-        sq_d, _, closest = igl.point_mesh_squared_distance(
+    def _closest(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Unsigned distance to the wall triangles, the closest points, and
+        the index (into ``wall_faces``) of the closest triangle."""
+        sq_d, face_idx, closest = igl.point_mesh_squared_distance(
             points, self.vertices, self.wall_faces
         )
-        return np.sqrt(np.maximum(sq_d, 0.0)), closest
+        return (
+            np.sqrt(np.maximum(sq_d, 0.0)),
+            closest,
+            np.asarray(face_idx, dtype=np.int64),
+        )
+
+    def _dist_and_closest(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Unsigned distance to the wall triangles and the closest points."""
+        d, closest, _ = self._closest(points)
+        return d, closest
 
     def phi_np(self, points: np.ndarray, chunk: int = 262144) -> np.ndarray:
         """Signed wall distance at numpy points [N, 3] -> float64 [N]."""
