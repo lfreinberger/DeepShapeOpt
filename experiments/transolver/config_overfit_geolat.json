@@ -1,18 +1,42 @@
 {
   "data_dir": "/storage/lfrei/training_data/flow_dataset/v1",
-  "results_dir": "experiments/transolver/results_v4_tau",
+  "results_dir": "experiments/transolver/results_overfit_geolat",
   "device": "cuda",
   "seed": 0,
   "split": {
     "val_fraction": 0.1,
-    "holdout_family": "capsule",
+    "holdout_family": null,
     "min_surface_points": 200
   },
   "features": {
-    "set": "geo"
+    "set": "geo+lat",
+    "latent": {
+      "design_domain": [
+        [
+          -1.5,
+          -0.8,
+          -0.8
+        ],
+        [
+          1.5,
+          0.8,
+          0.8
+        ]
+      ],
+      "tiling": [
+        2,
+        2,
+        2
+      ],
+      "spline_degree": [
+        1,
+        1,
+        1
+      ]
+    }
   },
   "model": {
-    "in_dim": 7,
+    "in_dim": 39,
     "out_dim": 7,
     "n_hidden": 256,
     "n_layers": 8,
@@ -22,14 +46,14 @@
     "dropout": 0.0
   },
   "training": {
-    "epochs": 500,
+    "epochs": 60,
     "lr": 0.001,
     "weight_decay": 1e-05,
     "w_p": 1.0,
     "w_U": 1.0,
     "grad_clip": 1.0,
-    "checkpoint_every": 25,
-    "overfit_n": null,
+    "checkpoint_every": 20,
+    "overfit_n": 5,
     "w_tau": 1.0
   },
   "surrogate": {

@@ -253,7 +253,8 @@ def optimize_shape(experiment_path: Path, specs):
                 # Differentiable forward step: Transolver fields -> drag
                 # integral -> autograd straight to the design parameters.
                 J_t, surrogate_diag = surrogate.objective(
-                    verts, faces, hex_pipeline.sdf_at_phys
+                    verts, faces, hex_pipeline.sdf_at_phys,
+                    latent_fn=hex_pipeline.latent_at_phys,
                 )
                 if surrogate_diag.get("visc_clamped"):
                     LOGGER.warning(

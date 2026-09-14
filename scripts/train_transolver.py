@@ -11,6 +11,14 @@ small integer for the overfitting sanity check (P3 gate).
 ``model.out_dim`` selects the target set: 4 = ``[U, p]`` (viscous drag from
 the probe-shell finite difference, "fd" mode), 7 = ``[U, p, tau_w]`` (wall
 shear stress predicted directly, "tau" mode; no FD calibration needed).
+
+``features.set`` selects the per-point input (default ``"geo"`` =
+``[pos, sdf, normal]``; ``"lat"`` = ``[pos, z(x)]``; ``"geo+lat"`` = both),
+where ``z(x)`` is the lattice's B-spline latent code evaluated from the
+``param`` array of every sample with the lattice layout in
+``features.latent`` (``design_domain``, ``tiling``, ``spline_degree`` of the
+dataset's reconstruction block). ``model.in_dim`` must match the feature set
+(7 / 35 / 39 for 32-dim codes) and is filled in when absent.
 """
 
 from __future__ import annotations
@@ -33,6 +41,12 @@ from deepshapeopt.surrogate.dataset import (
     cloud_from_batch,
     compute_norm_stats,
     split_files,
+)
+from deepshapeopt.surrogate.features import (
+    DEFAULT_FEATURE_SET,
+    feature_dim,
+    make_latent_spec,
+    needs_latent,
 )
 from deepshapeopt.surrogate.losses import field_loss, rel_l2
 from deepshapeopt.surrogate.predictor import TransolverSurrogate
@@ -83,7 +97,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     cfg = ExperimentSpecifications(args.config)
-    tr_cfg, model_cfg, sur_cfg = cfg["training"], cfg["model"], cfg["surrogate"]
+    tr_cfg, model_cfg, sur_cfg = cfg["training"], dict(cfg["model"]), cfg["surrogate"]
     device = torch.device(cfg.get("device", "cuda"))
     torch.manual_seed(int(cfg.get("seed", 0)))
 
@@ -101,6 +115,33 @@ def main() -> None:
     )
     if not files:
         raise SystemExit(f"no samples found in {cfg['data_dir']}")
+
+    feat_cfg = cfg.get("features") or {}
+    feature_set = feat_cfg.get("set", DEFAULT_FEATURE_SET)
+    latent_spec = None
+    latent_dim = 0
+    if needs_latent(feature_set):
+        with np.load(files[0]) as z0:
+            latent_dim = int(z0["param"].shape[1])
+        lat_cfg = feat_cfg.get("latent")
+        if not lat_cfg:
+            raise SystemExit(
+                f"features.set {feature_set!r} needs features.latent "
+                "(design_domain, tiling, spline_degree of the dataset lattice)"
+            )
+        latent_spec = make_latent_spec(
+            lat_cfg["design_domain"], lat_cfg["tiling"], lat_cfg["spline_degree"], latent_dim
+        )
+    in_dim = feature_dim(feature_set, latent_dim)
+    if "in_dim" in model_cfg and int(model_cfg["in_dim"]) != in_dim:
+        raise SystemExit(
+            f"model.in_dim {model_cfg['in_dim']} does not match feature set "
+            f"{feature_set!r} ({in_dim} channels)"
+        )
+    model_cfg["in_dim"] = in_dim
+    logger.info("features: %s (%d channels)%s", feature_set, in_dim,
+                f", latent spec {latent_spec}" if latent_spec else "")
+
     train_files, val_files = split_files(
         files,
         val_fraction=cfg["split"].get("val_fraction", 0.1),
@@ -123,11 +164,25 @@ def main() -> None:
             stats_path.name, len(stats["mean_y"]), out_dim,
         )
         stats = None
+    if stats is not None and (
+        len(stats["mean_x"]) != in_dim
+        or stats.get("feature_set", DEFAULT_FEATURE_SET) != feature_set
+        or stats.get("latent_spec") != latent_spec
+    ):
+        logger.warning(
+            "cached %s was computed for feature set %r (%d channels), config wants "
+            "%r (%d): recomputing",
+            stats_path.name, stats.get("feature_set", DEFAULT_FEATURE_SET),
+            len(stats["mean_x"]), feature_set, in_dim,
+        )
+        stats = None
     if stats is None:
-        stats = compute_norm_stats(train_files, with_tau=tau_mode)
+        stats = compute_norm_stats(
+            train_files, with_tau=tau_mode, feature_set=feature_set, latent_spec=latent_spec
+        )
         stats_path.write_text(json.dumps(stats, indent=2))
-    logger.info("norm stats over %d points from %d files (%d target channels)",
-                stats["n_points"], stats["n_files"], len(stats["mean_y"]))
+    logger.info("norm stats over %d points from %d files (%d feature / %d target channels)",
+                stats["n_points"], stats["n_files"], len(stats["mean_x"]), len(stats["mean_y"]))
 
     train_ds = FlowFieldDataset(train_files, stats)
     val_ds = FlowFieldDataset(val_files, stats)

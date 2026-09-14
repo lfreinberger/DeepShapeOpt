@@ -8,8 +8,14 @@
 #SBATCH --output=slurm_transolver_%j.out
 
 # Transolver surrogate training on the generated flow dataset.
+# Usage: sbatch run_train_transolver.slrm [config.json]
+#   default config: experiments/transolver/config_train.json (feature set geo)
+#   ablation C:     experiments/transolver/config_train_lat.json  (lat)
+#                   experiments/transolver/config_train_geolat.json (geo+lat)
 
 source tests/env.sh
 
-uv run python scripts/train_transolver.py \
-    --config experiments/transolver/config_train.json
+CONFIG=${1:-experiments/transolver/config_train.json}
+echo "config: $CONFIG"
+
+uv run python scripts/train_transolver.py --config "$CONFIG"

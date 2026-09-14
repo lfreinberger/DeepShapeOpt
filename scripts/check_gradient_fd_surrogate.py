@@ -41,7 +41,8 @@ def objective(hex_pipeline, surrogate, reuse_castellation: bool, need_grad: bool
     ctx = torch.enable_grad() if need_grad else torch.no_grad()
     with ctx:
         J, _ = surrogate.objective(
-            result.surface_points, result.wall_tris_local, hex_pipeline.sdf_at_phys
+            result.surface_points, result.wall_tris_local, hex_pipeline.sdf_at_phys,
+            latent_fn=hex_pipeline.latent_at_phys,
         )
     return J
 

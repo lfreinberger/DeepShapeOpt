@@ -4,9 +4,15 @@ Each item is one ``sample_SSSSS_V.npz`` produced by
 ``scripts/generate_flow_dataset.py``. Variable point counts -> use
 ``batch_size=1`` with the identity collate (the ShapeNetCar practice).
 
-Features ``x = [pos(3), sdf(1), normal(3)]`` and targets
+Features ``x`` (a feature set of :mod:`deepshapeopt.surrogate.features`:
+``geo = [pos(3), sdf(1), normal(3)]``, ``lat = [pos, z(x)]``,
+``geo+lat = [pos, sdf, normal, z(x)]``) and targets
 ``y = [U(3), p(1), tau_w(3)]`` are standardized channel-wise with dataset
 statistics computed over the training split (:func:`compute_norm_stats`).
+The latent block ``z(x)`` is evaluated on the fly from the ``param`` array
+stored in every sample (the lattice's latent control values) and the
+``latent_spec`` (design domain, tiling, spline degree) that accompanies the
+feature set in the statistics; no dataset regeneration is needed.
 ``tau_w`` (OpenFOAM ``wallShearStress``) is defined on the wall points only;
 off-wall rows carry zero padding that is excluded from the statistics and
 from every loss/metric. A 4-channel checkpoint (``[U, p]``, probe-shell FD
@@ -24,6 +30,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .features import (
+    DEFAULT_FEATURE_SET,
+    LatentCodeField,
+    assemble_features,
+    feature_channels,
+    needs_latent,
+)
 from .query_points import ROLE_SURFACE, QueryCloud
 
 logger = logging.getLogger(__name__)
@@ -31,10 +44,35 @@ logger = logging.getLogger(__name__)
 Y_CHANNELS_4 = ["Ux", "Uy", "Uz", "p"]
 Y_CHANNELS_7 = Y_CHANNELS_4 + ["tau_x", "tau_y", "tau_z"]
 
+# One LatentCodeField per latent spec (per process / dataloader worker); only
+# the control values change between samples.
+_LATENT_FIELDS: dict[str, LatentCodeField] = {}
 
-def load_sample(path: Path) -> dict:
+
+def latent_codes(pos: np.ndarray, param: np.ndarray, latent_spec: dict) -> np.ndarray:
+    """``z(x)`` [N, L] of the stored sample: spline of ``param`` at ``pos``."""
+    key = json.dumps(latent_spec, sort_keys=True)
+    field = _LATENT_FIELDS.get(key)
+    if field is None:
+        field = LatentCodeField.from_spec(latent_spec, param)
+        _LATENT_FIELDS[key] = field
+    else:
+        field.param_spline.set_param(torch.as_tensor(param, dtype=torch.float32))
+    with torch.no_grad():
+        z = field(torch.as_tensor(pos, dtype=torch.float32))
+    return z.numpy().astype(np.float32)
+
+
+def load_sample(
+    path: Path, feature_set: str = DEFAULT_FEATURE_SET, latent_spec: dict | None = None
+) -> dict:
     with np.load(path) as z:
-        x = np.concatenate([z["pos"], z["sdf"][:, None], z["normal"]], axis=1)
+        blocks = {"pos": z["pos"], "sdf": z["sdf"][:, None], "normal": z["normal"]}
+        if needs_latent(feature_set):
+            if latent_spec is None:
+                raise ValueError(f"feature set {feature_set!r} needs a latent_spec")
+            blocks["latent"] = latent_codes(z["pos"], z["param"], latent_spec)
+        x = assemble_features(blocks, feature_set)
         tau_w = z["tau_w"].astype(np.float32)
         n = z["U"].shape[0]
         tau_full = np.zeros((n, 3), dtype=np.float32)
@@ -62,19 +100,26 @@ def tau_missing(path: Path) -> bool:
         return bool(not np.any(z["tau_w"]))
 
 
-def compute_norm_stats(files: list[Path], with_tau: bool = False) -> dict:
+def compute_norm_stats(
+    files: list[Path],
+    with_tau: bool = False,
+    feature_set: str = DEFAULT_FEATURE_SET,
+    latent_spec: dict | None = None,
+) -> dict:
     """Channel-wise mean/std of features and targets over ``files``.
 
     ``[U, p]`` statistics use every valid point; the ``tau_w`` statistics
     (only with ``with_tau``) use the wall rows only, never the zero padding.
-    Returned lists are JSON-serializable and stored both in
-    ``dataset_stats.json`` and inside training checkpoints.
+    The feature set (and its latent spec) is recorded alongside, so a
+    checkpoint knows which input it was trained on. Returned lists are
+    JSON-serializable and stored both in ``dataset_stats.json`` and inside
+    training checkpoints.
     """
     sx = sx2 = sy = sy2 = None
     st = st2 = None
     n = n_wall = 0
     for f in files:
-        s = load_sample(Path(f))
+        s = load_sample(Path(f), feature_set, latent_spec)
         m = s["valid"]
         x, y = s["x"][m].astype(np.float64), s["y"][m][:, :4].astype(np.float64)
         if sx is None:
@@ -104,6 +149,11 @@ def compute_norm_stats(files: list[Path], with_tau: bool = False) -> dict:
         "mean_y": mean_y.tolist(),
         "std_y": std_y.tolist(),
         "y_channels": list(Y_CHANNELS_4),
+        "feature_set": feature_set,
+        "latent_spec": dict(latent_spec) if needs_latent(feature_set) else None,
+        "x_channels": feature_channels(
+            feature_set, int(latent_spec["latent_dim"]) if needs_latent(feature_set) else 0
+        ),
         "n_points": int(n),
         "n_files": len(files),
     }
@@ -126,7 +176,11 @@ class Normalizer:
         self.mean_y = torch.tensor(stats["mean_y"], device=device, dtype=dtype)
         self.std_y = torch.tensor(stats["std_y"], device=device, dtype=dtype)
         self.stats = stats
+        self.n_x = len(stats["mean_x"])
         self.n_y = len(stats["mean_y"])
+        # Pre-feature-set statistics (v1..v4 checkpoints) are geometry-only.
+        self.feature_set = stats.get("feature_set", DEFAULT_FEATURE_SET)
+        self.latent_spec = stats.get("latent_spec")
 
     def to(self, device):
         for name in ("mean_x", "std_x", "mean_y", "std_y"):
@@ -148,7 +202,7 @@ class FlowFieldDataset(Dataset):
 
     ``y`` is sliced to the normalizer's channel count, so 4-channel
     statistics/checkpoints see exactly the ``[U, p]`` targets they were
-    trained on.
+    trained on; ``x`` follows the feature set recorded in the statistics.
     """
 
     def __init__(self, files: list, stats: dict):
@@ -159,7 +213,7 @@ class FlowFieldDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, i: int) -> dict:
-        s = load_sample(self.files[i])
+        s = load_sample(self.files[i], self.norm.feature_set, self.norm.latent_spec)
         x = torch.from_numpy(s["x"])
         y = torch.from_numpy(s["y"])[:, : self.norm.n_y]
         return {

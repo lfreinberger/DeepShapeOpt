@@ -52,6 +52,22 @@ class LatticeDesignSDF:
             self.lattice_struct, self.frame.box_norm, lambda _b: fn()
         )
 
+    @property
+    def latent_field(self):
+        """``z(x_phys) -> [N, L]``: the lattice's latent B-spline evaluated in
+        physical coordinates inside the float32 scope (mirror of the
+        pipeline's ``sdf_at_phys``). Shares the lattice's control points, so
+        the autograd graph reaches the design parameters."""
+        from deepshapeopt.surrogate.features import LatentCodeField
+
+        field = getattr(self, "_latent_field", None)
+        if field is None:
+            field = LatentCodeField.from_lattice(
+                self.lattice_struct, self.frame, scope=self.float32_scope
+            )
+            self._latent_field = field
+        return field
+
 
 def as_design_sdf(obj, frame) -> DesignSDF:
     """Accept a :class:`DesignSDF` as is; wrap anything else (a

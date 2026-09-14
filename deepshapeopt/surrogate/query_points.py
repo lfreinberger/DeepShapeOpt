@@ -8,12 +8,15 @@ The surrogate predicts (U, p) on a point cloud assembled from
 - a fixed, seeded Sobol volume cloud (role 3) whose shape dependence enters
   only through the SDF feature; points inside the solid are dropped.
 
-Per-point features follow the Transolver ShapeNetCar convention:
-``[pos(3), sdf(1), unit_normal(3)]`` with zero normals off-surface.
+Per-point geometry features follow the Transolver ShapeNetCar convention:
+``[pos(3), sdf(1), unit_normal(3)]`` with zero normals off-surface. An
+optional latent block ``z(x)`` (:mod:`deepshapeopt.surrogate.features`) is
+carried separately; :func:`model_input` assembles the checkpoint's feature set.
 
 Contract: ``sdf_fn(x_phys) -> phi`` returns the SDF in PHYSICAL distance
 units with ``phi > 0`` in the fluid, ``phi < 0`` inside the solid, and must
 be differentiable w.r.t. the lattice parameters (and, where applicable, x).
+``latent_fn(x_phys) -> z [N, L]`` (optional) follows the same contract.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from ..foam_utils import (
     compute_area_weighted_vertex_normals,
     compute_vertex_normals,
 )
+from .features import DEFAULT_FEATURE_SET, assemble_features, needs_latent
 
 logger = logging.getLogger(__name__)
 
@@ -42,19 +46,39 @@ _VOLUME_CLOUD_CACHE: dict = {}
 
 @dataclasses.dataclass
 class QueryCloud:
-    """Assembled query cloud; ``feats`` carries the autograd graph to the
-    lattice parameters (via surface points, normals and the SDF channel)."""
+    """Assembled query cloud; ``feats`` (geometry block ``[pos, sdf, normal]``)
+    and ``latent`` carry the autograd graph to the lattice parameters (via
+    surface points, normals, the SDF channel and the latent codes)."""
 
-    feats: torch.Tensor  # [N, 7] float32
+    feats: torch.Tensor  # [N, 7] float32 geometry features [pos, sdf, normal]
     roles: torch.Tensor  # [N] int8
     n_surface: int
     unit_normals: torch.Tensor  # [P, 3] into-fluid unit vertex normals
     area_normals: torch.Tensor  # [P, 3] A_v * n_hat_v (vertex quadrature weights)
     delta: torch.Tensor  # [P] per-vertex shell offset actually used (detached)
+    latent: torch.Tensor | None = None  # [N, L] z(x), only when a latent_fn was given
 
     @property
     def n_points(self) -> int:
         return int(self.feats.shape[0])
+
+
+def model_input(cloud: QueryCloud, feature_set: str = DEFAULT_FEATURE_SET) -> torch.Tensor:
+    """Model input ``[N, in_dim]`` of ``feature_set`` from a query cloud."""
+    if needs_latent(feature_set) and cloud.latent is None:
+        raise ValueError(
+            f"feature set {feature_set!r} needs z(x), but the query cloud carries no "
+            "latent block (build it with a latent_fn / a lattice design)"
+        )
+    return assemble_features(
+        {
+            "pos": cloud.feats[:, :3],
+            "sdf": cloud.feats[:, 3:4],
+            "normal": cloud.feats[:, 4:7],
+            "latent": cloud.latent,
+        },
+        feature_set,
+    )
 
 
 def _sobol_box(engine: torch.quasirandom.SobolEngine, n: int, lo, hi) -> torch.Tensor:
@@ -106,6 +130,7 @@ def build_query_cloud(
     wall_tris: torch.Tensor,
     sdf_fn,
     cfg: dict,
+    latent_fn=None,
 ) -> QueryCloud:
     """Assemble the surrogate query cloud for one shape.
 
@@ -117,6 +142,8 @@ def build_query_cloud(
     sdf_fn : physical-unit SDF callable (see module docstring).
     cfg : surrogate config block (``shell_offsets``, ``n_volume_points``,
         ``volume_seed``, ``domain``, ``mesh_box``).
+    latent_fn : optional ``z(x_phys) -> [N, L]`` (see module docstring);
+        evaluated on every query point and stored as ``QueryCloud.latent``.
     """
     verts = surface_points
     device, dtype = verts.device, verts.dtype
@@ -191,6 +218,7 @@ def build_query_cloud(
     nrm_feat[:P] = normals
 
     feats = torch.cat([pos, phi, nrm_feat], dim=1)
+    latent = latent_fn(pos) if latent_fn is not None else None
     roles = torch.cat(
         [
             torch.full((P,), ROLE_SURFACE, dtype=torch.int8),
@@ -207,4 +235,5 @@ def build_query_cloud(
         unit_normals=normals,
         area_normals=area_normals,
         delta=delta.detach(),
+        latent=latent,
     )

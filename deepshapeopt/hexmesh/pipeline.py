@@ -629,6 +629,13 @@ class SdfHexMeshPipeline:
 
         return self._with_float32(_eval)
 
+    @property
+    def latent_at_phys(self):
+        """``z(x_phys) -> [N, L]`` of a DeepSDF lattice design (the surrogate's
+        latent feature block), or ``None`` for designs without a latent field
+        (FFD). Carries the autograd graph to the design parameters."""
+        return getattr(self.design, "latent_field", None)
+
     # ------------------------------------------------------------------
     # Per-iteration build
     # ------------------------------------------------------------------

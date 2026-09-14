@@ -49,7 +49,6 @@ from deepshapeopt.shape_optimization import (
     setup_model_and_domain,
 )
 from deepshapeopt.surrogate.predictor import TransolverSurrogate
-from deepshapeopt.surrogate.query_points import build_query_cloud
 
 LOGGER = logging.getLogger(__name__)
 
@@ -113,7 +112,9 @@ def main() -> None:
     surrogate = TransolverSurrogate.from_config(opt_cfg["surrogate"])
     tau_mode = surrogate.viscous_mode == "tau"
     with torch.no_grad():
-        cloud = build_query_cloud(verts_t, faces_t, hex_pipeline.sdf_at_phys, surrogate.cfg)
+        cloud = surrogate.build_cloud(
+            verts_t, faces_t, hex_pipeline.sdf_at_phys, latent_fn=hex_pipeline.latent_at_phys
+        )
         y = surrogate.predict_raw(cloud)
         J, diag = surrogate.drag_from_prediction(y, cloud)
     P = cloud.n_surface

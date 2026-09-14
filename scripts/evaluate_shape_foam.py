@@ -86,7 +86,7 @@ def main() -> None:
         with torch.no_grad():
             J_t, diag = surrogate.objective(
                 hex_result.surface_points, hex_result.wall_tris_local,
-                hex_pipeline.sdf_at_phys,
+                hex_pipeline.sdf_at_phys, latent_fn=hex_pipeline.latent_at_phys,
             )
         surrogate_J = float(J_t)
         LOGGER.info(

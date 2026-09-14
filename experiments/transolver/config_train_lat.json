@@ -1,6 +1,6 @@
 {
   "data_dir": "/storage/lfrei/training_data/flow_dataset/v1",
-  "results_dir": "experiments/transolver/results_v4_tau",
+  "results_dir": "experiments/transolver/results_v5_lat",
   "device": "cuda",
   "seed": 0,
   "split": {
@@ -9,10 +9,34 @@
     "min_surface_points": 200
   },
   "features": {
-    "set": "geo"
+    "set": "lat",
+    "latent": {
+      "design_domain": [
+        [
+          -1.5,
+          -0.8,
+          -0.8
+        ],
+        [
+          1.5,
+          0.8,
+          0.8
+        ]
+      ],
+      "tiling": [
+        2,
+        2,
+        2
+      ],
+      "spline_degree": [
+        1,
+        1,
+        1
+      ]
+    }
   },
   "model": {
-    "in_dim": 7,
+    "in_dim": 35,
     "out_dim": 7,
     "n_hidden": 256,
     "n_layers": 8,
