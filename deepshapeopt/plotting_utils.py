@@ -462,6 +462,7 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
         ("step_ratio",      "||dx||_inf / max_step (1 = move limit)",    False),
         ("wall_disp_max_mm",  "Wall displacement max |d| [mm]",          True),
         ("wall_disp_mean_mm", "Wall displacement mean d [mm] (+ wider)",  False),
+        ("kkt_norm",        "KKT residual (scaled)",                     True),
         ("vol_constraint",  "Volume constraint value",                   False),
         ("sens_norm",       "Sensitivity norm ||s||",                    True),
         ("sens_to_grad_ratio",         "||dJ/dp|| / ||s||",               True),
