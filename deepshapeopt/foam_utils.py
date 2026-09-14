@@ -307,6 +307,36 @@ def format_solver_iterations(info: dict[str, dict], caps: dict[str, int] | None 
     return ", ".join(parts) if parts else "(keine Abbruchmeldung im Log)"
 
 
+def apply_foam_dict_overrides(case_dir: Path, overrides: dict | None) -> None:
+    """Set individual entries of OpenFOAM dictionaries in the RUNTIME case copy.
+
+    ``overrides`` maps a case-relative file (``"system/optimisationDict"``) to a mapping
+    of slash-separated entry paths to values, e.g.::
+
+        {"system/optimisationDict":
+            {"adjointManagers/am1/adjointSolvers/as1/ATCModel/ATCModel": "cancel"}}
+
+    Values are written by foamlib as given (a str becomes a bare word, numbers and
+    bools their OpenFOAM spelling). Meant for one-off studies that vary a solver
+    setting without forking the experiment's ``foam_case`` template; call it AFTER
+    ``configure_foam_runtime`` so the override wins over the derived settings.
+    """
+    if not overrides:
+        return
+    for rel_file, entries in overrides.items():
+        path = case_dir / rel_file
+        if not path.is_file():
+            raise FileNotFoundError(f"foam_dict_overrides: {path} does not exist")
+        foam_file = FoamFile(path)
+        for entry_path, value in entries.items():
+            key = tuple(entry_path.strip("/").split("/"))
+            old = foam_file.get(key, None)
+            foam_file[key] = value
+            logger.info(
+                "foam_dict_overrides: %s %s: %r -> %r", rel_file, entry_path, old, value
+            )
+
+
 def select_allrun(case_dir: Path, mesh_pipeline: str) -> None:
     """Activate the Allrun variant for the chosen mesh pipeline.
 
