@@ -7,7 +7,8 @@ built once and is identical across all iterations; only the castellation
 inside the box changes, so shape topology changes are supported.  OpenFOAM
 point sensitivities map back onto the snapped wall points by index (we wrote
 the points file), and flow through the differentiable snap step into the
-lattice parameters.
+design parameters (DeepSDF lattice latent codes or FFD control points; see
+``design.py`` for the adapter contract).
 """
 
 from __future__ import annotations
@@ -33,8 +34,9 @@ from .octree import (
     build_static_octree,
     parse_refine_regions,
 )
+from .design import as_design_sdf
 from .polymesh import PatchPlan, PolyMeshData, build_polymesh, face_pyramid_volumes
-from .sdf_field import CompositeSDF, PhysicalSDF
+from .sdf_field import CompositeSDF, check_sign_convention, surface_displacement
 from .snap import SnapHandle, snap_wall_points
 
 logger = logging.getLogger(__name__)
@@ -109,6 +111,35 @@ def resolve_sdf_hex_cfg(opt_cfg: dict, base_dir: Path) -> dict:
             raw = json.load(f)
         logger.info("Loaded sdf_hex mesh config from %s", path)
     return raw
+
+
+def _nearest_ring_per_column(
+    li: np.ndarray, wall_keys: np.ndarray, signed_dist: np.ndarray, axis: int
+) -> np.ndarray:
+    """Thin ``li`` to one point per in-plane lattice column.
+
+    ``li`` indexes wall-local points selected for pinning onto a cap plane;
+    ``wall_keys`` are their integer lattice keys and ``signed_dist`` their
+    offset from the plane along ``axis``.  Points sharing the two in-plane key
+    components sit in the same column; only the one closest to the plane is
+    kept, so a cap step can never have both of its rings pinned onto the plane
+    (which would collapse the cell between them).
+    """
+    if li.size == 0:
+        return li
+    other = [a for a in range(3) if a != axis]
+    col = wall_keys[li][:, other]
+    order = np.lexsort((np.abs(signed_dist), col[:, 1], col[:, 0]))
+    li, col = li[order], col[order]
+    first = np.ones(len(li), dtype=bool)
+    first[1:] = np.any(col[1:] != col[:-1], axis=1)
+    dropped = int((~first).sum())
+    if dropped:
+        logger.info(
+            "Cap pin: %d of %d candidate points dropped (second ring of a "
+            "cap step in the same lattice column)", dropped, len(li),
+        )
+    return li[first]
 
 
 class _HangingCorrector:
@@ -189,8 +220,11 @@ class HexMeshResult:
 class SdfHexMeshPipeline:
     """Builds and writes the OpenFOAM polyMesh directly from the SDF."""
 
-    def __init__(self, lattice_struct, model_setup, opt_cfg: dict, results_dir: Path):
-        self.lattice_struct = lattice_struct
+    def __init__(self, design, model_setup, opt_cfg: dict, results_dir: Path):
+        # ``design``: a DesignSDF (hexmesh/design.py) -- or, for backward
+        # compatibility, the raw LatticeSDFStruct / normalized-space SDF callable,
+        # which is wrapped as a LatticeDesignSDF through ``model_setup.frame``.
+        self.design = as_design_sdf(design, model_setup.frame)
         self.model_setup = model_setup
         raw_cfg = opt_cfg.get("sdf_hex", {})
         if isinstance(raw_cfg, str):
@@ -543,11 +577,12 @@ class SdfHexMeshPipeline:
         np.savez_compressed(path, levels=cells.levels, anchors=cells.anchors)
         return cells
 
-    def _make_sdf(self) -> PhysicalSDF:
-        sdf = self.model_setup.frame.physical_sdf(
-            self.lattice_struct,
+    def _make_sdf(self):
+        """Design-domain SDF for the current design parameters (per build)."""
+        sdf = self.design.make_sdf(
             sign=-1.0 if self.cfg["fluid_side"] == "inside" else 1.0,
             device=self.device,
+            outer=self.geom,
         )
         if self.cfg["check_sign"] and not self._sign_checked:
             probe = self.cfg["sign_probe_point"]
@@ -557,14 +592,28 @@ class SdfHexMeshPipeline:
             expect = self.cfg["sign_probe_expect"]
             if expect is None:
                 expect = "fluid" if self.flow == "internal" else "solid"
-            sdf.check_sign_convention(probe, expect=expect)
+            check_sign_convention(sdf, probe, expect=expect)
             self._sign_checked = True
         return sdf
 
     def _with_float32(self, fn):
-        from deepshapeopt.reconstruction import with_float32_lattice
+        return self.design.float32_scope(fn)
 
-        return with_float32_lattice(self.lattice_struct, self.model_setup.frame.box_norm, lambda _b: fn())
+    def wall_displacement(self, x_old_phys: torch.Tensor) -> np.ndarray:
+        """Signed normal displacement [physical units] of the wall at ``x_old_phys``
+        (wall points of the previous build) under the CURRENT design parameters.
+
+        Evaluates the same composite field the next build will castellate, so the
+        number is the geometric effect of the last optimizer step: ``> 0`` = the
+        channel got wider there (old wall point now in the fluid). First order in
+        the step; see :func:`~deepshapeopt.hexmesh.sdf_field.surface_displacement`.
+        """
+        def _eval():
+            sdf = self._make_sdf()
+            field = CompositeSDF(sdf, self.geom) if self.flow == "internal" else sdf
+            return surface_displacement(field, x_old_phys)
+
+        return self._with_float32(_eval)
 
     # ------------------------------------------------------------------
     # Per-iteration build
@@ -671,6 +720,17 @@ class SdfHexMeshPipeline:
                 # different axes); pin each point to its own plane only.
                 near = np.abs(x0[local, cap.axis] - cap.value) <= 0.75 * h_local[local]
                 li = local[near]
+                # A cap plane that falls near the middle of a cell layer leaves
+                # both bounding grid rings inside the 0.75 * h pickup band, so a
+                # one-cell step in the castellated cap (slot corners, refinement
+                # transitions) has its lower and upper ring both selected.
+                # Pinning both squashes the riser cell to zero height (checkMesh:
+                # zero face area / zero cell volume).  Per in-plane lattice
+                # column keep only the ring closest to the plane; the other ring
+                # stays on the grid and is snapped as an ordinary wall point.
+                li = _nearest_ring_per_column(
+                    li, wall_keys, x0[li, cap.axis] - cap.value, cap.axis
+                )
                 x0[li, cap.axis] = cap.value
                 lock_axes[li, cap.axis] = True
 
@@ -965,6 +1025,9 @@ class SdfHexMeshPipeline:
 
         if time_value is None:
             time_value = Path(str(foam_case[time_index])).name
+        # The predicted adjoint time is wrong when a solver stopped early; take
+        # the directory that really holds the field (warns on a shift).
+        time_value = foam_utils.resolve_adjoint_time(Path(case_dir), field_name, time_value)
         field_path = Path(case_dir) / time_value / field_name
         sens_all = np.asarray(FoamFieldFile(field_path).internal_field, dtype=np.float64)
 
