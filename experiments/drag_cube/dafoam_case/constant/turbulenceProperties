@@ -1,0 +1,22 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| DAFoam case template (discrete adjoint) -- external flow, drag              |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      turbulenceProperties;
+}
+
+// DASimpleFoam requires an RAS model (it looks up RAS/RASModel unconditionally and needs a
+// registered nut field). With nuTilda == 0 everywhere, nuTilda = 0 is an exact fixed point
+// of the SA equation and nut = 0, i.e. the laminar system -- which is what Re ~ 1 means here.
+simulationType RAS;
+RAS
+{
+    RASModel        SpalartAllmaras;
+    turbulence      on;
+    printCoeffs     off;
+    nuTildaMin      1e-16;
+}

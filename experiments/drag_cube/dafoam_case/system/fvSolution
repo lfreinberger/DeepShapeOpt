@@ -1,0 +1,44 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| DAFoam case template (discrete adjoint) -- external flow, drag              |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+
+SIMPLE
+{
+    consistent false;
+    nNonOrthogonalCorrectors 0;
+}
+solvers
+{
+    "(p|Phi)"
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        relTol          0.1;
+        // Absolute floor: near convergence relTol 0.1 is unreachable in round-off noise,
+        // and with tolerance 0 the solver would burn maxIter sweeps every outer iteration.
+        tolerance       1e-14;
+        maxIter         200;
+    }
+    "(U|nuTilda)"
+    {
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        relTol          0.1;
+        tolerance       1e-16;
+        nSweeps         1;
+        maxIter         50;
+    }
+}
+relaxationFactors
+{
+    fields { p 0.3; }
+    equations { "(U|nuTilda)" 0.7; }
+}
+potentialFlow { nNonOrthogonalCorrectors 20; }

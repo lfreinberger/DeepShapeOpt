@@ -22,6 +22,8 @@ from DeepSDFStruct.mesh import export_surface_mesh
 import deepshapeopt.config as config
 import deepshapeopt.foam_utils as foam_utils
 from deepshapeopt.config import ExperimentSpecifications
+from deepshapeopt.dafoam_utils import DAFoamRunner, prepare_dafoam_case
+from deepshapeopt.hexmesh.foamwriter import write_polymesh
 from deepshapeopt.logging import OptimizationLogger
 from deepshapeopt.mesh import compute_tet_mesh_volume_centroid
 from deepshapeopt.plotting_utils import (
@@ -161,6 +163,16 @@ def optimize_shape(experiment_path: Path, specs):
     else:
         raise ValueError(f"Unknown mesh_pipeline: {mesh_pipeline!r}")
 
+    # Forward solver: "openfoam" (adjointOptimisationFoam, continuous adjoint) or "dafoam"
+    # (DASimpleFoam in the DAFoam container, discrete adjoint). See deepshapeopt.dafoam_utils;
+    # on the cylinder study the continuous adjoint's gradient had the wrong sign at the
+    # converged design while the discrete one did not.
+    forward_solver = str(opt_cfg.get("forward_solver", "openfoam"))
+    if forward_solver not in ("openfoam", "dafoam"):
+        raise ValueError(f"Unknown forward_solver {forward_solver!r}. Valid: 'openfoam', 'dafoam'.")
+    if forward_solver == "dafoam" and mesh_pipeline != "sdf_hex":
+        raise ValueError("forward_solver 'dafoam' requires mesh_pipeline 'sdf_hex'.")
+
     LOGGER.info("Initial volume: %.6f", init_volume.item())
     LOGGER.info("Initial centroid: %s", initial_centroid)
 
@@ -181,11 +193,26 @@ def optimize_shape(experiment_path: Path, specs):
     foam_runtime_root = opt_cfg.get("foam_runtime_root")
     if foam_runtime_root:
         LOGGER.info("Foam runtime root (scratch): %s", foam_runtime_root)
-    case_dir = foam_utils.prepare_foam_runtime(
-        experiment_path / "foam_case", run_name=results_name,
-        runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
-    )
-    foam_utils.select_allrun(case_dir, mesh_pipeline)
+    dafoam_runner = None
+    if forward_solver == "dafoam":
+        dafoam_cfg = opt_cfg.get("dafoam") or {}
+        case_dir = prepare_dafoam_case(
+            experiment_path / str(dafoam_cfg.get("template", "dafoam_case")),
+            run_name=results_name,
+            runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+        )
+        dafoam_runner = DAFoamRunner(dafoam_cfg, case_dir, verbose=debug)
+        dafoam_output = str(sens_cfg.get("dafoam_output", "drag"))
+        LOGGER.info(
+            "Forward solver: DAFoam (%s, %d procs), output %r in %s",
+            dafoam_runner.dcfg.container, dafoam_runner.dcfg.n_procs, dafoam_output, case_dir,
+        )
+    else:
+        case_dir = foam_utils.prepare_foam_runtime(
+            experiment_path / "foam_case", run_name=results_name,
+            runtime_root=Path(foam_runtime_root) if foam_runtime_root else None,
+        )
+        foam_utils.select_allrun(case_dir, mesh_pipeline)
     snapshot_dir = paths.optimization / "snapshots"
     if debug:
         snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -218,13 +245,31 @@ def optimize_shape(experiment_path: Path, specs):
             vol_constraint = float(init_volume.item()) - volume
             dV = torch.autograd.grad(vol_constraint, opt_setup.param, retain_graph=True)[0]
 
-            foam_case = hex_pipeline.run_case(case_dir, verbose=debug)
-            sens_on_orig, J_raw = hex_pipeline.load_sensitivities(
-                case_dir,
-                foam_case,
-                field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
-                objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
-            )
+            if forward_solver == "dafoam":
+                # The pipeline's mesh, in metres, into the DAFoam case; primal + one adjoint.
+                # sens is dJ/dX of the wall points (1/m) -- the analogue of pointSensVec*.
+                n_mesh_points = len(hex_result.mesh.points)
+                # the pipeline's RESOLVED scale, not the raw config block
+                write_polymesh(hex_result.mesh, case_dir,
+                               scale=float(hex_pipeline.cfg["write_scale"]))
+                dafoam_result = dafoam_runner.evaluate(n_mesh_points, [dafoam_output])
+                LOGGER.info(
+                    "DAFoam: %.1f s (primal %.1f s, mesh %s), outputs %s",
+                    dafoam_result["time_total_s"], dafoam_result["time_primal_s"],
+                    "OK" if dafoam_result["mesh_ok"] == 1 else "flagged", dafoam_result["outputs"],
+                )
+                foam_case = None
+                sens_on_orig, J_raw = dafoam_runner.load_sensitivities(
+                    dafoam_output, hex_result.surface_point_ids, n_mesh_points,
+                )
+            else:
+                foam_case = hex_pipeline.run_case(case_dir, verbose=debug)
+                sens_on_orig, J_raw = hex_pipeline.load_sensitivities(
+                    case_dir,
+                    foam_case,
+                    field_name=sens_cfg.get("field_name", "pointSensVecadjS1ESI"),
+                    objective_path=sens_cfg.get("objective_path", "optimisation/objective/0/dragadjS1"),
+                )
             dJ = foam_utils.compute_shape_gradient(
                 opt_setup.param,
                 verts,
@@ -327,7 +372,8 @@ def optimize_shape(experiment_path: Path, specs):
         LOGGER.debug("Max latent variable: %.6f", opt_setup.param.abs().max().item())
 
         if debug and paths.heavy_data is not None:
-            foam_utils.export_vtk_for_iteration(foam_case, case_dir, paths.heavy_data, iteration)
+            if foam_case is not None:  # DAFoam writes no OpenFOAM time directories to export
+                foam_utils.export_vtk_for_iteration(foam_case, case_dir, paths.heavy_data, iteration)
             shutil.copy2(
                 paths.optimization / "current_shape.stl",
                 paths.heavy_data / "stl_series" / f"shape_{iteration:04d}.stl",

@@ -200,8 +200,9 @@ def main():
     da_options.setdefault("useAD", {"mode": "reverse"})
 
     DASolver = PYDAFOAM(options=da_options, comm=comm)
-    # matrix-free dRdW^T operator of the reverse-AD solver (mphys does this in setup)
-    DASolver.solverAD.initializedRdWTMatrixFree()
+    if da_options.get("adjEqnSolMethod", "Krylov") == "Krylov":
+        # matrix-free dRdW^T operator of the reverse-AD solver (mphys does this in setup)
+        DASolver.solverAD.initializedRdWTMatrixFree()
     n_local_points = DASolver.solver.getNLocalPoints()
     n_global = int(opts.get("n_points") or 0)
     if n_global == 0:
@@ -267,19 +268,29 @@ def main():
         return
 
     # ---- adjoint setup (as in mphys_dafoam.DAFoamSolver.solve_linear) -------------
+    # "Krylov" (DAFoam default): GMRES preconditioned by an explicit dRdW^T matrix, which is
+    # assembled from colored residual evaluations -- accurate but the coloring and the PC
+    # assembly dominate the cost and are redone whenever the mesh connectivity changes.
+    # "fixedPoint": DASimpleFoam's own SIMPLE-like adjoint iteration, matrix free -- no
+    # coloring, no PC matrix, so roughly the cost of a primal. It forbids normalizeStates.
     t_setup = time.time()
+    adj_method = DASolver.getOption("adjEqnSolMethod")
     local_adj_size = DASolver.getNLocalAdjointStates()
-    if DASolver.getOption("adjUseColoring"):
-        DASolver.solver.runColoring()
-    dRdWTPC = PETSc.Mat().create(comm)
-    DASolver.solver.calcdRdWT(1, dRdWTPC)
-    ksp = PETSc.KSP().create(comm)
-    DASolver.solverAD.createMLRKSPMatrixFree(dRdWTPC, ksp)
+    ksp = None
+    if adj_method == "Krylov":
+        if DASolver.getOption("adjUseColoring"):
+            DASolver.solver.runColoring()
+        dRdWTPC = PETSc.Mat().create(comm)
+        DASolver.solver.calcdRdWT(1, dRdWTPC)
+        ksp = PETSc.KSP().create(comm)
+        DASolver.solverAD.createMLRKSPMatrixFree(dRdWTPC, ksp)
+    elif adj_method != "fixedPoint":
+        raise ValueError(f"adjEqnSolMethod {adj_method!r} not supported; use Krylov or fixedPoint")
     psi = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
     psi.setSizes((local_adj_size, PETSc.DECIDE), bsize=1)
     psi.setFromOptions()
     l2g = local_to_global_index(comm)
-    info(f"adjoint setup (coloring + PC) done in {time.time() - t_setup:.1f} s")
+    info(f"adjoint setup ({adj_method}) done in {time.time() - t_setup:.1f} s")
 
     for name in sens_names:
         t_adj = time.time()
@@ -301,7 +312,10 @@ def main():
 
         psi.set(0)
         rhs = DASolver.array2Vec(dFdW)
-        fail = int(DASolver.solverAD.solveLinearEqn(ksp, rhs, psi))
+        if adj_method == "Krylov":
+            fail = int(DASolver.solverAD.solveLinearEqn(ksp, rhs, psi))
+        else:
+            fail = int(DASolver.solverAD.runFPAdj(rhs, psi))
         psi_arr = DASolver.vec2Array(psi)
 
         dRdXvT_psi = np.zeros(len(xv))

@@ -1,0 +1,7 @@
+DAFoam case template for the drag cube (optimization.forward_solver: "dafoam").
+
+Patch names follow the sdf_hex drag default: inlet (x_min), outlet (x_max), sides (the four
+remaining domain faces, slip) and dragObject (the wall, group dragObjectGroup). The mesh is
+written per iteration by the pipeline; the DAFoam settings come from the optimization.dafoam
+block of the config. See ../../experiments/optimization/cylinder/dafoam_notes.md in the
+Pultrusion repo for the background and the pitfalls.

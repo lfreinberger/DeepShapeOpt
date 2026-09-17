@@ -1,0 +1,15 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| DAFoam case template (discrete adjoint) -- external flow, drag              |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      transportProperties;
+}
+
+transportModel  Newtonian;
+nu              1e-00;   // as in ../foam_case: Re ~ 1, effectively Stokes flow
+Pr              0.7;     // unused (no T equation) but read by DASimpleFoam
+Prt             1.0;
