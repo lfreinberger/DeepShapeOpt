@@ -229,6 +229,51 @@ def optimize_shape(experiment_path: Path, specs):
     volume = init_volume
     J = torch.zeros((1, 1), device=rec_cfg["device"], dtype=opt_setup.param.dtype)
 
+    # Optional one-off NOISE PROBE (not an optimization). Evaluates the pipeline at
+    # x_base + t_i*h*p, t_i = i - (n-1)/2, along one random direction p of the free
+    # parameters (max-norm 1, so h is the largest change of any latent entry) and stores
+    # J, the constraint and both gradients per point. No MMA step is taken. Output:
+    # noise_probe_samples.npz, read by scripts/check_gradient_fd.py. Ported from
+    # Pultrusion/optimize_extrusion_die.py.
+    probe_cfg = opt_cfg.get("noise_probe") or {}
+    probe = None
+    if probe_cfg.get("enabled", False):
+        if opt_setup.pca_basis is not None:
+            raise ValueError("noise_probe is not supported with PCA enabled")
+        n_points = int(probe_cfg.get("n_points", 9))
+        h_probe = float(probe_cfg.get("h", 0.002))
+        start_file = Path(config.expand_env_vars(probe_cfg["start_parameters"])).expanduser()
+        if not start_file.is_absolute():
+            start_file = experiment_path / start_file
+        loaded = torch.load(start_file, map_location=opt_setup.param.device, weights_only=False)
+        loaded = loaded[0] if isinstance(loaded, (list, tuple)) else loaded
+        if tuple(loaded.shape) != tuple(opt_setup.param.shape):
+            raise ValueError(
+                f"noise_probe.start_parameters has shape {tuple(loaded.shape)}, "
+                f"the design parameters have {tuple(opt_setup.param.shape)}"
+            )
+        x_base = loaded.detach().to(
+            device=opt_setup.param.device, dtype=opt_setup.param.dtype).clone()
+        gen = torch.Generator().manual_seed(int(probe_cfg.get("seed", 0)))
+        direction = torch.randn(
+            opt_setup.param.numel(), generator=gen, dtype=opt_setup.param.dtype
+        ).to(opt_setup.param.device)
+        direction[opt_setup.mask_locked_flat.reshape(-1).bool()] = 0.0
+        direction = (direction / direction.abs().max()).reshape(opt_setup.param.shape)
+        offsets = [i - 0.5 * (n_points - 1) for i in range(n_points)]
+        probe = {
+            "h": h_probe, "offsets": offsets,
+            "point": lambda i: x_base + offsets[i] * h_probe * direction,
+            "direction": direction.reshape(-1).detach().cpu().numpy(),
+            "J": [], "con": [], "dJ": [], "dc": [],
+        }
+        with torch.no_grad():
+            opt_setup.param.copy_(probe["point"](0))
+        opt_cfg["num_iter"] = n_points
+        LOGGER.info(
+            "NOISE PROBE: %d evaluations along a random direction, h=%.3e (max-norm), "
+            "start design %s", n_points, h_probe, start_file,
+        )
 
     for iteration in range(opt_cfg["num_iter"]):
         LOGGER.info("=== Optimization iteration %d/%d ===", iteration, opt_cfg["num_iter"] - 1)
@@ -236,7 +281,16 @@ def optimize_shape(experiment_path: Path, specs):
         logger.start_iteration(iteration)
 
         if mesh_pipeline == "sdf_hex":
-            hex_result = hex_pipeline.build()
+            # noise_probe.reuse_castellation: after the first probe point keep the
+            # castellation/connectivity and only re-snap the boundary, so the finite
+            # differences of J see a pure boundary movement (what the adjoint linearizes)
+            # instead of also the discrete cell flips of a rebuilt octree.
+            reuse_castellation = (
+                probe is not None
+                and bool(probe_cfg.get("reuse_castellation", False))
+                and iteration > 0
+            )
+            hex_result = hex_pipeline.build(reuse_castellation=reuse_castellation)
             verts = hex_result.surface_points
             faces = hex_result.wall_tris_local.to(verts.device)
             export_wall_stl(verts, faces, paths.optimization / "current_shape.stl")
@@ -392,6 +446,31 @@ def optimize_shape(experiment_path: Path, specs):
             obj_label="Drag objective",
             con_label="Volume",
         )
+
+        if probe is not None:
+            # Probe point: record J, the constraint and both gradients, then jump to the
+            # next design along the probe direction instead of taking an MMA step.
+            import numpy as _np
+
+            probe["J"].append(float(J.item()))
+            probe["dJ"].append(dJ_mma.reshape(-1).detach().cpu().numpy())
+            probe["con"].append(float(vol_constraint.item()))
+            probe["dc"].append(dG_mma[0].reshape(-1).detach().cpu().numpy())
+            n_done = len(probe["J"])
+            _np.savez(
+                paths.optimization / "noise_probe_samples.npz",
+                offsets=_np.asarray(probe["offsets"][:n_done]), h=probe["h"],
+                direction=probe["direction"],
+                J=_np.asarray(probe["J"]), con=_np.asarray(probe["con"]),
+                dJ=_np.stack(probe["dJ"]),
+                dc=_np.stack(probe["dc"]) if probe["dc"] else _np.zeros((0, 0)),
+            )
+            LOGGER.info("probe point %d/%d: J=%.9e", n_done, len(probe["offsets"]), J.item())
+            if n_done < len(probe["offsets"]):
+                with torch.no_grad():
+                    opt_setup.param.copy_(probe["point"](n_done))
+            iteration_times.append(time.time() - iter_start)
+            continue
 
         opt_setup.optimizer.step(J, dJ_mma, G, dG_mma)
         if opt_setup.pca_basis is not None:
