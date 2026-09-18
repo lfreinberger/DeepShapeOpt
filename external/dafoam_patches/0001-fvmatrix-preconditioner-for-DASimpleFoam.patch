@@ -1,0 +1,447 @@
+diff --git a/src/adjoint/DAModel/DATurbulenceModel/DASpalartAllmaras.C b/src/adjoint/DAModel/DATurbulenceModel/DASpalartAllmaras.C
+index 5ba02e6..0d97051 100755
+--- a/src/adjoint/DAModel/DATurbulenceModel/DASpalartAllmaras.C
++++ b/src/adjoint/DAModel/DATurbulenceModel/DASpalartAllmaras.C
+@@ -521,8 +521,12 @@ void DASpalartAllmaras::getFvMatrixFields(
+         == Cb1_ * phase_ * rho * Stilda * nuTilda_ * betaFINuTilda_
+             - fvm::Sp(Cw1_ * phase_ * rho * fw(Stilda) * nuTilda_ / sqr(y_), nuTilda_));
+ 
+-    nuTildaEqn.relax();
+-
++    // The AD differentiates through the under-relaxation: relax(alpha) scales the diagonal
++    // by 1/alpha but puts (1-alpha)/alpha*A*nuTilda back into the source, and that nuTilda
++    // is the state itself, so the two cancel -- the exact dR_nuTilda/dnuTilda is the
++    // UNRELAXED matrix.  Taking the relaxed one inflates the diagonal by ~1/alpha
++    // (measured against the AD-built matrix: 43 % at alpha = 0.7).  Same reasoning as the
++    // U block in DAResidualSimpleFoam::calcPCMatWithFvMatrix.
+     diag = nuTildaEqn.D();
+     upper = nuTildaEqn.upper();
+     lower = nuTildaEqn.lower();
+diff --git a/src/adjoint/DAResidual/DAResidualSimpleFoam.C b/src/adjoint/DAResidual/DAResidualSimpleFoam.C
+index a4e5a42..a640e3f 100755
+--- a/src/adjoint/DAResidual/DAResidualSimpleFoam.C
++++ b/src/adjoint/DAResidual/DAResidualSimpleFoam.C
+@@ -263,6 +263,260 @@ void DAResidualSimpleFoam::correctBoundaryConditions()
+         T.correctBoundaryConditions();
+     }
+ }
++
++void DAResidualSimpleFoam::calcPCMatWithFvMatrix(Mat PCMat)
++{
++    /*
++    Description:
++        Assemble the block-diagonal part of dRdW^T (dR_U/dU, dR_p/dp and the
++        dR_phi/dphi diagonal) directly from OpenFOAM's fvMatrix coefficients.
++        No coloring and no AD, so this costs about one equation assembly instead
++        of one AD sweep per color.
++
++        The equations mirror calcResiduals above one-to-one, with the first-order
++        "div(pc)" convection scheme that the preconditioner path uses, so the
++        preconditioner matches the discretization it is meant to precondition.
++
++        NOTE: the row/column indices are swapped in every MatSetValues call below,
++        i.e. we assemble the TRANSPOSE, matching what calcdRdWT(isPC=1) produces.
++        Only internal faces are touched, so every entry lands in the processor's
++        own diagonal block (this is what makes the preallocation in
++        DASolver::initializePCMatFvMatrix trivial).
++    */
++
++    const labelUList& owner = mesh_.owner();
++    const labelUList& neighbour = mesh_.neighbour();
++
++    PetscScalar val;
++
++    dictionary normStateDict = daOption_.getAllOptions().subDict("normalizeStates");
++    wordList normResDict = daOption_.getOption<wordList>("normalizeResiduals");
++
++    if (hasFvSource_)
++    {
++        DAFvSource& daFvSource(const_cast<DAFvSource&>(
++            mesh_.thisDb().lookupObject<DAFvSource>("DAFvSource")));
++        daFvSource.calcFvSource(fvSource_);
++    }
++
++    // ******************** U ********************
++    scalar UScaling = 1.0;
++    if (normStateDict.found("U"))
++    {
++        UScaling = normStateDict.getScalar("U");
++    }
++    scalar UResScaling = 1.0;
++
++    tmp<fvVectorMatrix> tUEqn(
++        fvm::div(phi_, U_, "div(pc)")
++        + fvm::Sp(alphaPorosity_, U_)
++        + MRF_.DDt(U_)
++        + daTurb_.divDevReff(U_)
++        - fvSource_
++        - fvOptions_(U_));
++    fvVectorMatrix& UEqn = tUEqn.ref();
++
++    // The AD differentiates through the under-relaxation: relax(alpha) scales the diagonal
++    // by 1/alpha but puts (1-alpha)/alpha*A*U back into the source, and that U is the state
++    // itself, so the two cancel and the exact dR_U/dU is the UNRELAXED matrix.  Taking the
++    // relaxed D() instead inflates the diagonal by ~1/alpha (measured: 1.386 at alpha=0.7).
++    // Snapshot the coefficients here; the relaxed equation is still what rAU and the
++    // pressure equation below need -- the p block matches the AD matrix to 1e-10 that way.
++    scalarField UEqnD(UEqn.D());
++    scalarField UEqnLower(UEqn.lower());
++    scalarField UEqnUpper(UEqn.upper());
++
++    UEqn.relax();
++    fvOptions_.constrain(UEqn);
++    forAll(U_, cellI)
++    {
++        if (normResDict.found("URes"))
++        {
++            UResScaling = mesh_.V()[cellI];
++        }
++        for (label i = 0; i < 3; i++)
++        {
++            PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("U", cellI, i);
++            PetscInt colI = rowI;
++            scalar val1 = UEqnD[cellI] * UScaling / UResScaling;
++            assignValueCheckAD(val, val1);
++            MatSetValues(PCMat, 1, &rowI, 1, &colI, &val, INSERT_VALUES);
++        }
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("URes"))
++        {
++            UResScaling = mesh_.V()[neighbourCellI];
++        }
++        for (label i = 0; i < 3; i++)
++        {
++            PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("U", neighbourCellI, i);
++            PetscInt colI = daIndex_.getGlobalAdjointStateIndex("U", ownerCellI, i);
++            scalar val1 = UEqnLower[faceI] * UScaling / UResScaling;
++            assignValueCheckAD(val, val1);
++            MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++        }
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("URes"))
++        {
++            UResScaling = mesh_.V()[ownerCellI];
++        }
++        for (label i = 0; i < 3; i++)
++        {
++            PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("U", ownerCellI, i);
++            PetscInt colI = daIndex_.getGlobalAdjointStateIndex("U", neighbourCellI, i);
++            scalar val1 = UEqnUpper[faceI] * UScaling / UResScaling;
++            assignValueCheckAD(val, val1);
++            MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++        }
++    }
++
++    // ******************** p ********************
++    // same construction as calcResiduals: rAU/HbyA/phiHbyA, then the pressure Laplacian
++    label pRefCell = 0;
++    scalar pRefValue = 0.0;
++
++    volScalarField rAU(1.0 / UEqn.A());
++    autoPtr<volVectorField> HbyAPtr = nullptr;
++    label useConstrainHbyA = daOption_.getOption<label>("useConstrainHbyA");
++    if (useConstrainHbyA)
++    {
++        HbyAPtr.reset(new volVectorField(constrainHbyA(rAU * UEqn.H(), U_, p_)));
++    }
++    else
++    {
++        HbyAPtr.reset(new volVectorField("HbyA", U_));
++        HbyAPtr() = rAU * UEqn.H();
++    }
++    volVectorField& HbyA = HbyAPtr();
++
++    surfaceScalarField phiHbyA("phiHbyA", fvc::flux(HbyA));
++    MRF_.makeRelative(phiHbyA);
++    adjustPhi(phiHbyA, U_, p_);
++
++    tmp<volScalarField> rAtU(rAU);
++    if (simple_.consistent())
++    {
++        rAtU = 1.0 / (1.0 / rAU - UEqn.H1());
++        phiHbyA += fvc::interpolate(rAtU() - rAU) * fvc::snGrad(p_) * mesh_.magSf();
++        HbyA -= (rAU - rAtU()) * fvc::grad(p_);
++    }
++
++    tUEqn.clear();
++
++    constrainPressure(p_, U_, phiHbyA, rAtU(), MRF_);
++
++    fvScalarMatrix pEqn(
++        fvm::laplacian(rAtU(), p_)
++        == fvc::div(phiHbyA));
++    pEqn.setReference(pRefCell, pRefValue);
++
++    scalar pScaling = 1.0;
++    if (normStateDict.found("p"))
++    {
++        pScaling = normStateDict.getScalar("p");
++    }
++    scalar pResScaling = 1.0;
++
++    scalarField pEqnD = pEqn.D();
++    forAll(p_, cellI)
++    {
++        if (normResDict.found("pRes"))
++        {
++            pResScaling = mesh_.V()[cellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("p", cellI);
++        PetscInt colI = rowI;
++        scalar val1 = pEqnD[cellI] * pScaling / pResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &rowI, 1, &colI, &val, INSERT_VALUES);
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("pRes"))
++        {
++            pResScaling = mesh_.V()[neighbourCellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("p", neighbourCellI);
++        PetscInt colI = daIndex_.getGlobalAdjointStateIndex("p", ownerCellI);
++        scalar val1 = pEqn.lower()[faceI] * pScaling / pResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("pRes"))
++        {
++            pResScaling = mesh_.V()[ownerCellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("p", ownerCellI);
++        PetscInt colI = daIndex_.getGlobalAdjointStateIndex("p", neighbourCellI);
++        scalar val1 = pEqn.upper()[faceI] * pScaling / pResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++    }
++
++    // ******************** phi ********************
++    // The Pimple template fills no phi block at all, which would leave these rows
++    // empty and the preconditioner singular.  calcResiduals has
++    //     phiRes = phiHbyA - pEqn.flux() - phi
++    // so dR_phi/dphi is -1, scaled like the other states.  The gate measurement
++    // (blockdiag vs phidiag, both 151 GMRES iterations) showed that this diagonal
++    // is all the phi block has to contribute.
++    // Both scalings for phi are magSf and therefore cancel:
++    //   state scaling    -- DAPartDeriv.C overrides normalizeStates["phi"] with magSf
++    //   residual scaling -- normalizePhiResiduals divides phiRes by magSf
++    // so the normalized diagonal is exactly -1 (confirmed against the AD-built matrix,
++    // whose phi diagonal has magnitude 1.000e+00).
++    label normPhiState = normStateDict.found("phi");
++    label normPhiRes = normResDict.found("phiRes");
++
++    // phi is indexed over ALL local faces (internal first, then every boundary face) --
++    // see DAField::ofField2StateVec, which loops forAll(mesh_.faces(), faceI).
++    forAll(mesh_.faces(), faceI)
++    {
++        scalar magSfI = 1.0;
++        if (faceI < daIndex_.nLocalInternalFaces)
++        {
++            magSfI = mesh_.magSf()[faceI];
++        }
++        else
++        {
++            label relIdx = faceI - daIndex_.nLocalInternalFaces;
++            const label& patchIdx = daIndex_.bFacePatchI[relIdx];
++            const label& faceIdx = daIndex_.bFaceFaceI[relIdx];
++            magSfI = mesh_.magSf().boundaryField()[patchIdx][faceIdx];
++        }
++
++        scalar stateScale = normPhiState ? magSfI : 1.0;
++        scalar resScale = normPhiRes ? magSfI : 1.0;
++
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("phi", faceI);
++        PetscInt colI = rowI;
++        scalar val1 = -1.0 * stateScale / resScale;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &rowI, 1, &colI, &val, INSERT_VALUES);
++    }
++}
+ // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+ 
+ } // End namespace Foam
+diff --git a/src/adjoint/DAResidual/DAResidualSimpleFoam.H b/src/adjoint/DAResidual/DAResidualSimpleFoam.H
+index 9a57b26..cf4bbdf 100644
+--- a/src/adjoint/DAResidual/DAResidualSimpleFoam.H
++++ b/src/adjoint/DAResidual/DAResidualSimpleFoam.H
+@@ -102,6 +102,10 @@ public:
+ 
+     /// update the boundary condition for all the states in the selected solver
+     virtual void correctBoundaryConditions();
++
++    /// assemble the block-diagonal part of dRdW^T straight from OpenFOAM's fvMatrix
++    /// coefficients -- no coloring, no AD (see DAResidualPimpleFoam for the template)
++    virtual void calcPCMatWithFvMatrix(Mat PCMat);
+ };
+ 
+ // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+diff --git a/src/adjoint/DASolver/DASolver.C b/src/adjoint/DASolver/DASolver.C
+index a6383bf..900473b 100644
+--- a/src/adjoint/DASolver/DASolver.C
++++ b/src/adjoint/DASolver/DASolver.C
+@@ -2905,11 +2905,86 @@ void DASolver::updateStateBoundaryConditions()
+     this->updateInputFieldUnsteady();
+ }
+ 
++void DASolver::initializePCMatFvMatrix(Mat PCMat)
++{
++    /*
++    Description:
++        Size and preallocate a preconditioner matrix for the block-diagonal assembly in
++        calcPCMatWithFvMatrix, WITHOUT running the dRdW coloring.
++
++        calcPCMatWithFvMatrix only ever couples a cell to its internal-face neighbours
++        within the same state (dR_U/dU, dR_p/dp, dR_<model>/d<model>) and puts a plain
++        diagonal on the surface-scalar states.  Every entry therefore lands in the
++        processor's own diagonal block, so the off-processor preallocation is zero.
++
++        Row counts:
++          cell states (vector, scalar, model): 1 + number of internal faces of the cell
++          surface scalar states (phi):         1
++    */
++
++    label localSize = daIndexPtr_->nLocalAdjointStates;
++
++    // internal-face neighbour count per cell
++    labelList nIntFaces(meshPtr_->nCells(), 0);
++    const labelUList& owner = meshPtr_->owner();
++    const labelUList& neighbour = meshPtr_->neighbour();
++    for (label faceI = 0; faceI < daIndexPtr_->nLocalInternalFaces; faceI++)
++    {
++        nIntFaces[owner[faceI]]++;
++        nIntFaces[neighbour[faceI]]++;
++    }
++
++    labelList dNnz(localSize, 1);
++    labelList oNnz(localSize, 0);
++
++    forAll(stateInfo_["volVectorStates"], idxI)
++    {
++        const word stateName = stateInfo_["volVectorStates"][idxI];
++        forAll(meshPtr_->cells(), cellI)
++        {
++            for (label comp = 0; comp < 3; comp++)
++            {
++                label idx = daIndexPtr_->getLocalAdjointStateIndex(stateName, cellI, comp);
++                dNnz[idx] = 1 + nIntFaces[cellI];
++            }
++        }
++    }
++    forAll(stateInfo_["volScalarStates"], idxI)
++    {
++        const word stateName = stateInfo_["volScalarStates"][idxI];
++        forAll(meshPtr_->cells(), cellI)
++        {
++            label idx = daIndexPtr_->getLocalAdjointStateIndex(stateName, cellI);
++            dNnz[idx] = 1 + nIntFaces[cellI];
++        }
++    }
++    forAll(stateInfo_["modelStates"], idxI)
++    {
++        const word stateName = stateInfo_["modelStates"][idxI];
++        forAll(meshPtr_->cells(), cellI)
++        {
++            label idx = daIndexPtr_->getLocalAdjointStateIndex(stateName, cellI);
++            dNnz[idx] = 1 + nIntFaces[cellI];
++        }
++    }
++    // surface scalar states keep the default 1 (diagonal only)
++
++    MatSetSizes(PCMat, localSize, localSize, PETSC_DETERMINE, PETSC_DETERMINE);
++    MatSetFromOptions(PCMat);
++    MatMPIAIJSetPreallocation(PCMat, 0, dNnz.begin(), 0, oNnz.begin());
++    MatSeqAIJSetPreallocation(PCMat, 0, dNnz.begin());
++    MatSetUp(PCMat);
++    MatZeroEntries(PCMat);
++
++    Info << "PC mat (fvMatrix, no coloring) created. "
++         << meshPtr_->time().elapsedCpuTime() << " s" << endl;
++}
++
+ void DASolver::calcPCMatWithFvMatrix(Mat PCMat, const label turbOnly)
+ {
+     /*
+     Description:
+-        calculate the PC mat using fvMatrix. Here we only calculate the block diagonal components, 
++        calculate the PC mat using fvMatrix. Here we only calculate the block diagonal components,
+         e.g., dR_U/dU, dR_p/dp, etc.
+     */
+ 
+diff --git a/src/adjoint/DASolver/DASolver.H b/src/adjoint/DASolver/DASolver.H
+index 581492a..383d60e 100644
+--- a/src/adjoint/DASolver/DASolver.H
++++ b/src/adjoint/DASolver/DASolver.H
+@@ -756,6 +756,10 @@ public:
+     /// calculate the PC mat using fvMatrix
+     void calcPCMatWithFvMatrix(Mat PCMat, const label turbOnly = 0);
+ 
++    /// size and preallocate a PC mat for the block-diagonal fvMatrix assembly, so the
++    /// preconditioner can be built without running the dRdW coloring at all
++    void initializePCMatFvMatrix(Mat PCMat);
++
+     /// initialize tensorflow functions and interfaces for callback
+     void initTensorFlowFuncs(
+         pyComputeInterface computeInterface,
+diff --git a/src/pyDASolvers/DASolvers.H b/src/pyDASolvers/DASolvers.H
+index fa77e76..f3c3f4e 100755
+--- a/src/pyDASolvers/DASolvers.H
++++ b/src/pyDASolvers/DASolvers.H
+@@ -430,6 +430,12 @@ public:
+         DASolverPtr_->calcPCMatWithFvMatrix(PCMat, turbOnly);
+     }
+ 
++    /// size and preallocate a PC mat for the fvMatrix assembly (no coloring needed)
++    void initializePCMatFvMatrix(Mat PCMat)
++    {
++        DASolverPtr_->initializePCMatFvMatrix(PCMat);
++    }
++
+     /// setTime for OF fields
+     void setTime(scalar time, label timeIndex)
+     {
+diff --git a/src/pyDASolvers/pyDASolvers.pyx b/src/pyDASolvers/pyDASolvers.pyx
+index 7fe1e24..7be6efb 100755
+--- a/src/pyDASolvers/pyDASolvers.pyx
++++ b/src/pyDASolvers/pyDASolvers.pyx
+@@ -101,6 +101,7 @@ cdef extern from "DASolvers.H" namespace "Foam":
+         void writeMeshPoints(double *, double)
+         void writeCurrentMeshPointsToConstant()
+         void calcPCMatWithFvMatrix(PetscMat, int)
++        void initializePCMatFvMatrix(PetscMat)
+         double getEndTime()
+         double getDeltaT()
+         void setTime(double, int)
+@@ -396,7 +397,10 @@ cdef class pyDASolvers:
+     
+     def calcPCMatWithFvMatrix(self, Mat PCMat, turbOnly=0):
+         self._thisptr.calcPCMatWithFvMatrix(PCMat.mat, turbOnly)
+-    
++
++    def initializePCMatFvMatrix(self, Mat PCMat):
++        self._thisptr.initializePCMatFvMatrix(PCMat.mat)
++
+     def setTime(self, time, timeIndex):
+         self._thisptr.setTime(time, timeIndex)
+ 

@@ -62,6 +62,8 @@ RUNSCRIPT = Path(__file__).with_name("dafoam_runscript.py")
 DEFAULT_LOAD_SCRIPT = "/home/dafoamuser/dafoam/loadDAFoam.sh"
 OPTIONS_FILE = "dafoam_options.json"
 OUTPUT_DIR = "dafoam_output"
+# where the DAFoam sources live inside the container; a patched build is bind-mounted here
+CONTAINER_REPO = "/home/dafoamuser/dafoam/repos/dafoam"
 
 
 @dataclass
@@ -77,12 +79,19 @@ class DAFoamConfig:
     apptainer: str = "apptainer"
     fail_on_mesh_check: bool = False
     keep_coloring: bool = False
+    # "coloring" (stock DAFoam) or "fvmatrix" (preconditioner straight from the fvMatrix
+    # coefficients -- no coloring, ~10x faster per evaluation, but it needs the patched
+    # build supplied through build_source/build_overlay)
+    pc_mode: str = "coloring"
+    build_source: Path | None = None
+    build_overlay: Path | None = None
 
     @classmethod
     def from_dict(cls, cfg: dict) -> "DAFoamConfig":
         known = {
             "container", "n_procs", "binds", "template", "daOptions", "functions",
             "outputs", "load_script", "apptainer", "fail_on_mesh_check", "keep_coloring",
+            "pc_mode", "build_source", "build_overlay",
         }
         unknown = set(cfg) - known
         if unknown:
@@ -99,6 +108,21 @@ class DAFoamConfig:
             missing = set(terms) - set(cfg.get("functions", {}))
             if missing:
                 raise ValueError(f"dafoam.outputs.{name} references unknown functions {sorted(missing)}")
+        pc_mode = str(cfg.get("pc_mode", "coloring"))
+        if pc_mode not in ("coloring", "fvmatrix"):
+            raise ValueError(f"dafoam.pc_mode {pc_mode!r} invalid; use 'coloring' or 'fvmatrix'")
+        build_source = cfg.get("build_source")
+        build_overlay = cfg.get("build_overlay")
+        build_source = Path(build_source).expanduser() if build_source else None
+        build_overlay = Path(build_overlay).expanduser() if build_overlay else None
+        if pc_mode == "fvmatrix" and build_source is None:
+            raise ValueError(
+                "dafoam.pc_mode 'fvmatrix' needs dafoam.build_source (and usually "
+                "build_overlay): the stock container has no initializePCMatFvMatrix"
+            )
+        for label, path in (("build_source", build_source), ("build_overlay", build_overlay)):
+            if path is not None and not path.is_dir():
+                raise FileNotFoundError(f"dafoam.{label} is not a directory: {path}")
         return cls(
             container=container,
             n_procs=int(cfg.get("n_procs", 1)),
@@ -111,6 +135,9 @@ class DAFoamConfig:
             apptainer=str(cfg.get("apptainer", "apptainer")),
             fail_on_mesh_check=bool(cfg.get("fail_on_mesh_check", False)),
             keep_coloring=bool(cfg.get("keep_coloring", False)),
+            pc_mode=pc_mode,
+            build_source=build_source,
+            build_overlay=build_overlay,
         )
 
 
@@ -134,11 +161,21 @@ def container_command(dcfg: DAFoamConfig, n_procs: int | None = None) -> list[st
     n = int(dcfg.n_procs if n_procs is None else n_procs)
     python_cmd = f"python {RUNSCRIPT.name} {OPTIONS_FILE}"
     if n > 1:
-        python_cmd = f"mpirun -np {n} {python_cmd}"
-    inner = f"unset DISPLAY; source {dcfg.load_script} >/dev/null 2>&1 && {python_cmd}"
+        python_cmd = f"mpirun -np {n} -x PYTHONPATH {python_cmd}"
+    prefix = ""
+    binds = list(dcfg.binds)
+    if dcfg.build_source:
+        # Patched DAFoam: the sources are bind-mounted over the container's copy and the
+        # rebuilt libDASolver.so lives in the overlay. PYTHONPATH makes `import dafoam`
+        # resolve to the patched package instead of the one in site-packages.
+        binds.append(f"{dcfg.build_source}:{CONTAINER_REPO}")
+        prefix = f"export PYTHONPATH={CONTAINER_REPO}:$PYTHONPATH; "
+    inner = f"unset DISPLAY; source {dcfg.load_script} >/dev/null 2>&1 && {prefix}{python_cmd}"
     cmd = [dcfg.apptainer, "exec", "--cleanenv"]
-    if dcfg.binds:
-        cmd += ["--bind", ",".join(dcfg.binds)]
+    if dcfg.build_overlay:
+        cmd += ["--overlay", str(dcfg.build_overlay)]
+    if binds:
+        cmd += ["--bind", ",".join(binds)]
     cmd += [str(dcfg.container), "bash", "-c", inner]
     return cmd
 
@@ -168,6 +205,7 @@ def write_dafoam_options(
         "output_dir": OUTPUT_DIR,
         "fail_on_mesh_check": dcfg.fail_on_mesh_check,
         "keep_coloring": dcfg.keep_coloring,
+        "pc_mode": dcfg.pc_mode,
     }
     if perturb:
         opts["perturb"] = perturb

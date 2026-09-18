@@ -278,10 +278,23 @@ def main():
     local_adj_size = DASolver.getNLocalAdjointStates()
     ksp = None
     if adj_method == "Krylov":
-        if DASolver.getOption("adjUseColoring"):
-            DASolver.solver.runColoring()
         dRdWTPC = PETSc.Mat().create(comm)
-        DASolver.solver.calcdRdWT(1, dRdWTPC)
+        if opts.get("pc_mode", "coloring") == "fvmatrix":
+            # Assemble the preconditioner straight from OpenFOAM's fvMatrix coefficients:
+            # no dRdW coloring and no AD sweep per color, which is ~95 % of a stock
+            # evaluation. Needs the patched DAFoam build (see dafoam_utils.DAFoamConfig
+            # .build_overlay / .build_source); the stock container has no
+            # initializePCMatFvMatrix and will raise AttributeError here.
+            t_pc = time.time()
+            DASolver.solver.initializePCMatFvMatrix(dRdWTPC)
+            DASolver.solver.calcPCMatWithFvMatrix(dRdWTPC, 0)
+            info(f"PC via fvMatrix (no coloring) in {time.time() - t_pc:.2f} s")
+        else:
+            t_pc = time.time()
+            if DASolver.getOption("adjUseColoring"):
+                DASolver.solver.runColoring()
+            DASolver.solver.calcdRdWT(1, dRdWTPC)
+            info(f"PC via coloring in {time.time() - t_pc:.1f} s")
         ksp = PETSc.KSP().create(comm)
         DASolver.solverAD.createMLRKSPMatrixFree(dRdWTPC, ksp)
     elif adj_method != "fixedPoint":

@@ -133,8 +133,8 @@
           "gmresRelTol": 1e-08,
           "gmresAbsTol": 1e-16,
           "gmresTolDiff": 100.0,
-          "pcFillLevel": 2,
-          "jacMatReOrdering": "natural",
+          "pcFillLevel": 1,
+          "jacMatReOrdering": "rcm",
           "gmresMaxIters": 3000,
           "gmresRestart": 3000
         },
@@ -167,7 +167,10 @@
         "drag": {
           "dragForce": 1.0
         }
-      }
+      },
+      "pc_mode": "fvmatrix",
+      "build_source": "/work/lfrei/dafoam-build/dafoam",
+      "build_overlay": "/work/lfrei/dafoam-build/overlay"
     }
   }
 }

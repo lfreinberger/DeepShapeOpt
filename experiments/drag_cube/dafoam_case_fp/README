@@ -1,0 +1,8 @@
+DAFoam case template for the matrix-free fixed-point adjoint (adjEqnSolMethod: fixedPoint).
+
+Two changes vs ../dafoam_case, both forced by DAFoam's fixed-point implementation:
+  * SpalartAllmarasFv3 -- only that model registers the pseudoNuTilda field the fixed-point
+    adjoint looks up. With nuTilda == 0 it is still the laminar system.
+  * a stationary pressure solver -- the pseudo-pressure operator is the transposed, hence
+    asymmetric, and nearly singular Laplacian; GAMG and every Krylov method diverge to nan
+    on it. The primal has to share the entry, so it loses multigrid.
