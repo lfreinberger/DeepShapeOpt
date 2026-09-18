@@ -211,10 +211,23 @@ def container_command(dcfg: DAFoamConfig, n_procs: int | None = None) -> list[st
         binds.append(f"{dcfg.build_root}/sharedLibs:{CONTAINER_LIBS}")
         binds.append(f"{dcfg.build_root}:{CONTAINER_PATCH}")
         prefix = f"export PYTHONPATH={CONTAINER_PATCH}:$PYTHONPATH; "
+    # Apptainer aborts container creation when a bind SOURCE does not exist, so drop the
+    # ones that are absent instead of failing. The default list is written for the
+    # workstation; a slurm job on a compute node has no /workdisk, for instance. Binding a
+    # path that is not there cannot help anyway, and the case directory itself lives under
+    # a path the driver already resolved.
+    kept = []
+    for b in binds:
+        src = b.split(":", 1)[0]
+        if Path(src).exists():
+            kept.append(b)
+        else:
+            logger.info("Skipping bind %s: not present on this host", src)
+
     inner = f"unset DISPLAY; source {dcfg.load_script} >/dev/null 2>&1 && {prefix}{python_cmd}"
     cmd = [dcfg.apptainer, "exec", "--cleanenv"]
-    if binds:
-        cmd += ["--bind", ",".join(binds)]
+    if kept:
+        cmd += ["--bind", ",".join(kept)]
     cmd += [str(dcfg.container), "bash", "-c", inner]
     return cmd
 
