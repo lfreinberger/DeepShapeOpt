@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -62,8 +63,12 @@ RUNSCRIPT = Path(__file__).with_name("dafoam_runscript.py")
 DEFAULT_LOAD_SCRIPT = "/home/dafoamuser/dafoam/loadDAFoam.sh"
 OPTIONS_FILE = "dafoam_options.json"
 OUTPUT_DIR = "dafoam_output"
-# where the DAFoam sources live inside the container; a patched build is bind-mounted here
-CONTAINER_REPO = "/home/dafoamuser/dafoam/repos/dafoam"
+# Mount points inside the container for a published patched build (see
+# scripts/publish_dafoam_build.sh). CONTAINER_LIBS is the stock shared-library directory,
+# already on LD_LIBRARY_PATH through loadDAFoam.sh; CONTAINER_PATCH only has to be a path
+# that exists in the image and is not otherwise used.
+CONTAINER_LIBS = "/home/dafoamuser/dafoam/OpenFOAM/sharedLibs"
+CONTAINER_PATCH = "/opt/dafoam-patched"
 
 
 @dataclass
@@ -81,10 +86,14 @@ class DAFoamConfig:
     keep_coloring: bool = False
     # "coloring" (stock DAFoam) or "fvmatrix" (preconditioner straight from the fvMatrix
     # coefficients -- no coloring, ~10x faster per evaluation, but it needs the patched
-    # build supplied through build_source/build_overlay)
+    # build, see external/dafoam_patches/)
     pc_mode: str = "coloring"
-    build_source: Path | None = None
-    build_overlay: Path | None = None
+    # Root of the published patched build: a directory holding dafoam/ (the python
+    # package) and sharedLibs/ (with the patched libDASolver.so), produced by
+    # scripts/publish_dafoam_build.sh. Defaults to $DAFOAM_BUILD_ROOT so configs stay
+    # portable -- a host path baked into a config breaks every other machine, and in
+    # particular every slurm job, because node-local scratch is not visible there.
+    build_root: Path | None = None
 
     @classmethod
     def from_dict(cls, cfg: dict) -> "DAFoamConfig":
@@ -111,18 +120,10 @@ class DAFoamConfig:
         pc_mode = str(cfg.get("pc_mode", "coloring"))
         if pc_mode not in ("coloring", "fvmatrix"):
             raise ValueError(f"dafoam.pc_mode {pc_mode!r} invalid; use 'coloring' or 'fvmatrix'")
-        build_source = cfg.get("build_source")
-        build_overlay = cfg.get("build_overlay")
-        build_source = Path(build_source).expanduser() if build_source else None
-        build_overlay = Path(build_overlay).expanduser() if build_overlay else None
-        if pc_mode == "fvmatrix" and build_source is None:
-            raise ValueError(
-                "dafoam.pc_mode 'fvmatrix' needs dafoam.build_source (and usually "
-                "build_overlay): the stock container has no initializePCMatFvMatrix"
-            )
-        for label, path in (("build_source", build_source), ("build_overlay", build_overlay)):
-            if path is not None and not path.is_dir():
-                raise FileNotFoundError(f"dafoam.{label} is not a directory: {path}")
+        raw_root = cfg.get("build_root") or os.environ.get("DAFOAM_BUILD_ROOT")
+        build_root = Path(raw_root).expanduser() if raw_root else None
+        if pc_mode == "fvmatrix":
+            build_root = _check_build_root(build_root, from_config="build_root" in cfg)
         return cls(
             container=container,
             n_procs=int(cfg.get("n_procs", 1)),
@@ -136,9 +137,46 @@ class DAFoamConfig:
             fail_on_mesh_check=bool(cfg.get("fail_on_mesh_check", False)),
             keep_coloring=bool(cfg.get("keep_coloring", False)),
             pc_mode=pc_mode,
-            build_source=build_source,
-            build_overlay=build_overlay,
+            build_root=build_root,
         )
+
+
+def _check_build_root(root: Path | None, from_config: bool) -> Path:
+    """Validate the published patched build, with a message that says what to do.
+
+    Checked eagerly at config load, long before the reconstruction and the meshing, so a
+    missing build costs a second rather than several minutes.
+    """
+    hint = (
+        "pc_mode 'fvmatrix' needs the patched DAFoam build (the stock container has no "
+        "initializePCMatFvMatrix). Either\n"
+        "  - publish it:  DeepShapeOpt/scripts/publish_dafoam_build.sh   (see "
+        "DeepShapeOpt/external/dafoam_patches/README.md), or\n"
+        "  - set pc_mode to 'coloring' to run on the stock container (~10x slower per "
+        "evaluation)."
+    )
+    if root is None:
+        raise ValueError(
+            "dafoam.build_root is not set and $DAFOAM_BUILD_ROOT is empty.\n" + hint
+        )
+    where = "dafoam.build_root" if from_config else "$DAFOAM_BUILD_ROOT"
+    if not root.is_dir():
+        raise FileNotFoundError(
+            f"{where} is not a directory: {root}\n"
+            "On a slurm job this usually means the build sits on node-local scratch "
+            "(e.g. /workdisk), which the compute node cannot see -- publish it to shared "
+            "storage instead.\n" + hint
+        )
+    for sub in ("dafoam", "sharedLibs"):
+        if not (root / sub).is_dir():
+            raise FileNotFoundError(
+                f"{where} = {root} has no {sub}/ -- it does not look like a published "
+                f"DAFoam build.\n" + hint
+            )
+    lib = root / "sharedLibs" / "libDASolver.so"
+    if not lib.is_file():
+        raise FileNotFoundError(f"{where} = {root}: missing sharedLibs/libDASolver.so\n" + hint)
+    return root
 
 
 def prepare_dafoam_case(template_dir: Path, run_name: str, runtime_root: Path | None = None) -> Path:
@@ -164,16 +202,17 @@ def container_command(dcfg: DAFoamConfig, n_procs: int | None = None) -> list[st
         python_cmd = f"mpirun -np {n} -x PYTHONPATH {python_cmd}"
     prefix = ""
     binds = list(dcfg.binds)
-    if dcfg.build_source:
-        # Patched DAFoam: the sources are bind-mounted over the container's copy and the
-        # rebuilt libDASolver.so lives in the overlay. PYTHONPATH makes `import dafoam`
-        # resolve to the patched package instead of the one in site-packages.
-        binds.append(f"{dcfg.build_source}:{CONTAINER_REPO}")
-        prefix = f"export PYTHONPATH={CONTAINER_REPO}:$PYTHONPATH; "
+    if dcfg.build_root:
+        # Patched DAFoam, mounted over the stock install -- no overlay, because
+        # fuse-overlayfs on NFS is fragile and the build has to live on shared storage
+        # for cluster nodes to see it. sharedLibs/ carries the patched libDASolver.so
+        # (it is already on LD_LIBRARY_PATH via loadDAFoam.sh); PYTHONPATH makes
+        # `import dafoam` resolve to the patched package instead of site-packages.
+        binds.append(f"{dcfg.build_root}/sharedLibs:{CONTAINER_LIBS}")
+        binds.append(f"{dcfg.build_root}:{CONTAINER_PATCH}")
+        prefix = f"export PYTHONPATH={CONTAINER_PATCH}:$PYTHONPATH; "
     inner = f"unset DISPLAY; source {dcfg.load_script} >/dev/null 2>&1 && {prefix}{python_cmd}"
     cmd = [dcfg.apptainer, "exec", "--cleanenv"]
-    if dcfg.build_overlay:
-        cmd += ["--overlay", str(dcfg.build_overlay)]
     if binds:
         cmd += ["--bind", ",".join(binds)]
     cmd += [str(dcfg.container), "bash", "-c", inner]

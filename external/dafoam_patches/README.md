@@ -69,18 +69,33 @@ Only the **plain** build is patched. ADR/ADF are untouched, which is sound becau
 new function is virtual and both are only ever called on `DASolver.solver`. Anyone who
 touches the ADR build has to rebuild both.
 
-## Use
+## Publish, then use
 
-```json
-"dafoam": {
-  "pc_mode": "fvmatrix",
-  "build_source": "/work/lfrei/dafoam-build/dafoam",
-  "build_overlay": "/work/lfrei/dafoam-build/overlay"
-}
+Build on local scratch (fast), then publish the two things a *run* needs onto shared
+storage — otherwise a slurm job fails, because node-local scratch is invisible from the
+compute nodes:
+
+```bash
+DeepShapeOpt/scripts/publish_dafoam_build.sh    # -> $DAFOAM_BUILD_ROOT
 ```
 
-Without `build_source` the config load rejects `pc_mode: "fvmatrix"`; the stock container
-has no `initializePCMatFvMatrix` and would fail at the first adjoint setup.
+That writes `<root>/sharedLibs/` (the image's shared libs with our patched
+`libDASolver.so`) and `<root>/dafoam/` (the patched python package), ~90 MB in total. At
+run time both are bind-mounted over the stock install and `PYTHONPATH` points at the root,
+so `import dafoam` resolves to the patched package. No overlay is involved — fuse-overlayfs
+on NFS is fragile, and the build has to be on NFS for the cluster.
+
+Configs only carry the switch; the location comes from `$DAFOAM_BUILD_ROOT`
+(set in `tests/env.sh`), so they stay portable:
+
+```json
+"dafoam": { "pc_mode": "fvmatrix" }
+```
+
+`build_root` in the config overrides the variable. If neither resolves to a published
+build, the config load fails immediately — before the reconstruction and meshing — with a
+message naming the two ways out (publish, or fall back to `pc_mode: "coloring"`). There is
+deliberately no silent fallback: it would make a run ~10x slower without anyone noticing.
 
 ## Open
 

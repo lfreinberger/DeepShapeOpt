@@ -168,9 +168,7 @@
           "dragForce": 1.0
         }
       },
-      "pc_mode": "fvmatrix",
-      "build_source": "/work/lfrei/dafoam-build/dafoam",
-      "build_overlay": "/work/lfrei/dafoam-build/overlay"
+      "pc_mode": "fvmatrix"
     }
   }
 }
