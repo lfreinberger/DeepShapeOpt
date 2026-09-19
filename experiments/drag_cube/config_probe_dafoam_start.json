@@ -123,25 +123,20 @@
         ],
         "primalMinResTol": 1e-07,
         "primalMinResTolDiff": 1000.0,
-        "normalizeStates": {
-          "U": 1.0,
-          "p": 0.5,
-          "nuTilda": 1.0,
-          "phi": 1.0
-        },
+        "normalizeStates": {},
         "adjEqnOption": {
-          "gmresRelTol": 1e-08,
-          "gmresAbsTol": 1e-16,
+          "gmresRelTol": 1e-06,
+          "gmresAbsTol": 1e-14,
           "gmresTolDiff": 100.0,
           "pcFillLevel": 1,
           "jacMatReOrdering": "rcm",
-          "gmresMaxIters": 3000,
-          "gmresRestart": 3000
+          "gmresMaxIters": 1000,
+          "gmresRestart": 1000
         },
         "checkMeshThreshold": {
           "maxAspectRatio": 1000.0,
           "maxNonOrth": 70.0,
-          "maxSkewness": 10.0,
+          "maxSkewness": 5.0,
           "maxIncorrectlyOrientedFaces": 0
         },
         "printInterval": 100,
