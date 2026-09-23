@@ -36,11 +36,11 @@ def _project_root(start: Path) -> Path:
 
 def make_run_paths(cfg: Config, experiment_dir: str | Path) -> RunPaths:
     """Results next to the config; heavy data mirrors the experiment path under
-    ``run.heavy_data_dir`` (only when debug exports are on)."""
+    ``run.heavy_data_dir`` when that is configured."""
     experiment = Path(experiment_dir).resolve()
     results = experiment / cfg.run.name
     heavy = None
-    if cfg.run.heavy_data_dir and cfg.run.debug:
+    if cfg.run.heavy_data_dir:
         root = _project_root(experiment)
         try:
             rel = experiment.relative_to(root)

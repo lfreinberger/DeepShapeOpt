@@ -279,3 +279,60 @@ def assert_face_layers_locked(faces, spline_sp: splinepy.BSpline, mask_locked_cp
                 f"{len(ids)} boundary control points are free: the FFD would tear the wall off "
                 f"the fixed geometry at that face. Add '{face}' to parametrization.lock.faces."
             )
+
+
+class FFDParametrization:
+    """Free-form deformation of the input mesh inside the design domain."""
+
+    def __init__(self, cfg, paths):
+        import trimesh
+
+        from deepshapeopt.hexmesh.ffd_sdf import FFDDesignSDF
+
+        from .base import load_parameter_file
+
+        self._load_parameter_file = load_parameter_file
+        device = cfg.run.device
+        self.frame = DomainFrame.from_design_domain(cfg.geometry.design_domain, device=device)
+        self.mesh_orig = trimesh.load(cfg.geometry.mesh_path)
+        self.frame.normalize_mesh(self.mesh_orig).export(paths.reconstruction / "gt_mesh_normalized.stl")
+        ffd_cfg = cfg.parametrization.ffd
+        self.setup = build_ffd_deformation(
+            {"n_control_points": ffd_cfg.n_control_points, "spline_degree": ffd_cfg.spline_degree},
+            self.frame, device=device,
+        )
+        self.deformation = self.setup.deformation
+        self.spline_sp = self.setup.disp_spline_sp
+        self.control_dims = list(self.setup.n_control_points)
+        self.design_sdf = FFDDesignSDF(self.deformation, self.frame)
+
+    @property
+    def param(self) -> torch.nn.Parameter:
+        return self.deformation.control_points
+
+    def check_locked_faces(self, mask_locked_cp) -> None:
+        """Every design-box face the wall crosses must keep its control layer locked."""
+        crossed = crossed_design_faces(
+            self.mesh_orig.vertices, self.mesh_orig.faces, self.frame.design_domain.detach().cpu().numpy(),
+        )
+        logger.info("FFD: wall geometry crosses design-domain faces %s", crossed)
+        assert_face_layers_locked(crossed, self.spline_sp, mask_locked_cp)
+
+    def save(self, path: Path) -> None:
+        torch.save([self.param.detach().clone()], path)
+
+    def load(self, path: Path) -> None:
+        with torch.no_grad():
+            self.param.copy_(self._load_parameter_file(path, self.param))
+
+    def export_debug(self, out_dir: Path, locked_idx) -> None:
+        from deepshapeopt.diagnostics.exports import export_control_net
+
+        export_control_net(self.spline_sp, out_dir, locked_idx)
+
+    def export_iteration(self, out_dir: Path, iteration: int, series_dir: Path | None) -> None:
+        self.setup.export_lattice(out_dir / "control_lattice.vtp", out_dir / "control_volume.vts")
+        if series_dir is not None:
+            series_dir.mkdir(parents=True, exist_ok=True)
+            self.setup.export_lattice(series_dir / f"control_lattice_{iteration:04d}.vtp",
+                                      series_dir / f"control_volume_{iteration:04d}.vts")

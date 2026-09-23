@@ -423,3 +423,91 @@ def min_steg_length_penalty_sdf(
         W.detach().to(param.dtype), g.to(param.dtype), n_cand, n_flag,
         pts_phys, scalars, grad_np,
     )
+
+
+# ---------------------------------------------------------------------------
+# Term
+# ---------------------------------------------------------------------------
+
+from .base import Budget, ConstraintTerm, PenaltyTerm, State, TermValue, exclude_boxes, known_keys  # noqa: E402
+
+_STEG_KEYS = {"type", "weight", "budget", "formulation", "length_mode", "flow_direction", "thickness_threshold",
+              "min_length", "grid_spacing", "n_dirs", "ray_step", "tau", "slab_margin", "ks_rho", "exclude_region"}
+
+
+class _StegEvaluator:
+    def __init__(self, cfg: dict):
+        known_keys(cfg, _STEG_KEYS, "min_steg_length")
+        self.formulation = str(cfg.get("formulation", "penalty"))
+        self.length_mode = str(cfg.get("length_mode", "thin_band"))
+        if self.length_mode not in ("thin_band", "downstream_reach"):
+            raise ValueError(f"min_steg_length.length_mode must be 'thin_band' or 'downstream_reach', got {self.length_mode!r}")
+        self.flow_dir = cfg.get("flow_direction", [1.0, 0.0, 0.0])
+        self.thickness = float(cfg.get("thickness_threshold", 0.5))
+        self.min_length = float(cfg.get("min_length", 0.0))
+        if self.thickness <= 0.0 or self.min_length <= 0.0:
+            raise ValueError("min_steg_length needs thickness_threshold > 0 and min_length > 0")
+        self.grid_spacing = float(cfg.get("grid_spacing", 0.25))
+        self.n_dirs = int(cfg.get("n_dirs", 8))
+        self.ray_step = cfg.get("ray_step")
+        self.tau = cfg.get("tau")
+        self.slab_margin = float(cfg.get("slab_margin", 0.5))
+        self.ks_rho = float(cfg.get("ks_rho", 50.0))
+        self.exclude_region = exclude_boxes(cfg.get("exclude_region"))
+
+    def measure(self, state: State) -> TermValue:
+        lattice = getattr(state.parametrization, "lattice_struct", None)
+        if lattice is None:
+            raise ValueError("min_steg_length needs the DeepSDF lattice parametrization")
+        W, dW, n_cand, n_flag, pts, scalars, dirs = min_steg_length_penalty_sdf(
+            lattice, state.parametrization.frame, state.param, self.flow_dir,
+            self.thickness, self.min_length,
+            grid_spacing=self.grid_spacing, n_dirs=self.n_dirs, ray_step_mm=self.ray_step, tau_mm=self.tau,
+            slab_margin=self.slab_margin, exclude_region=self.exclude_region,
+            length_mode=self.length_mode, formulation=self.formulation, ks_rho=self.ks_rho,
+        )
+        value = float(W.item())
+        if self.formulation == "ks_margin":
+            reading = f"worst shortfall {value * self.min_length:+.2f}"
+        else:
+            reading = f"RMS shortfall {self.min_length * math.sqrt(max(value, 0.0)):.2f}"
+        debug = {"candidates": n_cand, "flagged": n_flag, "reading": reading}
+        if pts is not None:
+            debug["cloud"] = (pts, dirs, scalars)
+        return TermValue(value=value, grad=dW, debug=debug)
+
+
+class MinStegLengthConstraint(_StegEvaluator, ConstraintTerm):
+    cheap = True
+
+    def __init__(self, cfg: dict):
+        _StegEvaluator.__init__(self, cfg)
+        default = "ks_bound" if self.formulation == "ks_margin" else "relative_to_initial"
+        ConstraintTerm.__init__(self, Budget(cfg.get("budget"), default, name="min_steg_length"))
+        self.name = "min_steg_length"
+        self.unscaled = self.formulation == "ks_margin"
+
+    def ks_bound(self):
+        if self.formulation != "ks_margin":
+            return None
+        return float(self.budget.shortfall or 0.0) / self.min_length
+
+    def length_scale(self):
+        return self.min_length
+
+    def evaluate(self, state: State) -> TermValue:
+        return self.measure(state)
+
+
+class MinStegLengthPenalty(_StegEvaluator, PenaltyTerm):
+    cheap = True
+
+    def __init__(self, cfg: dict):
+        _StegEvaluator.__init__(self, cfg)
+        if self.formulation == "ks_margin":
+            raise ValueError("min_steg_length: the ks_margin formulation is a signed margin; use it as a constraint")
+        PenaltyTerm.__init__(self, cfg.get("weight", 1.0))
+        self.name = "min_steg_length"
+
+    def evaluate(self, state: State) -> TermValue:
+        return self.measure(state)

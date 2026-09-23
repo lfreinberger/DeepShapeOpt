@@ -2,7 +2,7 @@
 latent-code edits into meshes for the latent-edit GUI.
 
 The heavy lifting (model + B-spline of latent codes + mesh extraction) is reused
-from :mod:`deepshapeopt.reconstruction` and ``DeepSDFStruct`` so this module only
+from :mod:`deepshapeopt.geometry.reconstruction` and ``DeepSDFStruct`` so this module only
 adds: locating/loading (or fitting) the reconstructed control-point codes,
 exposing the control net as a list of editable knots, and re-meshing after an
 edit.
@@ -19,8 +19,8 @@ import torch
 
 from DeepSDFStruct.utils import with_float32_lattice
 
-from deepshapeopt.config import ExperimentSpecifications, make_experiment_paths
-from deepshapeopt.reconstruction import build_reconstruction_lattice
+from deepshapeopt.config import load_config, make_run_paths
+from deepshapeopt.geometry.reconstruction import build_reconstruction_lattice
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +32,13 @@ def _case_name(mesh_path: Path, tiling) -> str:
     return f"{mesh_path.stem}_tiling_{tiling_str}"
 
 
-def _resolve_param_file(experiment_path: Path, specs, mesh_path: Path, tiling) -> Path:
+def _resolve_param_file(experiment_path: Path, cfg, mesh_path: Path, tiling) -> Path:
     """Path of the persisted control-point codes for this experiment.
 
     Matches the ``heavy_dir`` used by ``reconstruct_shape``: heavy-data dir when
-    ``heavy_data_output_path`` is configured, otherwise the local results dir.
+    ``run.heavy_data_dir`` is configured, otherwise the local results dir.
     """
-    rec_cfg = specs["reconstruction"]
-    paths = make_experiment_paths(
-        experiment_path,
-        results_name=specs.get("results_name", "results"),
-        heavy_data_output_path=rec_cfg.get("heavy_data_output_path"),
-    )
+    paths = make_run_paths(cfg, experiment_path)
     case = _case_name(mesh_path, tiling)
     if paths.heavy_data is not None:
         heavy_dir = paths.heavy_data / "reconstruction" / case
@@ -109,12 +104,12 @@ class LatentEditSession:
     ):
         self.config_path = Path(config_path).resolve()
         self.experiment_path = self.config_path.parent
-        self.specs = ExperimentSpecifications(str(self.config_path))
-        self.rec_cfg = self.specs["reconstruction"]
+        self.cfg = load_config(self.config_path)
+        self.recon_cfg = self.cfg.parametrization.deepsdf.reconstruction
         if source == "auto":
             # Inspect the optimization result when the config drives an
             # optimization; otherwise show the whole-input-mesh reconstruction.
-            source = "optimization" if self.specs.get("optimization") else "reconstruction"
+            source = "optimization" if self.cfg.is_optimization else "reconstruction"
         if source not in ("reconstruction", "optimization"):
             raise ValueError(
                 f"Unknown latent-GUI source {source!r}; use 'auto', 'reconstruction' "
@@ -131,7 +126,7 @@ class LatentEditSession:
             self._build_reconstruction_lattice(device=device)
 
         # FlexiCubes meshes a lattice on an ``N_base * tiling`` grid, so the
-        # reconstruction's ``create_mesh_N`` can blow up for heavily-tiled
+        # reconstruction's ``export_resolution`` can blow up for heavily-tiled
         # cases (e.g. tiling [1,8,8] -> 32*256*256 points). For *live* editing
         # we mesh at a lower per-cell resolution so each edit stays responsive;
         # the heuristic keeps the largest tiled dimension near ~64 cells.
@@ -153,7 +148,7 @@ class LatentEditSession:
     # -- lattice construction ---------------------------------------------
     def _build_reconstruction_lattice(self, device: str | None = None) -> None:
         """Whole-input-mesh reconstruction lattice (the default GUI source)."""
-        built = build_reconstruction_lattice(self.specs, device=device)
+        built = build_reconstruction_lattice(self.cfg, device=device)
         self.lattice_struct = built["lattice_struct"]
         self.param_spline = built["param_spline"]
         self.param_spline_sp = built["param_spline_sp"]
@@ -161,51 +156,36 @@ class LatentEditSession:
         self.mesh_norm = built["mesh_norm"]
         self.latent_dim = int(built["latent_dim"])
         self.tiling = built["tiling"]
-        self.create_mesh_N = int(built["create_mesh_N"])
+        self.create_mesh_N = int(built["export_resolution"])
         self.device = built["device"]
         self.mesh_path = built["mesh_path"]
-        self.code_bound = float(self.rec_cfg.get("code_bound", 1.0))
+        self.code_bound = float(self.recon_cfg.code_bound or 1.0)
 
     def _build_optimization_lattice(self, device: str | None = None) -> None:
         """Rebuild the *optimization* design-domain lattice exactly as the optimizer
         does: a B-spline of latent codes over the physical ``design_domain`` normalized
         by the DomainFrame, rather than over the whole input mesh. The meshed surface is
         therefore only the inner design region the optimizer actually moves."""
-        from deepshapeopt.config import ensure_experiment_dirs, make_experiment_paths
-        from deepshapeopt.shape_optimization import build_lattice, setup_model_and_domain
+        from deepshapeopt.parametrization.deepsdf import DeepSDFLattice
 
+        cfg = self.cfg
         if device is not None:
-            self.rec_cfg = {**self.rec_cfg, "device": device}
-        opt_cfg = self.specs.get("optimization", {})
-        self._paths = make_experiment_paths(
-            self.experiment_path,
-            results_name=self.specs.get("results_name", "results"),
-            heavy_data_output_path=opt_cfg.get("heavy_data_output_path"),
-        )
-        ensure_experiment_dirs(self._paths)
-
-        ms = setup_model_and_domain(self.rec_cfg, self._paths.reconstruction)
-        ls = build_lattice(self.rec_cfg, ms.model, ms.sdf, ms.frame)
-        self.frame = ms.frame
-        self.lattice_struct = ls.lattice_struct
-        self.param_spline = ls.param_spline
-        self.param_spline_sp = ls.param_spline_sp
-        self.bounds = ms.frame.box_norm
+            cfg.run.device = device
+        self._paths = make_run_paths(cfg, self.experiment_path).ensure()
+        lattice = DeepSDFLattice(cfg, self._paths)
+        self.frame = lattice.frame
+        self.lattice_struct = lattice.lattice_struct
+        self.param_spline = lattice.param_spline
+        self.param_spline_sp = lattice.spline_sp
+        self.bounds = lattice.frame.box_norm
         self.mesh_norm = None
-        self.latent_dim = int(ms.model._trained_latent_vectors[0].shape[0])
-        self.tiling = self.rec_cfg["tiling"]
-        self.create_mesh_N = int(
-            self.rec_cfg.get("create_mesh_N", opt_cfg.get("mesh_resolution", 32))
-        )
-        self.device = self.rec_cfg["device"]
-        self.mesh_path = Path(self.rec_cfg["mesh_path"]).resolve()
-        # Slider range: use the optimizer's design-variable bounds when present.
-        opt_bounds = opt_cfg.get("bounds")
-        self.code_bound = (
-            float(max(abs(float(b)) for b in opt_bounds))
-            if opt_bounds
-            else float(self.rec_cfg.get("code_bound", 1.0))
-        )
+        self.latent_dim = lattice.latent_dim
+        self.tiling = cfg.parametrization.deepsdf.tiling
+        self.create_mesh_N = int(self.recon_cfg.export_resolution)
+        self.device = cfg.run.device
+        self.mesh_path = Path(cfg.geometry.mesh_path).resolve()
+        # Slider range: the optimizer's design-variable bounds.
+        self.code_bound = float(max(abs(float(b)) for b in cfg.optimizer.bounds))
 
     # -- loading ----------------------------------------------------------
     def _load_codes(self) -> None:
@@ -228,7 +208,7 @@ class LatentEditSession:
         else:
             candidates = [
                 _resolve_param_file(
-                    self.experiment_path, self.specs, self.mesh_path, self.tiling
+                    self.experiment_path, self.cfg, self.mesh_path, self.tiling
                 )
             ]
 
@@ -242,7 +222,7 @@ class LatentEditSession:
             f"No saved latent parameters found to load for the {self.source} source. The "
             "latent GUI never fits on the fly; run the reconstruction/optimization for "
             "this experiment first (e.g. "
-            f"`python scripts/reconstruct.py --config {self.config_path}`), or pass "
+            f"`deepshapeopt reconstruct --config {self.config_path}`), or pass "
             "--params-file explicitly. Looked for:\n  " + searched
         )
 
@@ -266,7 +246,7 @@ class LatentEditSession:
 
     # -- PCA reduced basis ------------------------------------------------
     def _setup_pca(self) -> None:
-        """When the config enables PCA latent reduction (an ``optimization.pca`` block),
+        """When the config enables PCA latent reduction (``parametrization.deepsdf.pca``),
         rebuild the same whitened PCA basis the optimizer uses so the GUI can also edit
         each knot's PCA coefficients. No-op otherwise (``pca_basis`` stays ``None``).
 
@@ -280,11 +260,11 @@ class LatentEditSession:
         self.n_components = 0
         if self.source != "optimization":
             return
-        pca_cfg = self.specs.get("optimization", {}).get("pca") or {}
-        if not pca_cfg.get("enabled", False):
+        pca_cfg = self.cfg.parametrization.deepsdf.pca
+        if not pca_cfg.enabled:
             return
 
-        from deepshapeopt.latent_pca import (
+        from deepshapeopt.parametrization.pca import (
             PCALatentBasis,
             compute_latent_pca,
             gather_training_latents,
@@ -292,21 +272,16 @@ class LatentEditSession:
 
         dev = self._control_points.device
         dtype = self._control_points.dtype
-        latents = gather_training_latents(
-            self.rec_cfg["model_path"],
-            self.rec_cfg.get("model_checkpoint", "latest"),
-            device=dev,
-        )
-        mean, components, explained, scale = compute_latent_pca(
-            latents, int(pca_cfg["n_components"])
-        )
+        ds = self.cfg.parametrization.deepsdf
+        latents = gather_training_latents(ds.model_path, ds.checkpoint, device=dev)
+        mean, components, explained, scale = compute_latent_pca(latents, int(pca_cfg.n_components))
         self.pca_basis = PCALatentBasis(mean, components, scale).to(device=dev, dtype=dtype)
         # Delta parametrization: measure coefficients as deltas around the reconstruction
         # lambda^0 (same origin the optimizer uses), so the sliders match the optimizer's
         # design variables and truncation keeps the reconstruction detail.
         self.pca_basis.set_reference(self._pca_reference_field())
         self.pca_explained = [float(e) for e in explained]
-        b = pca_cfg.get("bounds", [-2.5, 2.5])
+        b = pca_cfg.bounds
         self.pca_bounds = [float(b[0]), float(b[1])]
         self.n_components = int(self.pca_basis.n_components)
         logger.info(

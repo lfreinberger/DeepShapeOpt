@@ -477,3 +477,110 @@ def undercut_penalty_sdf(
         U.detach().to(param.dtype), g.to(param.dtype), n_band, n_undercut,
         pts_phys, scalars, normals,
     )
+
+
+# ---------------------------------------------------------------------------
+# Term
+# ---------------------------------------------------------------------------
+
+from .base import Budget, ConstraintTerm, PenaltyTerm, State, TermValue, exclude_boxes, known_keys  # noqa: E402
+
+_UNDERCUT_KEYS = {"type", "weight", "budget", "method", "formulation", "draw_direction", "draft_angle_deg",
+                  "exclude_axial_deg", "grid_spacing", "band_factor", "exclude_region", "ks_rho", "scope",
+                  "silhouette_margin", "outlet_patch"}
+
+
+class _UndercutEvaluator:
+    """Shared evaluation of the drawability measure; the term classes add budget or weight."""
+
+    def __init__(self, cfg: dict):
+        known_keys(cfg, _UNDERCUT_KEYS, "undercut")
+        self.method = str(cfg.get("method", "sdf"))
+        self.formulation = str(cfg.get("formulation", "penalty"))
+        if self.method not in ("sdf", "mesh"):
+            raise ValueError(f"undercut.method must be 'sdf' or 'mesh', got {self.method!r}")
+        if self.formulation not in ("penalty", "ks_margin"):
+            raise ValueError(f"undercut.formulation must be 'penalty' or 'ks_margin', got {self.formulation!r}")
+        self.draw_dir = cfg.get("draw_direction", [1.0, 0.0, 0.0])
+        self.draft_angle_deg = float(cfg.get("draft_angle_deg", 0.0))
+        self.threshold = -math.sin(math.radians(self.draft_angle_deg))
+        self.exclude_axial_deg = float(cfg.get("exclude_axial_deg", 30.0))
+        self.grid_spacing = float(cfg.get("grid_spacing", 0.5))
+        self.band_factor = float(cfg.get("band_factor", 1.5))
+        self.exclude_region = exclude_boxes(cfg.get("exclude_region"))
+        self.ks_rho = float(cfg.get("ks_rho", 50.0))
+        self.scope = str(cfg.get("scope", "all"))
+        if self.scope not in ("all", "outside_outlet"):
+            raise ValueError(f"undercut.scope must be 'all' or 'outside_outlet', got {self.scope!r}")
+        self.silhouette_margin = float(cfg.get("silhouette_margin", 0.0))
+        self.outlet_patch = str(cfg.get("outlet_patch", "outlet"))
+        self.silhouette = None
+
+    def _ensure_silhouette(self, state: State) -> None:
+        if self.scope != "outside_outlet" or self.silhouette is not None:
+            return
+        import numpy as np
+
+        pm = state.mesh.polymesh
+        quads = pm.faces[pm.patch_face_slice(self.outlet_patch)]
+        pts = np.asarray(pm.points, dtype=float)
+        tris = np.concatenate([pts[quads[:, [0, 1, 2]]], pts[quads[:, [0, 2, 3]]]], axis=0)
+        self.silhouette = build_outlet_silhouette(tris, self.draw_dir, margin=self.silhouette_margin)
+
+    def measure(self, state: State) -> TermValue:
+        self._ensure_silhouette(state)
+        param = state.param
+        if self.method == "sdf":
+            lattice = getattr(state.parametrization, "lattice_struct", None)
+            if lattice is None:
+                raise ValueError("undercut.method 'sdf' needs the DeepSDF lattice parametrization")
+            U, dU, n_band, n_uc, pts, scalars, normals = undercut_penalty_sdf(
+                lattice, state.parametrization.frame, param, self.draw_dir, self.threshold,
+                exclude_axial_deg=self.exclude_axial_deg, grid_spacing=self.grid_spacing,
+                band_factor=self.band_factor, exclude_region=self.exclude_region,
+                collect_debug=state.debug, formulation=self.formulation, ks_rho=self.ks_rho,
+                silhouette=self.silhouette,
+            )
+            debug = {"band_points": n_band, "undercut_points": n_uc}
+            if pts is not None:
+                debug["cloud"] = (pts, normals, scalars)
+            return TermValue(value=float(U.item()), grad=dU, debug=debug)
+        faces = state.mesh.faces_design
+        U, area, mask, centroids, normals, ndotd = undercut_penalty(
+            state.mesh.verts, faces, self.draw_dir, self.threshold, self.exclude_axial_deg,
+            exclude_region=self.exclude_region, surface="cavity",
+            formulation=self.formulation, ks_rho=self.ks_rho, silhouette=self.silhouette,
+        )
+        (dU,) = torch.autograd.grad(U, param, retain_graph=True)
+        debug = {"undercut_area": float(area.item()), "faces": (faces[mask].detach().cpu().numpy(),
+                 centroids[mask].cpu().numpy(), (-normals[mask]).cpu().numpy(), ndotd[mask].cpu().numpy())}
+        return TermValue(value=float(U.item()), grad=dU.detach(), debug=debug)
+
+
+class UndercutConstraint(_UndercutEvaluator, ConstraintTerm):
+    def __init__(self, cfg: dict):
+        _UndercutEvaluator.__init__(self, cfg)
+        default = "ks_bound" if self.formulation == "ks_margin" else "relative_to_initial"
+        ConstraintTerm.__init__(self, Budget(cfg.get("budget"), default, name="undercut"))
+        self.name = "undercut"
+        self.cheap = self.method == "sdf"
+        self.unscaled = self.formulation == "ks_margin"
+
+    def ks_bound(self):
+        return self.threshold if self.formulation == "ks_margin" else None
+
+    def evaluate(self, state: State) -> TermValue:
+        return self.measure(state)
+
+
+class UndercutPenalty(_UndercutEvaluator, PenaltyTerm):
+    def __init__(self, cfg: dict):
+        _UndercutEvaluator.__init__(self, cfg)
+        if self.formulation == "ks_margin":
+            raise ValueError("undercut: the ks_margin formulation is a signed margin; use it as a constraint")
+        PenaltyTerm.__init__(self, cfg.get("weight", 0.0))
+        self.name = "undercut"
+        self.cheap = self.method == "sdf"
+
+    def evaluate(self, state: State) -> TermValue:
+        return self.measure(state)

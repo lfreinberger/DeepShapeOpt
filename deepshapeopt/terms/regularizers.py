@@ -51,3 +51,58 @@ def control_lattice_smoothness_penalty(param, n_ctrl_per_dim, latent_dim, param_
     if g is None:
         g = torch.zeros_like(param)
     return P.detach().to(param.dtype), g.to(param.dtype)
+
+
+# ---------------------------------------------------------------------------
+# Terms
+# ---------------------------------------------------------------------------
+
+from .base import PenaltyTerm, State, TermValue, known_keys  # noqa: E402
+
+
+class ProximityPenalty(PenaltyTerm):
+    """``0.5 * mean over the free control values of (p - p_0)^2``: suppresses null-space drift.
+
+    The weight is dimensionless (a fraction of the initial objective): the term enters the
+    objective as ``weight * |J(x_0)| * R``, so a tuned weight transfers between experiments.
+    """
+
+    def __init__(self, cfg: dict):
+        known_keys(cfg, {"type", "weight"}, "proximity")
+        super().__init__(cfg.get("weight", 0.0))
+        self.name = "proximity"
+        self.param_initial = None
+        self.scale = None
+
+    def evaluate(self, state: State) -> TermValue:
+        if self.param_initial is None:
+            self.param_initial = state.param.detach().clone()
+            self.scale = 1.0 / max(state.design_space.n_free, 1)
+        diff = (state.param - self.param_initial).detach()
+        value = 0.5 * self.scale * float((diff ** 2).sum())
+        return TermValue(value=value, grad=self.scale * diff)
+
+
+class LatticeSmoothnessPenalty(PenaltyTerm):
+    """Graph-Dirichlet energy over the control lattice (``reference: none`` on the absolute
+    latent field, ``initial`` on the update field ``p - p_0``). Dimensionless weight."""
+
+    def __init__(self, cfg: dict):
+        known_keys(cfg, {"type", "weight", "reference"}, "lattice_smoothness")
+        super().__init__(cfg.get("weight", 0.0))
+        self.name = "lattice_smoothness"
+        self.reference = str(cfg.get("reference", "none"))
+        if self.reference not in ("none", "initial"):
+            raise ValueError(f"lattice_smoothness.reference must be 'none' or 'initial', got {self.reference!r}")
+        self.param_initial = None
+
+    def evaluate(self, state: State) -> TermValue:
+        if self.param_initial is None:
+            self.param_initial = state.param.detach().clone()
+        dims = state.parametrization.control_dims
+        latent_dim = int(state.param.shape[-1])
+        S, dS = control_lattice_smoothness_penalty(
+            state.param, dims, latent_dim,
+            param_ref=self.param_initial if self.reference == "initial" else None,
+        )
+        return TermValue(value=float(S.item()), grad=dS)

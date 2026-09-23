@@ -38,15 +38,31 @@ def prepare_foam_runtime(
     shutil.copytree(template_dir, runtime_dir)
     return runtime_dir
 
-SOLVER_PATHS = {
-    "p1": ("primalSolvers", "p1", "solutionControls"),
-    "as1": ("adjointManagers", "am1", "adjointSolvers", "as1", "solutionControls"),
-    "as2": ("adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls"),
-}
-
+# Fields each primal solver solves. simpleControl::criteriaSatisfied only checks fields that
+# are BOTH solved and matched by a listed regex, so a missing entry silently drops that
+# equation from the criterion (an unconverged energy equation would report "converged").
 PRIMAL_FIELDS = {"simple": {"p", "U"}, "simpleHeatTransfer": {"p", "U", "T"}}
-
 WRITE_NEVER = 10 ** 9
+
+
+def dict_layout(opt: FoamFile) -> tuple[str, str, list[str]]:
+    """``(primal solver, adjoint manager, adjoint solver names)`` of an optimisationDict."""
+    primal = list(opt["primalSolvers"].keys())[0]
+    managers = list(opt["adjointManagers"].keys())
+    if len(managers) != 1:
+        raise ValueError(f"expected one adjoint manager, found {managers}")
+    solvers = list(opt["adjointManagers"][managers[0]]["adjointSolvers"].keys())
+    return str(primal), str(managers[0]), [str(k) for k in solvers]
+
+
+def _solution_controls_path(opt: FoamFile, name: str) -> tuple:
+    primal, manager, solvers = dict_layout(opt)
+    if name in ("p1", primal):
+        return ("primalSolvers", primal, "solutionControls")
+    if name not in solvers:
+        raise ValueError(f"unknown solver {name!r}; valid: {primal}, {solvers}")
+    return ("adjointManagers", manager, "adjointSolvers", name, "solutionControls")
+
 
 def _apply_solver_convergence(opt, cfg: dict, case_dir: Path) -> None:
     """Write the ``solver_convergence`` config block into the runtime dicts.
@@ -64,10 +80,7 @@ def _apply_solver_convergence(opt, cfg: dict, case_dir: Path) -> None:
                          f"or 'residual', got {mode!r}")
 
     for name, spec in (cfg.get("solvers") or {}).items():
-        if name not in SOLVER_PATHS:
-            raise ValueError(f"solver_convergence: unknown solver {name!r}; "
-                             f"valid: {sorted(SOLVER_PATHS)}")
-        base = SOLVER_PATHS[name]
+        base = _solution_controls_path(opt, name)
         if spec.get("n_iters") is not None:
             opt[base + ("nIters",)] = int(spec["n_iters"])
 
@@ -82,8 +95,8 @@ def _apply_solver_convergence(opt, cfg: dict, case_dir: Path) -> None:
         if not residuals:
             raise ValueError(f"solver_convergence: mode 'residual' needs "
                              f"'residuals' for solver {name!r}")
-        if name == "p1":
-            solver = str(opt["primalSolvers", "p1", "solver"])
+        if base[0] == "primalSolvers":
+            solver = str(opt["primalSolvers", base[1], "solver"])
             expected = PRIMAL_FIELDS.get(solver, {"p", "U"})
             missing = expected - set(residuals)
             if missing:
@@ -106,93 +119,61 @@ def _apply_solver_convergence(opt, cfg: dict, case_dir: Path) -> None:
 
 def configure_foam_runtime(
     case_dir: Path,
-    constraint_enabled: bool,
-    section_patches: list[tuple[str, float]] | None = None,
-    as1_active: bool = True,
+    active_solvers: set[str],
     solver_convergence: dict | None = None,
 ) -> dict[str, str]:
-    """Derive adjoint-time directories from optimisationDict and patch the runtime case.
+    """Activate the adjoint solvers that carry a metric and predict their write times.
 
-    Reads primal/adjoint ``nIters`` from ``system/optimisationDict`` and computes the
-    time directory each *active* adjoint solver will write to: the solvers run back to
-    back, so ``t_as1 = p_n + as1_n`` and ``t_as2 = t_as1 + as2_n`` (or ``p_n + as2_n``
-    when as1 is inactive). These are predictions: an adjoint solver that satisfies its
-    ``residualControl`` before ``nIters`` shifts every later write time -- use
-    :func:`resolve_adjoint_time` when reading the fields back.
+    Reads primal/adjoint ``nIters`` from ``system/optimisationDict``. The solvers run back
+    to back, so an active solver writes at ``p1.nIters + sum(nIters of the active solvers
+    before it)``. Predictions only hold while every solver runs its full ``nIters``; use
+    :func:`~deepshapeopt.solvers.openfoam.sensitivities.resolve_adjoint_time` on readback.
 
-    Also mutates the runtime copy:
-      - ``optimisationDict``: sets ``am1.as1.active`` to ``as1_active`` and
-        ``am1.as2.active`` to ``constraint_enabled`` (an inactive solver is skipped
-        entirely, which also avoids solving a degenerate adjoint -- e.g. a uniformity
-        objective on a flow that is already uniform stops after one step)
-      - ``controlDict``: forces ``purgeWrite = 0`` so no needed time dir is purged
-      - ``Allrun``: replaces the ``__ADJOINT_TIMES__`` marker with the open time range
-        ``"1:"``, so ``reconstructPar`` covers every write whatever the solvers do.
-        It must NOT start at ``p_n``: when the primal exits early on
-        ``residualControl`` the adjoint end times move down with it and can fall
-        BELOW that bound, in which case reconstructPar produces nothing and
-        :func:`resolve_adjoint_time` -- which can only find what was reconstructed --
-        raises. ``deltaT`` is 1 and iteration 1 can never satisfy the criterion, so
-        the earliest possible write is time 2 and ``1:`` cannot clip a real one.
-
-    When ``section_patches`` is provided (list of ``(patch_name, target_fraction)`` pairs),
-    additionally:
-      - ``optimisationDict``: replaces the ``as1`` objectiveNames block with a single
-        ``flowBalance`` objective of type ``flowRatePartition`` over the listed sections.
-      - ``snappyHexMeshDict``: removes ``outlet``/``outletInterior`` region entries from
-        ``geometry.shape.stl.regions`` and ``castellatedMeshControls.refinementSurfaces.
-        extrusion_die.regions``, replacing them with one entry per section (inheriting
-        the prior outlet refinement level).
-
-    ``solver_convergence`` is the experiment's config block; it is applied to the
-    runtime dicts FIRST, so the predicted times use the values that will actually
-    run. See :func:`_apply_solver_convergence`.
-
-    Should be called once after ``prepare_foam_runtime`` copies the template.
-    Operating on the template directly would dirty the git-tracked files.
-
-    Returns a mapping of the active solvers to their predicted write times, e.g.
-    ``{"as1": "300"}``, ``{"as1": "300", "as2": "500"}`` or ``{"as2": "500"}``.
+    Also mutates the runtime copy: every adjoint solver's ``active`` flag, ``purgeWrite 0``
+    in controlDict, and the ``__ADJOINT_TIMES__`` marker of the Allrun (when present) becomes
+    the open time range ``"1:"`` so reconstructPar covers every write.
+    ``solver_convergence`` is applied first so the predicted times use the values that run.
     """
     opt_path = case_dir / "system" / "optimisationDict"
     ctrl_path = case_dir / "system" / "controlDict"
     allrun_path = case_dir / "Allrun"
 
-    if not (as1_active or constraint_enabled):
-        raise ValueError("configure_foam_runtime: at least one adjoint solver must be active")
-
     opt = FoamFile(opt_path)
     if solver_convergence:
         _apply_solver_convergence(opt, solver_convergence, case_dir)
-    p_n = int(opt["primalSolvers", "p1", "solutionControls", "nIters"])
-    as1_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as1", "solutionControls", "nIters"])
-    as2_n = int(opt["adjointManagers", "am1", "adjointSolvers", "as2", "solutionControls", "nIters"])
+    primal, manager, names = dict_layout(opt)
+    unknown = set(active_solvers) - set(names)
+    if unknown:
+        raise ValueError(f"metrics refer to adjoint solvers {sorted(unknown)} missing from {opt_path} ({names})")
+    if not active_solvers:
+        raise ValueError("configure_foam_runtime: at least one adjoint solver must be active")
 
-    opt["adjointManagers", "am1", "adjointSolvers", "as1", "active"] = bool(as1_active)
-    opt["adjointManagers", "am1", "adjointSolvers", "as2", "active"] = bool(constraint_enabled)
-
-    if section_patches is not None:
-        _inject_section_partition_into_runtime(case_dir, opt, section_patches)
-
-    t = p_n
+    t = int(opt["primalSolvers", primal, "solutionControls", "nIters"])
     adjoint_times: dict[str, str] = {}
-    if as1_active:
-        t += as1_n
-        adjoint_times["as1"] = str(t)
-    if constraint_enabled:
-        t += as2_n
-        adjoint_times["as2"] = str(t)
+    for name in names:
+        active = name in active_solvers
+        opt["adjointManagers", manager, "adjointSolvers", name, "active"] = bool(active)
+        if active:
+            t += int(opt["adjointManagers", manager, "adjointSolvers", name, "solutionControls", "nIters"])
+            adjoint_times[name] = str(t)
 
-    ctrl = FoamFile(ctrl_path)
-    ctrl["purgeWrite"] = 0
+    FoamFile(ctrl_path)["purgeWrite"] = 0
 
     marker = "__ADJOINT_TIMES__"
     text = allrun_path.read_text()
-    if marker not in text:
-        raise RuntimeError(f"{allrun_path}: missing {marker} marker in Allrun template")
-    allrun_path.write_text(text.replace(marker, "1:"))
-
+    if marker in text:
+        allrun_path.write_text(text.replace(marker, "1:"))
     return adjoint_times
+
+
+def select_allrun(case_dir: Path) -> None:
+    """Use the ``Allrun.sdf_hex`` variant of a template as its Allrun when it exists."""
+    variant = case_dir / "Allrun.sdf_hex"
+    if variant.exists():
+        allrun = case_dir / "Allrun"
+        shutil.copy2(variant, allrun)
+        allrun.chmod(0o755)
+
 
 RX_CONVERGED = re.compile(
     r"^(\w+) solution converged in ([0-9.eE+-]+) iterations", re.M)
