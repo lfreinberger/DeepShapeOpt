@@ -689,6 +689,10 @@ class SdfHexMeshPipeline:
         # Newton lands exactly on the plane); without it they would stay on
         # the castellation staircase up to half a local cell off the plane.
         wall_ids = mesh.snap_point_ids()
+        if len(wall_ids) == 0:
+            raise RuntimeError(
+                "sdf_hex: the castellated mesh has no wall points; the design surface does not"
+                " intersect the mesh domain (the design vanished or left the design box)")
         point_keys_xyz = unpack_keys(mesh.point_keys)
         points0 = self.lattice.point_coords(point_keys_xyz)
         x0 = points0[wall_ids]

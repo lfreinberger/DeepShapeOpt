@@ -118,7 +118,7 @@
     }
   ],
   "optimizer": {
-    "max_step": 0.2,
+    "max_step": 0.05,
     "bounds": [
       -2.0,
       2.0
