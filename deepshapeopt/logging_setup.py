@@ -1,0 +1,115 @@
+"""Console and file logging of a run."""
+from __future__ import annotations
+
+import logging
+import sys
+import time
+import warnings
+from pathlib import Path
+from typing import Any
+
+
+def configure_logging(debug: bool, log_file: Path | None = None) -> None:
+    """Install a clean stdout (+ optional file) handler on the root logger.
+
+    Third-party libraries (notably DeepSDFStruct) attach their own handlers
+    to named loggers with a timestamped formatter; without intervention
+    those messages get emitted twice — once by their handler and once via
+    propagation through ours. Here we detach existing handlers, install
+    ours with a bare ``%(message)s`` format, strip the named loggers' own
+    handlers and let them propagate through ours (so e.g. the MMA / GCMMA
+    back-off lines reach run.log, not just the console). In non-debug mode
+    we also raise their level to ``WARNING`` and silence
+    ``DeepSDFStruct``-origin ``UserWarning``s (PyTorch tensor noise).
+    """
+    level = logging.DEBUG if debug else logging.INFO
+
+    formatter = logging.Formatter("%(message)s")
+    handlers: list[logging.Handler] = []
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    handlers.append(stream_handler)
+
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+        h.close()
+    for h in handlers:
+        root.addHandler(h)
+    root.setLevel(level)
+
+    # Matplotlib's font_manager logs a findfont score line per installed
+    # font at DEBUG; keep third-party debug chatter out even in debug mode.
+    for noisy in ("matplotlib", "PIL"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    for name, lg in list(logging.Logger.manager.loggerDict.items()):
+        if not isinstance(lg, logging.Logger) or not lg.handlers:
+            continue
+        # Strip their own handlers and route them through ours instead: single
+        # emission, and their messages (e.g. the MMA iteration / GCMMA back-off
+        # lines from DeepSDFStruct) land in run.log too, not just on the console.
+        for h in list(lg.handlers):
+            lg.removeHandler(h)
+        lg.propagate = True
+        if not debug:
+            lg.setLevel(logging.WARNING)
+
+    # Third-party libraries emit huge volumes of DEBUG/INFO records that
+    # drown out our own output. Pin them to WARNING regardless of mode so
+    # turning on debug for deepshapeopt code doesn't unleash matplotlib
+    # font-scoring, gustaf getter/setter traces, etc.
+    for noisy in (
+        "matplotlib",
+        "PIL",
+        "fontTools",
+        "gustaf",
+        "trimesh",
+        "h5py",
+        "asyncio",
+    ):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    if not debug:
+        warnings.filterwarnings("ignore", category=UserWarning, module=r"DeepSDFStruct\..*")
+        warnings.filterwarnings("ignore", category=UserWarning, module=r"torch\..*")
+
+def log_iteration_summary(logger: logging.Logger, **values: Any) -> None:
+    fields = []
+    for key, value in values.items():
+        if value is None:
+            continue
+        if isinstance(value, float):
+            fields.append(f"{key}={value:.6e}")
+        else:
+            fields.append(f"{key}={value}")
+    logger.info("  " + " | ".join(fields))
+
+def log_timing(
+    logger: logging.Logger,
+    iter_start: float,
+    run_start: float,
+    iteration_times: list[float],
+    total_iters: int,
+    current_iter: int,
+) -> None:
+    iter_time = time.time() - iter_start
+    iteration_times.append(iter_time)
+    avg_time = sum(iteration_times) / len(iteration_times)
+    remaining = max(0, total_iters - current_iter - 1)
+    eta = avg_time * remaining
+    elapsed = time.time() - run_start
+    logger.info(
+        "  time=%.2fs | avg=%.2fs | elapsed=%.2fmin | eta=%.2fmin",
+        iter_time,
+        avg_time,
+        elapsed / 60,
+        eta / 60,
+    )

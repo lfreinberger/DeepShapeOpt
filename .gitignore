@@ -36,9 +36,10 @@ flowRate/
 .vscode/*
 .claude/
 confidential/*
-tests/*
-!tests/test_hexmesh.py
-!tests/test_hexmesh_internal.py
+tests/**/results*/
+tests/**/foam_run_*/
+tests/env.sh
+tests/env.csh
 **/analysis/*
 **/analysis/**
 experiments/reconstruction/analysis/*
@@ -98,11 +99,10 @@ mlruns/
 slurm-*.out
 CLAUDE.md
 
-# Machine-specific test env (contains absolute paths)
-tests/env.csh
-tests/env.sh
+# Machine-specific environment (absolute paths); env.example.* is tracked
+env.sh
+env.csh
 
-m_cube
-
-run_optimization.slrm
-run_optimization_ffd.slrm
+# Local helper scripts and notes (not part of the library)
+tools/
+docs/

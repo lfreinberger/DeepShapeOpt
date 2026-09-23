@@ -29,11 +29,11 @@ import logging
 
 import numpy as np
 
-from deepshapeopt.mesh import (
-    _all_boundary_loops_from_triangles,
-    _build_shapely_multipolygon,
-    _make_plane_basis,
-    _project_to_plane,
+from .regions2d import (
+    all_boundary_loops_from_triangles,
+    build_shapely_multipolygon,
+    make_plane_basis,
+    project_to_plane,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,16 +67,16 @@ class CapSpec:
         basis ``(origin, axis_u, axis_v)``, built lazily from the STL cap
         triangles."""
         if self._polygon is None:
-            loops_3d = _all_boundary_loops_from_triangles(self.triangles)
+            loops_3d = all_boundary_loops_from_triangles(self.triangles)
             if not loops_3d:
                 raise ValueError(
                     f"Cap {self.patch!r} on axis {self.axis} at {self.value}: "
                     "no boundary loops on the cap triangles."
                 )
             all_pts = np.vstack(loops_3d)
-            origin, _normal, axis_u, axis_v = _make_plane_basis(all_pts, self.triangles)
-            loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
-            self._polygon = _build_shapely_multipolygon(loops_2d)
+            origin, _normal, axis_u, axis_v = make_plane_basis(all_pts, self.triangles)
+            loops_2d = [project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+            self._polygon = build_shapely_multipolygon(loops_2d)
             self._basis = (origin, axis_u, axis_v)
         return self._polygon, self._basis
 
@@ -304,7 +304,7 @@ def cap_subpatch_classifier(caps: list[CapSpec], oi_cfg: dict, debug_dir=None):
             sel = nearest == j
             if not np.any(sel):
                 continue
-            uv = _project_to_plane(centroids[sel], origin, axis_u, axis_v)
+            uv = project_to_plane(centroids[sel], origin, axis_u, axis_v)
             out[sel] = shapely.contains_xy(interior_2d, uv[:, 0], uv[:, 1])
         return out
 
@@ -355,7 +355,7 @@ def cap_carve_classifier(caps: list[CapSpec], h_fine: float):
             cand = coplanar & near & ~out
             if not np.any(cand):
                 continue
-            uv = _project_to_plane(centroids[cand], origin, axis_u, axis_v)
+            uv = project_to_plane(centroids[cand], origin, axis_u, axis_v)
             inside = shapely.contains_xy(buffered, uv[:, 0], uv[:, 1])
             idx = np.nonzero(cand)[0]
             out[idx[inside]] = True

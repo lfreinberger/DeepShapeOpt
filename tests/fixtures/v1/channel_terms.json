@@ -1,0 +1,262 @@
+{
+  "results_name": "results_channel_terms",
+  "reconstruction": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/flow_channel.stl",
+    "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
+    "model_checkpoint": "latest",
+    "tiling": [
+      3,
+      6,
+      6
+    ],
+    "spline_degree": [
+      1,
+      1,
+      1
+    ],
+    "design_domain": [
+      [
+        -5.5,
+        -12.0,
+        -12.0
+      ],
+      [
+        1.0,
+        12.0,
+        12.0
+      ]
+    ],
+    "n_uniform_samples": 100000,
+    "n_surface_samples": 500000,
+    "lr": 0.005,
+    "num_iterations": 10,
+    "batch_size": 4096,
+    "device": "cuda",
+    "code_bound": 1.0,
+    "code_reg_lambda": 0.001,
+    "reuse_parameter": true
+  },
+  "optimization": {
+    "debug": true,
+    "num_iter": 100,
+    "start_iter": 0,
+    "mesh_resolution": 12,
+    "max_step": 0.005,
+    "bounds": [
+      -1.0,
+      1.0
+    ],
+    "sensitivity_region_x": 2.0,
+    "objective_name": "uniformityDirectionalas1",
+    "solver_convergence": {
+      "mode": "fixed",
+      "solvers": {
+        "p1": {
+          "n_iters": 100
+        },
+        "as1": {
+          "n_iters": 200
+        },
+        "as2": {
+          "n_iters": 200
+        }
+      }
+    },
+    "mesh_pipeline": "sdf_hex",
+    "sdf_hex": {
+      "flow": "internal",
+      "domain": [
+        [
+          -6.0,
+          -21.0,
+          -21.0
+        ],
+        [
+          50.0,
+          21.0,
+          21.0
+        ]
+      ],
+      "base_cell_size": 2.0,
+      "mesh_box": [
+        [
+          -6.0,
+          -13.0,
+          -13.0
+        ],
+        [
+          2.0,
+          13.0,
+          13.0
+        ]
+      ],
+      "interface_level": 2,
+      "max_level": 3,
+      "band_max_level": 3,
+      "static_band_max_level": 1,
+      "fluid_side": "inside",
+      "seed_point": [
+        10.0,
+        0.0,
+        0.0
+      ],
+      "sign_probe_point": [
+        0.01,
+        0.0,
+        0.0
+      ],
+      "sign_probe_expect": "fluid",
+      "write_scale": 0.001,
+      "patches": {
+        "x_min": "outlet",
+        "x_max": "inlet",
+        "wall": "walls",
+        "sensitivity": "sensitivity_region"
+      },
+      "refinement_regions": [
+        {
+          "face": "x_min",
+          "distance": 1.0,
+          "level": 3
+        }
+      ],
+      "checkmesh_ignore": [
+        "skew"
+      ]
+    },
+    "outlet_interior": {
+      "enabled": true,
+      "patch_name": "outletInterior",
+      "source_patch": "outlet",
+      "method": "medial_axis",
+      "boundary_sample_ds": 0.05,
+      "strip_half_width": 0.2,
+      "min_dist_from_boundary": 0.3,
+      "prune_branch_len": 2.0,
+      "triangulation_engine": "triangle",
+      "debug": true
+    },
+    "constraint": {
+      "enabled": true,
+      "name": "lossesas2",
+      "target_mode": "relative_to_initial",
+      "target_factor": 1.0
+    },
+    "regularization": {
+      "enabled": true,
+      "type": "param_proximity",
+      "weight": 100.0
+    },
+    "lattice_smoothness": {
+      "enabled": true,
+      "weight": 1000.0,
+      "reference": "initial"
+    },
+    "pca": {
+      "enabled": false,
+      "n_components": 32,
+      "bounds": [
+        -3.5,
+        3.5
+      ],
+      "max_step": 0.04
+    },
+    "no_undercut": {
+      "enabled": true,
+      "mode": "constraint",
+      "method": "sdf",
+      "draw_direction": [
+        -1,
+        0,
+        0
+      ],
+      "draft_angle_deg": -1.0,
+      "exclude_axial_deg": 10.0,
+      "grid_spacing": 0.25,
+      "band_factor": 1.5,
+      "weight": 0.01,
+      "target_mode": "absolute",
+      "target_value": 0.001,
+      "exclude_region": null,
+      "formulation": "ks_margin",
+      "ks_rho": 50.0,
+      "scope": "all",
+      "silhouette_margin": 0.25
+    },
+    "taper": {
+      "enabled": false,
+      "mode": "objective",
+      "method": "sdf",
+      "flow_direction": [
+        1,
+        0,
+        0
+      ],
+      "max_taper_angle_deg": 30.0,
+      "grid_spacing": 0.5,
+      "band_factor": 1.5,
+      "weight": 100,
+      "target_mode": "relative_to_initial",
+      "target_factor": 1.0,
+      "exclude_region": [
+        [
+          -0.3,
+          -12.0,
+          -12.0
+        ],
+        [
+          1.0,
+          12.0,
+          12.0
+        ]
+      ]
+    },
+    "min_steg_length": {
+      "enabled": true,
+      "mode": "constraint",
+      "flow_direction": [
+        1,
+        0,
+        0
+      ],
+      "thickness_threshold_mm": 0.5,
+      "min_length_mm": 3.0,
+      "grid_spacing": 0.25,
+      "n_dirs": 8,
+      "ray_step_mm": 0.25,
+      "tau_mm": 0.1,
+      "slab_margin": 0.5,
+      "target_mode": "absolute_shortfall_mm",
+      "target_shortfall_mm": 0.2,
+      "exclude_region": null
+    },
+    "gcmma": {
+      "enabled": true,
+      "max_inner": 15,
+      "feas_tol": 0.005
+    },
+    "feasibility_restoration": {
+      "enabled": true,
+      "tol": 0.005,
+      "max_steps": 8,
+      "step_limit": null
+    },
+    "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "foam_runtime_root": "${DEEPSHAPEOPT_SCRATCH_DIR}",
+    "sensitivity": {
+      "loading_method": "conservative",
+      "scaling_to_mm": 0.001,
+      "warn_tol": 0.001
+    },
+    "lock_domain": {
+      "faces": [
+        "x_min"
+      ],
+      "safety": 0.01
+    },
+    "step_control": {
+      "enabled": true,
+      "rho_shrink": 0.25
+    }
+  }
+}

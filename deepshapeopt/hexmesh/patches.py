@@ -2,7 +2,7 @@
 
 Computes the interior region of the outlet cross-section once from the
 original STL's outlet cap -- using the same medial-axis / polygon-offset
-machinery as the snappy pipeline (:mod:`deepshapeopt.mesh`) -- and returns
+machinery (:mod:`deepshapeopt.hexmesh.regions2d`) -- and returns
 a vectorized centroid classifier for :class:`~deepshapeopt.hexmesh.polymesh.
 PatchPlan.face_subpatch`.  The classifier runs on the final face set of
 every build, so patch membership follows refinement changes even though
@@ -18,15 +18,15 @@ from typing import Callable
 
 import numpy as np
 
-from deepshapeopt.mesh import (
-    _all_boundary_loops_from_triangles,
-    _build_shapely_multipolygon,
-    _make_plane_basis,
-    _project_to_plane,
-    _prune_short_polylines,
-    _voronoi_medial_axis,
-    _write_medial_axis_debug,
-    _write_polygon_offset_debug,
+from .regions2d import (
+    all_boundary_loops_from_triangles,
+    build_shapely_multipolygon,
+    make_plane_basis,
+    project_to_plane,
+    prune_short_polylines,
+    voronoi_medial_axis,
+    write_medial_axis_debug,
+    write_polygon_offset_debug,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,12 +38,12 @@ _WORLD_AXES = np.eye(3, dtype=float)
 def _axis_aligned_cap_basis(triangles: np.ndarray):
     """World-aligned plane basis for an axis-aligned cap cross-section.
 
-    Unlike ``_make_plane_basis`` (whose in-plane orientation comes from the first
+    Unlike ``make_plane_basis`` (whose in-plane orientation comes from the first
     boundary edge and is therefore arbitrary), this pins ``(axis_u, axis_v)`` to the
     two world axes that span the cap plane, so user-specified 2D coordinates map
     directly to world in-plane coordinates: x-normal -> (y, z), y-normal -> (x, z),
     z-normal -> (x, y). The origin is placed at zero in both in-plane world components
-    and at the mean of the cap in the normal component, so ``_project_to_plane`` returns
+    and at the mean of the cap in the normal component, so ``project_to_plane`` returns
     raw world in-plane coordinates.
 
     Returns ``(origin, normal, axis_u, axis_v)`` to match the other basis helpers.
@@ -133,7 +133,7 @@ def strip_classifier_from_triangles(
 
     def classify(centroids: np.ndarray) -> np.ndarray:
         centroids = np.asarray(centroids, dtype=np.float64).reshape(-1, 3)
-        uv = _project_to_plane(centroids, origin, axis_u, axis_v)
+        uv = project_to_plane(centroids, origin, axis_u, axis_v)
         return shapely.contains_xy(interior_2d, uv[:, 0], uv[:, 1])
 
     return classify
@@ -151,7 +151,7 @@ def interior_region_2d(
     cfg = outlet_interior_cfg
     method = str(cfg.get("method", "medial_axis"))
 
-    loops_3d = _all_boundary_loops_from_triangles(triangles)
+    loops_3d = all_boundary_loops_from_triangles(triangles)
     if not loops_3d:
         raise ValueError("outlet_strip_classifier: no boundary loops on the outlet cap.")
     all_loop_pts = np.vstack(loops_3d)
@@ -160,17 +160,17 @@ def interior_region_2d(
     if method == "rectangle":
         origin, normal, axis_u, axis_v = _axis_aligned_cap_basis(triangles)
     else:
-        origin, normal, axis_u, axis_v = _make_plane_basis(all_loop_pts, triangles)
-    loops_2d = [_project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
-    poly_outlet = _build_shapely_multipolygon(loops_2d)
+        origin, normal, axis_u, axis_v = make_plane_basis(all_loop_pts, triangles)
+    loops_2d = [project_to_plane(l, origin, axis_u, axis_v) for l in loops_3d]
+    poly_outlet = build_shapely_multipolygon(loops_2d)
 
     if method == "medial_axis":
         ds = float(cfg.get("boundary_sample_ds", 0.05))
         half_width = float(cfg["strip_half_width"])
         min_dist = float(cfg.get("min_dist_from_boundary", 0.3))
         prune_len = float(cfg.get("prune_branch_len", 1.0))
-        medial = _voronoi_medial_axis(poly_outlet, ds=ds, min_dist=min_dist)
-        medial = _prune_short_polylines(medial, prune_len)
+        medial = voronoi_medial_axis(poly_outlet, ds=ds, min_dist=min_dist)
+        medial = prune_short_polylines(medial, prune_len)
         if medial.is_empty:
             raise ValueError(
                 "outlet_strip_classifier: empty medial axis "
@@ -190,7 +190,7 @@ def interior_region_2d(
             100.0 * interior_2d.area / poly_outlet.area,
         )
         if debug_dir is not None:
-            _write_medial_axis_debug(
+            write_medial_axis_debug(
                 Path(debug_dir), poly_outlet, medial, interior_2d,
                 origin, axis_u, axis_v,
                 params=dict(
@@ -220,7 +220,7 @@ def interior_region_2d(
             100.0 * interior_2d.area / poly_outlet.area,
         )
         if debug_dir is not None:
-            _write_polygon_offset_debug(
+            write_polygon_offset_debug(
                 Path(debug_dir), loops_2d, poly_outlet, interior_2d,
                 poly_outlet.difference(interior_2d),
                 origin, axis_u, axis_v, inset_distance=inset,
@@ -262,7 +262,7 @@ def interior_region_2d(
             100.0 * interior_2d.area / poly_outlet.area,
         )
         if debug_dir is not None:
-            _write_polygon_offset_debug(
+            write_polygon_offset_debug(
                 Path(debug_dir), loops_2d, poly_outlet, interior_2d,
                 poly_outlet.difference(interior_2d),
                 origin, axis_u, axis_v, inset_distance=float("nan"),

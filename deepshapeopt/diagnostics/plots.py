@@ -1,0 +1,465 @@
+"""Plots written every iteration: history, residuals, convergence diagnostics, snapshots."""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+import numpy as np
+import torch
+
+
+def _get_pyplot():
+    import matplotlib.pyplot as plt
+
+    return plt
+
+def _get_poly3d_collection():
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    return Poly3DCollection
+
+def to_numpy(x):
+    if hasattr(x, "detach"):
+        x = x.detach()
+    if hasattr(x, "cpu"):
+        x = x.cpu()
+    if hasattr(x, "numpy"):
+        return x.numpy()
+    return x
+
+_EXTRA_COLORS = ["tab:red", "tab:purple", "tab:brown", "tab:pink", "tab:olive"]
+
+_CON_COLORS = ["tab:orange", "tab:cyan", "tab:olive", "tab:gray", "tab:pink"]
+
+def _plot_obj_con_axes(
+    ax1,
+    iterations,
+    history_obj,
+    constraints,
+    obj_label="Objective",
+    history_obj_total=None,
+    obj_total_label="Objective (total)",
+    extra_series=None,
+):
+    """Plot objective on the left axis and one or more constraints on a shared right axis.
+
+    ``constraints`` is a list of ``(label, values, limit)`` tuples (``limit`` may be None);
+    each is drawn on the same twin axis with a distinct color and its own limit line.
+    ``history_obj_total`` (objective + penalties) and ``extra_series`` (list of
+    ``(label, values)``, e.g. individual penalty contributions) are overlaid on the left axis.
+    """
+    l1, = ax1.plot(iterations, history_obj, marker="o", color="tab:blue", label=obj_label)
+    ax1.set_ylabel(obj_label, color="tab:blue")
+    ax1.tick_params(axis="y", labelcolor="tab:blue")
+    ax1.grid(True, linestyle="--", alpha=0.4)
+    lines = [l1]
+
+    if history_obj_total is not None:
+        lt, = ax1.plot(
+            iterations, history_obj_total,
+            marker="^", linestyle="--", color="tab:green", label=obj_total_label,
+        )
+        lines.append(lt)
+
+    for i, (label, values) in enumerate(extra_series or []):
+        le, = ax1.plot(
+            iterations, values,
+            marker=".", linestyle=":", color=_EXTRA_COLORS[i % len(_EXTRA_COLORS)], label=label,
+        )
+        lines.append(le)
+
+    active = [
+        (label, np.asarray(values, dtype=float), limit)
+        for label, values, limit in (constraints or [])
+        if values is not None and not np.all(np.isnan(np.asarray(values, dtype=float)))
+    ]
+    if active:
+        ax2 = ax1.twinx()
+        ax2.set_ylabel("Constraint(s)", color="tab:orange")
+        ax2.tick_params(axis="y", labelcolor="tab:orange")
+        finite_values = []
+        for i, (label, values, limit) in enumerate(active):
+            color = _CON_COLORS[i % len(_CON_COLORS)]
+            lc, = ax2.plot(iterations, values, marker="s", color=color, label=label)
+            lines.append(lc)
+            finite_values.append(values[np.isfinite(values)])
+            if limit is not None:
+                ax2.axhline(limit, linestyle=":", color=color, alpha=0.7, label=f"{label} limit")
+                finite_values.append(np.asarray([limit], dtype=float))
+        allv = np.concatenate(finite_values) if finite_values else np.asarray([])
+        if allv.size and np.nanmin(allv) >= 0:
+            ax2.set_ylim(bottom=0)
+
+    labels = [line.get_label() for line in lines]
+    ax1.legend(lines, labels, loc="best")
+
+def plot_optimization_history(
+    history_obj,
+    history_con=None,
+    limit_con=None,
+    result_dir=None,
+    obj_label="Objective",
+    con_label="Constraint",
+    history_obj_total=None,
+    obj_total_label="Objective (total)",
+    extra_series=None,
+    constraints=None,
+):
+    """Plot objective (+ optional total / penalty curves) and one or more constraints.
+
+    ``constraints`` is a list of ``(label, values, limit)`` tuples for multiple constraints.
+    For backward compatibility, the single ``history_con`` / ``limit_con`` / ``con_label``
+    arguments are accepted and wrapped into a one-element ``constraints`` list.
+    """
+    plt = _get_pyplot()
+
+    history_obj = np.asarray(to_numpy(history_obj), dtype=float)
+
+    if constraints is None:
+        constraints = [(con_label, history_con, limit_con)] if history_con is not None else []
+
+    if history_obj_total is not None:
+        history_obj_total = np.asarray(to_numpy(history_obj_total), dtype=float)
+
+    extra_series = [
+        (label, np.asarray(to_numpy(values), dtype=float))
+        for label, values in (extra_series or [])
+    ]
+
+    # Normalize each constraint by its TARGET when one exists (curve = fraction of budget,
+    # limit line at 1.0); fall back to the initial value when there is no (or a zero) target.
+    # Normalizing by the initial is wrong for absolute-target drive-to-zero penalties: a clean
+    # start (e.g. W0 ~ 5e-5 vs target 1e-2) puts the normalized target line at ~200 and
+    # flattens every other curve on the shared axis.
+    con_abs, con_norm = [], []
+    for label, values, limit in constraints:
+        if values is None:
+            continue
+        v = np.asarray(to_numpy(values), dtype=float)
+        lim = None if limit is None else float(to_numpy(limit))
+        con_abs.append((label, v, lim))
+        if lim is not None and np.isfinite(lim) and lim != 0:
+            con_norm.append((f"{label} / target", v / lim, 1.0))
+        else:
+            finite = v[np.isfinite(v)]
+            c0 = finite[0] if finite.size and finite[0] != 0 else 1.0
+            con_norm.append((f"{label} / initial", v / c0, None if lim is None else lim / c0))
+
+    iterations = np.arange(len(history_obj))
+
+    obj_abs = history_obj.copy()
+    obj0 = history_obj[0] if history_obj[0] != 0 else 1.0
+    obj_norm = history_obj / obj0
+
+    # Normalize the total objective by the same J0 so both curves share scale.
+    obj_total_abs = history_obj_total.copy() if history_obj_total is not None else None
+    obj_total_norm = history_obj_total / obj0 if history_obj_total is not None else None
+
+    # Extra series (e.g. penalty contributions) share the objective scale / J0.
+    extra_abs = [(label, values) for label, values in extra_series]
+    extra_norm = [(label, values / obj0) for label, values in extra_series]
+
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
+
+    _plot_obj_con_axes(
+        ax_top, iterations, obj_abs, con_abs,
+        obj_label=obj_label,
+        history_obj_total=obj_total_abs,
+        obj_total_label=obj_total_label,
+        extra_series=extra_abs,
+    )
+    ax_top.set_title("Absolute values")
+
+    _plot_obj_con_axes(
+        ax_bot, iterations, obj_norm, con_norm,
+        obj_label="Objective (J/J\u2080)",
+        history_obj_total=obj_total_norm,
+        obj_total_label=f"{obj_total_label} / J\u2080",
+        extra_series=extra_norm,
+    )
+    ax_bot.set_xlabel("Iteration")
+    ax_bot.set_title("Normalized values")
+
+    plt.tight_layout()
+    plt.savefig(result_dir / "optimization_history.png", dpi=150)
+    plt.close()
+
+def plot_residuals_from_log(logfile, output_dir="."):
+    plt = _get_pyplot()
+
+    patterns = {
+        "Ux": re.compile(r"Solving for Ux, Initial residual = ([0-9eE+.\-]+)"),
+        "Uy": re.compile(r"Solving for Uy, Initial residual = ([0-9eE+.\-]+)"),
+        "Uz": re.compile(r"Solving for Uz, Initial residual = ([0-9eE+.\-]+)"),
+        "p": re.compile(r"Solving for p, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas1x": re.compile(r"Solving for Uaas1x, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas1y": re.compile(r"Solving for Uaas1y, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas1z": re.compile(r"Solving for Uaas1z, Initial residual = ([0-9eE+.\-]+)"),
+        "paas1": re.compile(r"Solving for paas1, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas2x": re.compile(r"Solving for Uaas2x, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas2y": re.compile(r"Solving for Uaas2y, Initial residual = ([0-9eE+.\-]+)"),
+        "Uaas2z": re.compile(r"Solving for Uaas2z, Initial residual = ([0-9eE+.\-]+)"),
+        "paas2": re.compile(r"Solving for paas2, Initial residual = ([0-9eE+.\-]+)"),
+        "continuity_global": re.compile(
+            r"time step continuity errors : sum local = [0-9eE+.\-]+, global = ([0-9eE+.\-]+), cumulative = [0-9eE+.\-]+"
+        ),
+        "continuity_cumulative": re.compile(
+            r"time step continuity errors : sum local = [0-9eE+.\-]+, global = [0-9eE+.\-]+, cumulative = ([0-9eE+.\-]+)"
+        ),
+    }
+
+    data = {k: [] for k in patterns}
+
+    with open(logfile, "r") as f:
+        for line in f:
+            for key, pat in patterns.items():
+                m = pat.search(line)
+                if m:
+                    data[key].append(float(m.group(1)))
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    def add_legend_if_needed():
+        handles, labels = plt.gca().get_legend_handles_labels()
+        if handles:
+            plt.legend()
+
+    # Skip first outer iteration: OpenFOAM reports an artificially low
+    # initial residual on iter 1 (uniform fields => RHS ~ 0).
+    skip = 0
+
+    # Primal residuals
+    fig1 = plt.figure(figsize=(9, 5))
+    for key in ["Ux", "Uy", "Uz", "p"]:
+        if len(data[key]) > skip:
+            plt.semilogy(range(skip + 1, len(data[key]) + 1), data[key][skip:], label=key)
+    plt.xlabel("Iteration")
+    plt.ylabel("Initial residual")
+    plt.title("Primal residuals")
+    plt.grid(True)
+    add_legend_if_needed()
+    plt.tight_layout()
+    fig1.savefig(os.path.join(output_dir, "residuals_primal.png"), dpi=150)
+    plt.close(fig1)
+
+    # Adjoint residuals 1
+    fig2 = plt.figure(figsize=(9, 5))
+    for key in ["Uaas1x", "Uaas1y", "Uaas1z", "paas1"]:
+        if len(data[key]) > skip:
+            plt.semilogy(range(skip + 1, len(data[key]) + 1), data[key][skip:], label=key)
+    plt.xlabel("Iteration")
+    plt.ylabel("Initial residual")
+    plt.title("Adjoint residuals")
+    plt.grid(True)
+    add_legend_if_needed()
+    plt.tight_layout()
+    fig2.savefig(os.path.join(output_dir, "residuals_adjoint.png"), dpi=150)
+    plt.close(fig2)
+
+    # Adjoint residuals 2
+    fig3 = plt.figure(figsize=(9, 5))
+    for key in ["Uaas2x", "Uaas2y", "Uaas2z", "paas2"]:
+        if len(data[key]) > skip:
+            plt.semilogy(range(skip + 1, len(data[key]) + 1), data[key][skip:], label=key)
+    plt.xlabel("Iteration")
+    plt.ylabel("Initial residual")
+    plt.title("Adjoint residuals 2")
+    plt.grid(True)
+    add_legend_if_needed()
+    plt.tight_layout()
+    fig3.savefig(os.path.join(output_dir, "residuals_adjoint_2.png"), dpi=150)
+    plt.close(fig3)
+
+    # Continuity
+    fig4 = plt.figure(figsize=(9, 5))
+    if len(data["continuity_global"]) > skip:
+        vals = [abs(x) for x in data["continuity_global"][skip:]]
+        plt.semilogy(range(skip + 1, skip + 1 + len(vals)), vals, label="|global continuity|")
+    if len(data["continuity_cumulative"]) > skip:
+        vals = [abs(x) for x in data["continuity_cumulative"][skip:]]
+        plt.semilogy(range(skip + 1, skip + 1 + len(vals)), vals, label="|cumulative continuity|")
+    plt.xlabel("Iteration")
+    plt.ylabel("Absolute value")
+    plt.title("Continuity error")
+    plt.grid(True)
+    add_legend_if_needed()
+    plt.tight_layout()
+    fig4.savefig(os.path.join(output_dir, "residuals_continuity.png"), dpi=150)
+    plt.close(fig4)
+
+def save_shape_snapshot(
+    verts: torch.Tensor,
+    faces: torch.Tensor,
+    design_domain: torch.Tensor,
+    out_path: Path,
+    view_axis: str = "x",
+    figsize=(6, 6),
+    dpi=200,
+    title: str | None = None,
+    show_axes: bool = True,
+):
+    plt = _get_pyplot()
+    Poly3DCollection = _get_poly3d_collection()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    v = verts.detach().cpu().numpy()
+    f = faces.detach().cpu().numpy()
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    # --- mesh ---
+    triangles = v[f]
+    mesh = Poly3DCollection(
+        triangles,
+        facecolor="lightgray",
+        edgecolor="black",
+        linewidth=0.05,
+        alpha=1.0,
+    )
+    ax.add_collection3d(mesh)
+
+    # --- equal scaling ---
+    mins = design_domain[0].cpu().numpy()
+    maxs = design_domain[1].cpu().numpy()
+
+    center = 0.5 * (mins + maxs)
+    max_range = 0.5 * (maxs - mins).max()
+
+    ax.set_xlim(center[0] - max_range, center[0] + max_range)
+    ax.set_ylim(center[1] - max_range, center[1] + max_range)
+    ax.set_zlim(center[2] - max_range, center[2] + max_range)
+
+    # --- coordinate axes ---
+    if show_axes:
+        axis_len = max_range * 1.2
+
+        # X axis (red)
+        ax.quiver(
+            center[0], center[1], center[2],
+            axis_len, 0, 0,
+            arrow_length_ratio=0.1
+        )
+        ax.text(center[0] + axis_len, center[1], center[2], "X")
+
+        # Y axis (green)
+        ax.quiver(
+            center[0], center[1], center[2],
+            0, axis_len, 0,
+            arrow_length_ratio=0.1
+        )
+        ax.text(center[0], center[1] + axis_len, center[2], "Y")
+
+        # Z axis (blue)
+        ax.quiver(
+            center[0], center[1], center[2],
+            0, 0, axis_len,
+            arrow_length_ratio=0.1
+        )
+        ax.text(center[0], center[1], center[2] + axis_len, "Z")
+
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+
+        ax.grid(True)
+
+    else:
+        ax.set_axis_off()
+
+    # --- view direction ---
+    view_map = {
+        "x":   (0, 0),
+        "-x":  (0, 180),
+        "y":   (0, 90),
+        "-y":  (0, -90),
+        "z":   (90, -90),
+        "-z":  (-90, -90),
+    }
+
+    if view_axis not in view_map:
+        raise ValueError(f"Unsupported view_axis '{view_axis}'")
+
+    elev, azim = view_map[view_axis]
+    ax.view_init(elev=elev, azim=azim)
+
+    if title is not None:
+        ax.set_title(title)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+
+def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
+    """Plot convergence diagnostic quantities over optimization iterations.
+
+    Parameters
+    ----------
+    diagnostics : dict
+        Keys: "obj_change", "grad_norm", "mma_ch", "step_inf", "step_ratio",
+        "wall_disp_max_mm", "wall_disp_mean_mm", "vol_constraint", "sens_norm", ...
+        Each value is a list of per-iteration scalars.
+    output_dir : Path
+        Directory where ``convergence_diagnostics.png`` is saved.
+    """
+    plt = _get_pyplot()
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    panels = [
+        ("obj_change",      "Relative objective change",                 True),
+        ("grad_norm",       "Gradient norm ||dJ/dp||",                   True),
+        ("mma_ch",          "MMA design change (ch)",                    True),
+        ("step_inf",        "Design step ||dx||_inf",                    True),
+        ("step_ratio",      "||dx||_inf / max_step (1 = move limit)",    False),
+        ("wall_disp_max_mm",  "Wall displacement max |d| [mm]",          True),
+        ("wall_disp_mean_mm", "Wall displacement mean d [mm] (+ wider)",  False),
+        ("kkt_norm",        "KKT residual (scaled)",                     True),
+        ("path_rho_fwd",    "rho_fwd: realized / g_k.dx",                False),
+        ("path_rho_trap",   "rho_trap: realized / trapezoid",            False),
+        ("step_control_rho", "Step control rho (merit)",                 False),
+        ("max_step",        "Move limit max_step",                       True),
+        ("vol_constraint",  "Volume constraint value",                   False),
+        ("sens_norm",       "Sensitivity norm ||s||",                    True),
+        ("sens_to_grad_ratio",         "||dJ/dp|| / ||s||",               True),
+        ("conservative_max_proj_dist", "Conservative max projection dist", True),
+        ("conservative_l1_ratio",      "Conservative L1 ratio (STL/OF)",  False),
+        ("conservative_vec_norm_ratio", "Conservative vec-norm ratio",   False),
+    ]
+
+    # Only plot panels that have data
+    panels = [(k, label, log) for k, label, log in panels if k in diagnostics and len(diagnostics[k]) > 0]
+    if not panels:
+        return
+
+    n = len(panels)
+    fig, axes = plt.subplots(n, 1, figsize=(8, 2.5 * n), sharex=True)
+    if n == 1:
+        axes = [axes]
+
+    for ax, (key, label, use_log) in zip(axes, panels):
+        vals = np.asarray(diagnostics[key], dtype=float)
+        iters = np.arange(1, len(vals) + 1)
+
+        if use_log:
+            ax.semilogy(iters, np.abs(vals), marker="o", markersize=3)
+        else:
+            ax.plot(iters, vals, marker="o", markersize=3)
+            ax.axhline(0, color="k", linewidth=0.5, linestyle="--")
+        if "rho" in key:
+            # Realized/predicted ratios: 1 is a perfect prediction; a ratio blows up when
+            # its prediction passes through zero, so keep the axis on the informative range.
+            ax.axhline(1, color="k", linewidth=0.5, linestyle=":")
+            ax.set_ylim(-2.0, 3.0)
+
+        ax.set_ylabel(label)
+        ax.grid(True, linestyle="--", alpha=0.4)
+
+    axes[-1].set_xlabel("Iteration")
+    fig.suptitle("Convergence diagnostics", fontsize=12)
+    plt.tight_layout()
+    plt.savefig(output_dir / "convergence_diagnostics.png", dpi=150)
+    plt.close(fig)
