@@ -58,20 +58,6 @@
       "justMyCode": false
     },
     {
-      "name": "Optimize: drag_cube/config_latent_cube_openfoam_cmp",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/scripts/optimize.py",
-      "args": [
-        "--config",
-        "experiments/drag_cube/config_latent_cube_openfoam_cmp.json"
-      ],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/env.sh",
-      "justMyCode": false
-    },
-    {
       "name": "Optimize: drag_cube/config_latent_cube_with_cylinders",
       "type": "debugpy",
       "request": "launch",
