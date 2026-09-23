@@ -1,177 +1,198 @@
 {
-    "results_name": "results_probe_dafoam_opt",
-    "reconstruction": {
-        "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
-        "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
-        "model_checkpoint": "latest",
-        "tiling": [
-            2,
-            2,
-            2
-        ],
-        "spline_degree": [
-            1,
-            1,
-            1
-        ],
-        "design_domain": [
-            [
-                -1.5,
-                -0.8,
-                -0.8
-            ],
-            [
-                1.5,
-                0.8,
-                0.8
-            ]
-        ],
+  "run": {
+    "name": "results_probe_dafoam_opt",
+    "device": "cuda",
+    "debug": true,
+    "num_iter": 60,
+    "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "scratch_dir": "${DEEPSHAPEOPT_SCRATCH_DIR}"
+  },
+  "geometry": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
+    "unit_to_metre": 1.0,
+    "design_domain": [
+      [
+        -1.5,
+        -0.8,
+        -0.8
+      ],
+      [
+        1.5,
+        0.8,
+        0.8
+      ]
+    ],
+    "flow": "external"
+  },
+  "parametrization": {
+    "type": "deepsdf",
+    "deepsdf": {
+      "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
+      "checkpoint": "latest",
+      "tiling": [
+        2,
+        2,
+        2
+      ],
+      "spline_degree": [
+        1,
+        1,
+        1
+      ],
+      "tiling_map": "hat",
+      "reconstruction": {
         "n_uniform_samples": 100000,
         "n_surface_samples": 500000,
         "lr": 0.005,
         "num_iterations": 15,
         "batch_size": 4096,
-        "code_reg_lambda": 0.0,
         "code_bound": 1.0,
+        "code_reg_lambda": 0.0,
         "grad_clip": 1.0,
         "eikonal_lambda": 0.0,
-        "device": "cuda",
-        "reuse_parameter": true,
-        "export_rec_samples_series": false,
-        "export_rec_samples_fine_until_epoch": 1,
-        "export_rec_samples_fine_every": 3
-    },
-    "optimization": {
-        "debug": true,
-        "num_iter": 60,
-        "convergence_obj_tol": 0.03,
-        "convergence_window": 15,
-        "mesh_resolution": 48,
-        "mesh_pipeline": "sdf_hex",
-        "sdf_hex": {
-            "domain": [
-                [
-                    -5.0,
-                    -5.0,
-                    -5.0
-                ],
-                [
-                    15.0,
-                    5.0,
-                    5.0
-                ]
-            ],
-            "base_cell_size": 1.0,
-            "mesh_box": [
-                [
-                    -2.0,
-                    -2.0,
-                    -2.0
-                ],
-                [
-                    2.0,
-                    2.0,
-                    2.0
-                ]
-            ],
-            "interface_level": 2,
-            "max_level": 5,
-            "snap_iters": 4,
-            "max_disp_frac": 0.7,
-            "enable_fast_path": true
-        },
-        "pca": {
-            "enabled": false,
-            "n_components": 32,
-            "bounds": [
-                -5,
-                5
-            ],
-            "max_step": 0.2,
-            "_note": "off: the latent codes are the design variables directly"
-        },
-        "max_step": 0.02,
+        "reuse": true,
+        "export_samples_series": false,
+        "export_samples_fine_until_epoch": 1,
+        "export_samples_fine_every": 3,
+        "export_resolution": 48
+      },
+      "pca": {
+        "enabled": false,
+        "n_components": 32,
         "bounds": [
-            -2.0,
-            2.0
+          -5,
+          5
         ],
-        "use_center_constraint": true,
-        "center_tol": 0.05,
-        "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
-        "foam_runtime_root": "/work/lfrei/DeepShapeOpt",
-        "sensitivity": {
-            "loading_method": "conservative",
-            "field_name": "pointSensVecadjS1ESI",
-            "objective_path": "optimisation/objective/0/dragadjS1",
-            "invert_normals": true,
-            "dafoam_output": "drag"
-        },
-        "forward_solver": "dafoam",
-        "dafoam": {
-            "container": "/usr2/lfrei/containers/dafoam.sif",
-            "n_procs": 16,
-            "binds": [
-                "/work",
-                "/usr2",
-                "/workdisk"
-            ],
-            "template": "dafoam_case",
-            "daOptions": {
-                "solverName": "DASimpleFoam",
-                "designSurfaces": [
-                    "dragObject"
-                ],
-                "primalMinResTol": 1e-07,
-                "primalMinResTolDiff": 1000.0,
-                "normalizeStates": {},
-                "adjEqnOption": {
-                    "gmresRelTol": 1e-06,
-                    "gmresAbsTol": 1e-14,
-                    "gmresTolDiff": 100.0,
-                    "pcFillLevel": 1,
-                    "jacMatReOrdering": "rcm",
-                    "gmresMaxIters": 1000,
-                    "gmresRestart": 1000
-                },
-                "checkMeshThreshold": {
-                    "maxAspectRatio": 1000.0,
-                    "maxNonOrth": 70.0,
-                    "maxSkewness": 5.0,
-                    "maxIncorrectlyOrientedFaces": 0
-                },
-                "printInterval": 100,
-                "printDAOptions": false
-            },
-            "functions": {
-                "dragForce": {
-                    "type": "force",
-                    "source": "patchToFace",
-                    "patches": [
-                        "dragObject"
-                    ],
-                    "directionMode": "fixedDirection",
-                    "direction": [
-                        1.0,
-                        0.0,
-                        0.0
-                    ],
-                    "scale": 2.0
-                }
-            },
-            "outputs": {
-                "drag": {
-                    "dragForce": 1.0
-                }
-            },
-            "pc_mode": "fvmatrix"
-        },
-        "noise_probe": {
-            "enabled": true,
-            "n_points": 9,
-            "h": 0.002,
-            "seed": 0,
-            "start_parameters": "results_cube_dafoam_nopca/optimization/parameters.pt",
-            "reuse_castellation": true
-        }
+        "max_step": 0.2
+      }
     }
+  },
+  "mesh": {
+    "sdf_hex": {
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "base_cell_size": 1.0,
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
+      "interface_level": 2,
+      "max_level": 5,
+      "snap_iters": 4,
+      "max_disp_frac": 0.7,
+      "enable_fast_path": true
+    }
+  },
+  "solver": {
+    "type": "dafoam",
+    "case": "dafoam_case",
+    "dafoam": {
+      "container": "${DAFOAM_SIF}",
+      "n_procs": 16,
+      "binds": [
+        "/work",
+        "/usr2",
+        "/workdisk"
+      ],
+      "daOptions": {
+        "solverName": "DASimpleFoam",
+        "designSurfaces": [
+          "dragObject"
+        ],
+        "primalMinResTol": 1e-07,
+        "primalMinResTolDiff": 1000.0,
+        "normalizeStates": {},
+        "adjEqnOption": {
+          "gmresRelTol": 1e-06,
+          "gmresAbsTol": 1e-14,
+          "gmresTolDiff": 100.0,
+          "pcFillLevel": 1,
+          "jacMatReOrdering": "rcm",
+          "gmresMaxIters": 1000,
+          "gmresRestart": 1000
+        },
+        "checkMeshThreshold": {
+          "maxAspectRatio": 1000.0,
+          "maxNonOrth": 70.0,
+          "maxSkewness": 5.0,
+          "maxIncorrectlyOrientedFaces": 0
+        },
+        "printInterval": 100,
+        "printDAOptions": false
+      },
+      "functions": {
+        "dragForce": {
+          "type": "force",
+          "source": "patchToFace",
+          "patches": [
+            "dragObject"
+          ],
+          "directionMode": "fixedDirection",
+          "direction": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "scale": 2.0
+        }
+      },
+      "outputs": {
+        "drag": {
+          "dragForce": 1.0
+        }
+      },
+      "pc_mode": "fvmatrix"
+    }
+  },
+  "objective": {
+    "metric": "drag"
+  },
+  "constraints": [
+    {
+      "type": "volume"
+    },
+    {
+      "type": "centroid",
+      "tol": 0.05
+    }
+  ],
+  "optimizer": {
+    "max_step": 0.02,
+    "bounds": [
+      -2.0,
+      2.0
+    ],
+    "convergence": {
+      "obj_tol": 0.03,
+      "window": 15
+    }
+  },
+  "diagnostics": {
+    "mode": "noise_probe",
+    "noise_probe": {
+      "n_points": 9,
+      "h": 0.002,
+      "seed": 0,
+      "start_parameters": "results_cube_dafoam_nopca/optimization/parameters.pt",
+      "reuse_castellation": true
+    }
+  }
 }

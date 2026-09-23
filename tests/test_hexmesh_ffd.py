@@ -4,7 +4,7 @@ Synthetic internal-flow layout shared with test_hexmesh_internal.py (straight
 square channel, fluid inside, caps on the domain x faces).  The design surface
 is the channel's wall mesh inside the design domain moved by an FFD
 displacement spline.  The channel crosses the box's x faces, so the i = 0 and
-i = n-1 control layers are never moved here (what ``lock_domain.faces:
+i = n-1 control layers are never moved here (what ``lock.faces:
 ["x_min", "x_max"]`` enforces in the driver).
 """
 
@@ -15,8 +15,8 @@ import pytest
 import torch
 import trimesh
 
-from deepshapeopt.domain_frame import DomainFrame
-from deepshapeopt.ffd import (
+from deepshapeopt.geometry.frame import DomainFrame
+from deepshapeopt.parametrization.ffd import (
     assert_face_layers_locked,
     build_ffd_deformation,
     crossed_design_faces,
@@ -28,7 +28,7 @@ from deepshapeopt.hexmesh.pipeline import SdfHexMeshPipeline
 from deepshapeopt.hexmesh.polymesh import face_pyramid_volumes
 from deepshapeopt.hexmesh.sdf_field import CompositeSDF
 from deepshapeopt.hexmesh.trimesh_sdf import TriMeshSDF
-from deepshapeopt.parameters import greville_points_3d
+from deepshapeopt.parametrization.locking import greville_points_3d
 from test_hexmesh_internal import (
     DESIGN_DOMAIN,
     DOMAIN,

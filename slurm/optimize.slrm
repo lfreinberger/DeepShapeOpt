@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --job-name=deepshapeopt
+#SBATCH --partition=gpu
+#SBATCH --time=96:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:1
+
+# One shape optimization on the cluster. Submit from the repository root of the experiment:
+#
+#     sbatch [-J name] [--partition=cpu --cpus-per-task=32 --gres=""] \
+#         ../DeepShapeOpt/slurm/optimize.slrm experiments/<case>/config.json
+#
+# --cpus-per-task must match numberOfSubdomains of the case (decomposeParDict) or
+# solver.dafoam.n_procs; on the cpu partition the config needs run.device "cpu".
+# The environment (data, model, results, scratch directories, DAFoam build) comes from the
+# repository's env.sh (copy env.example.sh); sbatch inherits the submitting shell, sourcing
+# here makes the job self-contained.
+set -euo pipefail
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
+[ -f env.sh ] && source env.sh
+if [ -z "${WM_PROJECT_DIR:-}" ] && [ -f /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc ]; then
+    source /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc
+fi
+echo "### node=$(hostname) affinity=$(taskset -cp $$ 2>/dev/null | sed 's/.*: //') nproc=$(nproc) config=$1"
+uv run deepshapeopt optimize --config "$1"

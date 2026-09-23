@@ -1,7 +1,7 @@
 """FFD-deformed wall geometry as the design SDF of the hex mesh pipeline.
 
 The design surface is the original wall mesh with its vertices inside the design
-domain moved by a free-form deformation (``deepshapeopt.ffd.FFDDeformation``):
+domain moved by a free-form deformation (``deepshapeopt.parametrization.ffd.FFDDeformation``):
 ``V_def = V + D(V)``.  :class:`FFDMeshSDF` is a :class:`TriMeshSDF` on that
 deformed mesh (all detached queries -- castellation, Newton snap steps, sign --
 run igl on the deformed numpy vertices) plus a ``phi_ext`` whose *value* is the
@@ -152,18 +152,33 @@ class FFDMeshSDF(TriMeshSDF):
 class FFDDesignSDF:
     """:class:`~deepshapeopt.hexmesh.design.DesignSDF` for the FFD parametrization.
 
-    Deforms the pipeline's fixed outer geometry (``outer``, the
-    :class:`TriMeshSDF` of the original wall mesh) with ``deformation`` inside the
-    design domain and returns an :class:`FFDMeshSDF` on the result.  The outer
-    mesh must be consistently oriented with outward normals (checked once).
+    Deforms a triangle mesh with ``deformation`` inside the design domain and returns an
+    :class:`FFDMeshSDF` on the result. For internal flow the mesh is the pipeline's fixed
+    outer geometry (``outer``, the :class:`TriMeshSDF` of the wall mesh); for external flow
+    it is the design object itself (``base_mesh``, the input mesh, fluid outside). The mesh
+    must be consistently oriented with outward normals (checked once).
     """
 
-    def __init__(self, deformation, frame):
+    def __init__(self, deformation, frame, base_mesh=None):
         self.deformation = deformation
         self.frame = frame
+        self.base_mesh = base_mesh
+        self._object: TriMeshSDF | None = None
         self._base_key: int | None = None
         self._v0: torch.Tensor | None = None
         self._idx_in: torch.Tensor | None = None
+
+    def _object_sdf(self, device) -> TriMeshSDF:
+        """The design object as a closed mesh with the fluid outside (external flow)."""
+        if self._object is None:
+            if self.base_mesh is None:
+                raise ValueError("FFD external flow needs the input mesh as base_mesh")
+            self._object = TriMeshSDF(
+                np.asarray(self.base_mesh.vertices, dtype=np.float64),
+                np.asarray(self.base_mesh.faces, dtype=np.int64),
+                fluid_side="outside", device=device,
+            )
+        return self._object
 
     def _base_vertices(self, outer: TriMeshSDF) -> tuple[torch.Tensor, torch.Tensor]:
         if self._base_key != id(outer):
@@ -190,10 +205,7 @@ class FFDDesignSDF:
 
     def make_sdf(self, *, sign: float, device, outer: Any | None) -> FFDMeshSDF:
         if outer is None:
-            raise NotImplementedError(
-                "The FFD parametrization needs a fixed outer geometry to deform: "
-                "use sdf_hex.flow == 'internal'."
-            )
+            outer = self._object_sdf(device)
         expected = -1.0 if outer.fluid_side == "inside" else 1.0
         if float(sign) != expected:
             raise ValueError(

@@ -1,0 +1,109 @@
+{
+  "run": {
+    "name": "results_smoke_drag_ffd",
+    "device": "cuda",
+    "debug": true,
+    "num_iter": 2,
+    "scratch_dir": "${DEEPSHAPEOPT_SCRATCH_DIR}",
+    "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}"
+  },
+  "geometry": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
+    "unit_to_metre": 1.0,
+    "design_domain": [
+      [
+        -0.9,
+        -0.9,
+        -0.9
+      ],
+      [
+        0.9,
+        0.9,
+        0.9
+      ]
+    ],
+    "flow": "external"
+  },
+  "parametrization": {
+    "type": "ffd",
+    "ffd": {
+      "n_control_points": [
+        5,
+        5,
+        5
+      ],
+      "spline_degree": [
+        2,
+        2,
+        2
+      ]
+    }
+  },
+  "mesh": {
+    "sdf_hex": {
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "base_cell_size": 1.0,
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
+      "interface_level": 2,
+      "max_level": 4,
+      "snap_iters": 4,
+      "max_disp_frac": 0.7,
+      "enable_fast_path": true
+    }
+  },
+  "solver": {
+    "type": "openfoam",
+    "case": "../../experiments/drag_cube/foam_case"
+  },
+  "objective": {
+    "metric": "drag"
+  },
+  "constraints": [
+    {
+      "type": "volume"
+    },
+    {
+      "type": "centroid",
+      "tol": 0.05
+    },
+    {
+      "type": "ffd_jacobian",
+      "threshold": 0.1,
+      "samples": 8,
+      "ks_rho": 50.0
+    }
+  ],
+  "optimizer": {
+    "max_step": 0.05,
+    "bounds": [
+      -5.0,
+      5.0
+    ],
+    "convergence": {
+      "obj_tol": 0.0002,
+      "window": 1
+    }
+  }
+}

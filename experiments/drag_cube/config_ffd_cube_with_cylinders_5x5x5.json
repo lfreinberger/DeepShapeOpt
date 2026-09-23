@@ -1,53 +1,109 @@
 {
-    "results_name": "results_ffd_cube_with_cylinders_5x5x5",
-    "reconstruction": {
-        "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
-        "n_control_points": [
-            5,
-            5,
-            5
-        ],
-        "spline_degree": [
-            2,
-            2,
-            2
-        ],
-        "design_domain": [
-            [
-                -0.9,
-                -0.9,
-                -0.9
-            ],
-            [
-                0.9,
-                0.9,
-                0.9
-            ]
-        ],
-        "device": "cuda"
-    },
-    "optimization": {
-        "debug": false,
-        "num_iter": 60,
-        "convergence_obj_tol": 0.03,
-        "convergence_window": 15,
-        "mesh_resolution": 64,
-        "max_step": 0.05,
-        "bounds": [
-            -2.0,
-            2.0
-        ],
-        "use_center_constraint": true,
-        "center_tol": 0.05,
-        "heavy_data_output_path": "${DEEPSHAPEOPT_RESULTS_DIR}",
-        "sensitivity": {
-            "loading_method": "conservative",
-            "field_name": "pointSensVecadjS1ESI",
-            "objective_path": "optimisation/objective/0/dragadjS1",
-            "invert_normals": true
-        },
-        "use_jacobian_constraint": true,
-        "jacobian_threshold": 0.1,
-        "jacobian_samples": 8
+  "run": {
+    "name": "results_ffd_cube_with_cylinders_5x5x5",
+    "device": "cuda",
+    "debug": false,
+    "num_iter": 60,
+    "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "scratch_dir": "${DEEPSHAPEOPT_SCRATCH_DIR}"
+  },
+  "geometry": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_with_cylinders.stl",
+    "unit_to_metre": 1.0,
+    "design_domain": [
+      [
+        -0.9,
+        -0.9,
+        -0.9
+      ],
+      [
+        0.9,
+        0.9,
+        0.9
+      ]
+    ],
+    "flow": "external"
+  },
+  "parametrization": {
+    "type": "ffd",
+    "ffd": {
+      "n_control_points": [
+        5,
+        5,
+        5
+      ],
+      "spline_degree": [
+        2,
+        2,
+        2
+      ]
     }
+  },
+  "mesh": {
+    "sdf_hex": {
+      "domain": [
+        [
+          -5.0,
+          -5.0,
+          -5.0
+        ],
+        [
+          15.0,
+          5.0,
+          5.0
+        ]
+      ],
+      "base_cell_size": 1.0,
+      "mesh_box": [
+        [
+          -2.0,
+          -2.0,
+          -2.0
+        ],
+        [
+          2.0,
+          2.0,
+          2.0
+        ]
+      ],
+      "interface_level": 2,
+      "max_level": 5,
+      "snap_iters": 4,
+      "max_disp_frac": 0.7,
+      "enable_fast_path": true
+    }
+  },
+  "solver": {
+    "type": "openfoam",
+    "case": "foam_case"
+  },
+  "objective": {
+    "metric": "drag"
+  },
+  "constraints": [
+    {
+      "type": "volume"
+    },
+    {
+      "type": "centroid",
+      "tol": 0.05
+    },
+    {
+      "type": "ffd_jacobian",
+      "threshold": 0.1,
+      "samples": 8,
+      "ks_rho": 50.0
+    }
+  ],
+  "optimizer": {
+    "max_step": 0.05,
+    "bounds": [
+      -2.0,
+      2.0
+    ],
+    "convergence": {
+      "obj_tol": 0.03,
+      "window": 15
+    }
+  }
 }

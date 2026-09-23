@@ -2,6 +2,9 @@
 cd "${0%/*}" || exit                                # Run from this directory
 . ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
 #------------------------------------------------------------------------------
+# Allrun variant for mesh_pipeline "sdf_hex": the body-fitted hex mesh is
+# generated in Python directly from the SDF and already sits in
+# constant/polyMesh -- no surfaceFeatureExtract / blockMesh / snappyHexMesh.
 
 # Helper function to time each step
 timeStep() {
@@ -29,47 +32,18 @@ timeStep() {
 
 # Alternative decomposeParDict name:
 decompDict="-decomposeParDict system/decomposeParDict.20"
-## Standard decomposeParDict name:
-# unset decompDict
-
-# touch open.foam
-
-timeStep "surfaceFeatureExtract" runApplication surfaceFeatureExtract
-
-timeStep "blockMesh" runApplication blockMesh
 
 timeStep "decomposePar" runApplication $decompDict decomposePar
-
-# Using distributedTriSurfaceMesh?
-if foamDictionary -entry geometry -value system/snappyHexMeshDict | \
-   grep -q distributedTriSurfaceMesh
-then
-    echo "surfaceRedistributePar does not need to be run anymore"
-    echo " - distributedTriSurfaceMesh will do on-the-fly redistribution"
-fi
-
-timeStep "snappyHexMesh" runParallel $decompDict snappyHexMesh -overwrite
-
-#- For non-parallel running: - set the initial fields
-# restore0Dir
 
 #- For parallel running: set the initial fields
 timeStep "restore0Dir" restore0Dir -processor
 
-timeStep "patchSummary" runParallel $decompDict patchSummary
+timeStep "checkMesh" runParallel $decompDict checkMesh -constant
 
 timeStep "potentialFoam" runParallel $decompDict potentialFoam -writephi
 
-timeStep "checkMesh" runParallel $decompDict checkMesh -writeFields '(nonOrthoAngle)' -constant
-
 timeStep "main solver ($(getApplication))" runParallel $decompDict $(getApplication)
 
-timeStep "reconstructParMesh" runApplication reconstructParMesh -constant
-
 timeStep "reconstructPar" runApplication reconstructPar -latestTime
-
-timeStep "postProcess" runApplication postProcess -func sampleDict -latestTime
-
-
 
 #------------------------------------------------------------------------------

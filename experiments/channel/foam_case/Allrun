@@ -1,0 +1,33 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+# Allrun variant for mesh_pipeline "sdf_hex": the body-fitted hex mesh is
+# generated in Python directly from the SDF and already sits in
+# constant/polyMesh -- no surfaceTransformPoints / blockMesh /
+# surfaceFeatureExtract / snappyHexMesh (the Python writer applies the
+# mm -> m scale via sdf_hex.write_scale).
+
+decompDict="-decomposeParDict system/decomposeParDict.20"
+
+runStep() {
+    stepName="$1"
+    shift
+    "$@"
+    status=$?
+    [ $status -ne 0 ] && { echo "Failed: $stepName"; exit $status; }
+}
+
+runStep "decomposePar" runApplication $decompDict decomposePar -copyZero
+
+runStep "restore0Dir" restore0Dir -processor
+
+#runStep "patchSummary" runParallel $decompDict patchSummary
+
+runStep "checkMesh" runParallel $decompDict checkMesh -constant
+
+runStep "solver" runParallel $decompDict $(getApplication)
+
+runStep "reconstructPar" runApplication reconstructPar -time __ADJOINT_TIMES__ -fields '("pointSens.*" "faceSens.*" "p" "U")'
+
+#------------------------------------------------------------------------------

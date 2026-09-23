@@ -304,7 +304,7 @@ class FFDParametrization:
         self.deformation = self.setup.deformation
         self.spline_sp = self.setup.disp_spline_sp
         self.control_dims = list(self.setup.n_control_points)
-        self.design_sdf = FFDDesignSDF(self.deformation, self.frame)
+        self.design_sdf = FFDDesignSDF(self.deformation, self.frame, base_mesh=self.mesh_orig)
 
     @property
     def param(self) -> torch.nn.Parameter:

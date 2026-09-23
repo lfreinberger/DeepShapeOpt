@@ -1,0 +1,115 @@
+Run results_smoke_drag_ffd: ffd parametrization, openfoam solver, objective drag, 3 constraint(s)
+FFD: [5, 5, 5] control points (degree [2, 2, 2]) over the design domain -> 375 displacement DOFs
+lock: no boxes configured; every control point is free to move
+FFD: wall geometry crosses design-domain faces []
+Knot grid exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/reconstruction/knot_grid_paramspace.vtp
+Design volume (paramspace) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/reconstruction/design_volume_paramspace.vts
+Control lattice exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/reconstruction/control_lattice_paramspace.vtp
+Loaded static outer octree from /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/optimization/static_octree_63248a241cac49d8.npz (6416 cells)
+OpenFOAM case /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd, adjoint write times {'adjS1': '2000'}
+FFD design geometry: 782 of 782 wall-mesh vertices inside the design domain
+SDF sign convention OK: phi([0. 0. 0.]) = -5.3843e-01 (solid)
+Inner castellation: 11864 fluid cells (levels 1..4), 3488 solid removed, 0 pocket cells removed
+polyMesh: 18280 cells, 23730 points, 60248 faces (56992 internal, wall 2256)
+Snap: 2258 points, residual |phi| median 5.551e-17 max 9.860e-09, lam<1 for 0 points
+Hex mesh build: {'n_cells': 18280, 'n_points': 23730, 'n_wall_faces': 2256, 'n_wall_points': 2258, 'n_relaxed_points': 0, 'n_hanging_points': 4272, 'snap_residual_max': 9.859665084377411e-09, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 2256}, 'build_seconds': 1.94828200340271}
+Initial volume 1.218363, centroid [1.3506077038982767e-06, 2.488519839971559e-06, 1.7960455807042308e-05]
+=== Optimization iteration 0/1 ===
+Inner castellation: 11864 fluid cells (levels 1..4), 3488 solid removed, 0 pocket cells removed
+Castellation unchanged - reusing mesh connectivity
+Snap: 2258 points, residual |phi| median 5.551e-17 max 9.860e-09, lam<1 for 0 points
+Hex mesh build: {'n_cells': 18280, 'n_points': 23730, 'n_wall_faces': 2256, 'n_wall_points': 2258, 'n_relaxed_points': 0, 'n_hanging_points': 4272, 'snap_residual_max': 9.859665084377411e-09, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 2256}, 'build_seconds': 0.8966023921966553}
+Control lattice (physical) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/optimization/control_lattice.vtp
+Control volume (physical) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/optimization/control_volume.vts
+Control lattice (physical) exported to: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/control_lattice_series/control_lattice_0000.vtp
+Control volume (physical) exported to: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/control_lattice_series/control_volume_0000.vts
+(foam_run_smoke_drag_ffd) Running Allclean... ━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+Wrote polyMesh to /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd/constant/polyMesh
+Running OpenFOAM
+Running decomposePar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd
+Finished: decomposePar in 0 min 0 s
+==================================================
+Restore 0/ from 0.orig/  [processor dirs]
+Finished: restore0Dir in 0 min 1 s
+==================================================
+Running checkMesh (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: checkMesh in 0 min 1 s
+==================================================
+Running potentialFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: potentialFoam in 0 min 1 s
+==================================================
+Running adjointOptimisationFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: main solver (adjointOptimisationFoam) in 0 min 7 s
+==================================================
+Running reconstructPar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd
+Finished: reconstructPar in 0 min 0 s
+==================================================
+OpenFOAM finished in 10.84 seconds
+Solver iterations: op1 246 converged, adjS1 836 converged
+Adjoint field pointSensVecadjS1ESI is not at the predicted time 2000; using 1082 (an adjoint solver stopped before nIters, e.g. via residualControl).
+Loaded 2258 wall point sensitivities (|s| max 5.266e-01)
+drag: J=3.625980e+01 |dJ/dx|=6.301e+00 |dJ/dp|=9.647e+00
+volume: initial 0.000000e+00, target 0.000000e+00
+volume (constraint): value=0.000000e+00 target=0.000000e+00 |grad|=5.493e-01 
+centroid: initial -2.500000e-03, target 0.000000e+00
+centroid (constraint): value=-2.500000e-03 target=0.000000e+00 |grad|=1.505e-11 
+ffd_jacobian: initial -7.752335e-01, target 0.000000e+00
+ffd_jacobian (constraint): value=-7.752335e-01 target=0.000000e+00 |grad|=3.885e-01 
+Saved multiblock VTK for ParaView: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/vtk_series/iter_0000.vtm
+MMA scaling: objective / 3.626e+01, constraint rows / [1.0, 1.0, 0.1]
+It.:    1 | J/J0: 1.000e+00 | G (scaled): [0.0, -0.0024999999441206455, -7.752335074992098] | ch.: 1.000e+00 | KKT: 1.543e-01 | asy(upp/low, x max_step): 1.00/1.00 | asy_bind: 1.000
+(foam_run_smoke_drag_ffd) Running Allclean... ━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  objective=3.625980e+01 | volume=0.000000e+00 | volume_target=0.000000e+00 | centroid=-2.500000e-03 | centroid_target=0.000000e+00 | ffd_jacobian=-7.752335e-01 | ffd_jacobian_target=0.000000e+00 | mma_ch=1.000000e+00 | step_ratio=8.218073e-01 | grad_norm=9.647258e+00 | kkt_norm=1.543231e-01 | lam=4.151104e-01 | wall_disp_max=2.367265e-02 | wall_disp_mean=-1.015826e-03
+  time=17.15s | avg=17.15s | elapsed=0.32min | eta=0.29min
+/usr2/lfrei/ProjectsPhD/DeepShapeOpt/deepshapeopt/driver.py:323: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
+Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:838.)
+  record.update(obj_change=obj_change, step_inf=step_inf, max_param=float(p.param.abs().max()),
+=== Optimization iteration 1/1 ===
+2:1 balance converged after 2 rounds
+Inner castellation: 12390 fluid cells (levels 1..4), 3480 solid removed, 0 pocket cells removed
+polyMesh: 18806 cells, 24296 points, 61866 faces (58590 internal, wall 2276)
+Snap: 2278 points, residual |phi| median 6.781e-09 max 5.294e-03, lam<1 for 25 points
+Quality guard round 0: 2 bad faces, relaxing 8 points
+Hex mesh build: {'n_cells': 18806, 'n_points': 24296, 'n_wall_faces': 2276, 'n_wall_points': 2278, 'n_relaxed_points': 8, 'n_hanging_points': 4363, 'snap_residual_max': 0.005293721798807383, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 2276}, 'build_seconds': 1.1767570972442627}
+Control lattice (physical) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/optimization/control_lattice.vtp
+Control volume (physical) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/optimization/control_volume.vts
+Control lattice (physical) exported to: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/control_lattice_series/control_lattice_0001.vtp
+Control volume (physical) exported to: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/control_lattice_series/control_volume_0001.vts
+(foam_run_smoke_drag_ffd) Running Allclean... ━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+Wrote polyMesh to /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd/constant/polyMesh
+Running OpenFOAM
+Running decomposePar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd
+Finished: decomposePar in 0 min 1 s
+==================================================
+Restore 0/ from 0.orig/  [processor dirs]
+Finished: restore0Dir in 0 min 0 s
+==================================================
+Running checkMesh (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: checkMesh in 0 min 1 s
+==================================================
+Running potentialFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: potentialFoam in 0 min 1 s
+==================================================
+Running adjointOptimisationFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd 
+Finished: main solver (adjointOptimisationFoam) in 0 min 7 s
+==================================================
+Running reconstructPar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_ffd
+Finished: reconstructPar in 0 min 1 s
+==================================================
+OpenFOAM finished in 11.11 seconds
+Solver iterations: op1 252 converged, adjS1 851 converged
+Adjoint field pointSensVecadjS1ESI is not at the predicted time 2000; using 1103 (an adjoint solver stopped before nIters, e.g. via residualControl).
+Loaded 2278 wall point sensitivities (|s| max 4.763e-01)
+drag: J=3.604960e+01 |dJ/dx|=6.116e+00 |dJ/dp|=9.370e+00
+volume (constraint): value=-1.054204e-02 target=0.000000e+00 |grad|=5.500e-01 
+centroid (constraint): value=-2.474207e-03 target=0.000000e+00 |grad|=1.597e-03 
+ffd_jacobian (constraint): value=-7.517534e-01 target=0.000000e+00 |grad|=6.216e-01 
+Saved multiblock VTK for ParaView: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd/vtk_series/iter_0001.vtm
+path consistency: predicted -1.179e-02 (end of step -1.001e-02) realized -5.797e-03 of |J0| -> rho_fwd +0.492 rho_trap +0.532 | constraint rho_fwd +1.088 rho_trap +1.067
+It.:    2 | J/J0: 9.942e-01 | G (scaled): [-0.010542035102844238, -0.00247420696541667, -7.51753403697589] | ch.: 5.502e-01 | KKT: 1.451e-01 | asy(upp/low, x max_step): 1.00/1.00 | asy_bind: 1.000
+(foam_run_smoke_drag_ffd) Running Allclean... ━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+  objective=3.604960e+01 | volume=-1.054204e-02 | volume_target=0.000000e+00 | centroid=-2.474207e-03 | centroid_target=0.000000e+00 | ffd_jacobian=-7.517534e-01 | ffd_jacobian_target=0.000000e+00 | mma_ch=5.501594e-01 | step_ratio=7.035984e-01 | grad_norm=9.370433e+00 | kkt_norm=1.451414e-01 | lam=3.510191e-01 | wall_disp_max=3.115350e-02 | wall_disp_mean=5.647146e-04
+  time=16.61s | avg=16.88s | elapsed=0.60min | eta=0.00min
+(foam_run_smoke_drag_ffd) Running Allclean... ━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+Results written to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_ffd
+Final objective: 3.604960e+01

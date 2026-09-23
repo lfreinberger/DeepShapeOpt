@@ -1,0 +1,31 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  v2506                                 |
+|   \\  /    A nd           | Website:  www.openfoam.com                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+numberOfSubdomains 16;
+
+// scotch graph-balances any subdomain count automatically (no manual n factoring);
+// must equal --cpus-per-task in run_optimization.slrm. The hierarchical alternative
+// for 16 would be n (2 4 2) (extra cuts on the long y extent of mesh_box).
+method          scotch;
+// method          hierarchical;
+// method          ptscotch;
+
+coeffs
+{
+    n           (2 4 2);  // only used by method hierarchical
+}
+
+// ************************************************************************* //

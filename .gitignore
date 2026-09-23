@@ -33,7 +33,7 @@ sandbox/
 tiling_results/
 results_tiling/
 flowRate/
-.vscode/*
+.vscode/settings.json
 .claude/
 confidential/*
 tests/**/results*/

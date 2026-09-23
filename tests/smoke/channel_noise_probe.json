@@ -1,0 +1,237 @@
+{
+  "run": {
+    "name": "results_smoke_channel_noise_probe",
+    "device": "cuda",
+    "debug": false,
+    "num_iter": 150,
+    "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}",
+    "scratch_dir": "${DEEPSHAPEOPT_SCRATCH_DIR}"
+  },
+  "geometry": {
+    "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/flow_channel.stl",
+    "unit_to_metre": 0.001,
+    "design_domain": [
+      [
+        -4.0,
+        -12.0,
+        3.5
+      ],
+      [
+        4.0,
+        12.0,
+        25.0
+      ]
+    ],
+    "flow": "internal"
+  },
+  "parametrization": {
+    "type": "deepsdf",
+    "deepsdf": {
+      "model_path": "${DEEPSHAPEOPT_MODEL_DIR}/primitives_cl32",
+      "checkpoint": "latest",
+      "tiling": [
+        2,
+        4,
+        4
+      ],
+      "spline_degree": [
+        2,
+        2,
+        2
+      ],
+      "tiling_map": "cosine",
+      "reconstruction": {
+        "n_uniform_samples": 100000,
+        "n_surface_samples": 500000,
+        "lr": 0.005,
+        "num_iterations": 3,
+        "batch_size": 4096,
+        "code_bound": 1.0,
+        "code_reg_lambda": 0.001,
+        "reuse": true,
+        "export_resolution": 16
+      }
+    },
+    "lock": {
+      "faces": [
+        "z_min",
+        "z_max"
+      ],
+      "safety": 0.01
+    }
+  },
+  "mesh": {
+    "sdf_hex": {
+      "domain": [
+        [
+          -6.0,
+          -60.0,
+          0.0
+        ],
+        [
+          6.0,
+          14.0,
+          38.0
+        ]
+      ],
+      "base_cell_size": 2.0,
+      "mesh_box": [
+        [
+          -6.0,
+          -14.0,
+          2.0
+        ],
+        [
+          6.0,
+          14.0,
+          26.0
+        ]
+      ],
+      "interface_level": 2,
+      "max_level": 4,
+      "band_max_level": 3,
+      "static_band_max_level": 2,
+      "fluid_side": "inside",
+      "caps": [
+        {
+          "axis": "y",
+          "value": -60.0,
+          "patch": "inlet"
+        },
+        {
+          "axis": "z",
+          "value": 3.1817,
+          "patch": "outlet",
+          "tol": 0.001
+        }
+      ],
+      "seed_point": [
+        0.0,
+        -57.0,
+        2.0
+      ],
+      "sign_probe_point": [
+        0.0,
+        0.0,
+        10.0
+      ],
+      "sign_probe_expect": "fluid",
+      "patches": {
+        "z_min": "symmetry",
+        "wall": "walls",
+        "sensitivity": "sensitivity_region"
+      },
+      "patch_types": {
+        "symmetry": "symmetry"
+      },
+      "refinement_regions": [
+        {
+          "box": [
+            [
+              -6.0,
+              -60.0,
+              0.0
+            ],
+            [
+              6.0,
+              14.0,
+              38.0
+            ]
+          ],
+          "level": 3
+        },
+        {
+          "box": [
+            [
+              -2.5,
+              -8.5,
+              2.0
+            ],
+            [
+              2.5,
+              8.5,
+              4.5
+            ]
+          ],
+          "level": 3
+        },
+        {
+          "box": [
+            [
+              -1.8,
+              -7.6,
+              2.8
+            ],
+            [
+              1.8,
+              7.6,
+              3.6
+            ]
+          ],
+          "level": 4
+        }
+      ],
+      "checkmesh_ignore": [
+        "skew"
+      ],
+      "outlet_interior": {
+        "patch_name": "outletInterior",
+        "source_patch": "outlet",
+        "method": "rectangle",
+        "rectangle": {
+          "min": [
+            -0.1,
+            -6.27
+          ],
+          "max": [
+            0.1,
+            6.27
+          ]
+        }
+      }
+    }
+  },
+  "solver": {
+    "type": "openfoam",
+    "openfoam": {
+      "sensitivity": {
+        "warn_tol": 0.001
+      }
+    },
+    "case": "../../experiments/channel/foam_case"
+  },
+  "objective": {
+    "metric": "uniformity_directional"
+  },
+  "constraints": [
+    {
+      "type": "metric",
+      "metric": "losses",
+      "budget": {
+        "mode": "relative_to_initial",
+        "factor": 1.0
+      }
+    }
+  ],
+  "optimizer": {
+    "max_step": 0.002,
+    "bounds": [
+      -1.0,
+      1.0
+    ],
+    "convergence": {
+      "obj_tol": 0.03,
+      "window": 15
+    }
+  },
+  "diagnostics": {
+    "mode": "noise_probe",
+    "noise_probe": {
+      "start_parameters": "results_smoke_channel_deepsdf/reconstruction/rec_parameters.pt",
+      "h": 0.002,
+      "n_points": 3,
+      "seed": 0,
+      "reuse_castellation": true
+    }
+  }
+}

@@ -1,0 +1,350 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Optimize: drag_cube/config_ffd_cube_with_cylinders_5x5x5",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_ffd_cube_with_cylinders_5x5x5.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_ffd_cube_with_cylinders_7x7x7",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_ffd_cube_with_cylinders_7x7x7.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_latent_cube",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_latent_cube.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_latent_cube_dafoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_latent_cube_dafoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_latent_cube_openfoam_cmp",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_latent_cube_openfoam_cmp.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_latent_cube_with_cylinders",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_latent_cube_with_cylinders.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_latent_cube_with_holes",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_latent_cube_with_holes.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_probe_dafoam_opt",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_probe_dafoam_opt.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_probe_dafoam_start",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_probe_dafoam_start.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_probe_openfoam_opt",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_probe_openfoam_opt.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: drag_cube/config_probe_openfoam_start",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/drag_cube/config_probe_openfoam_start.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: channel/config",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/channel/config.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Optimize: channel/config_ffd",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "experiments/channel/config_ffd.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: channel_deepsdf_openfoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/channel_deepsdf_openfoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: channel_ffd_openfoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/channel_ffd_openfoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: channel_jacobian_probe",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/channel_jacobian_probe.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: channel_noise_probe",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/channel_noise_probe.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: drag_deepsdf_dafoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/drag_deepsdf_dafoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: drag_deepsdf_openfoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/drag_deepsdf_openfoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Smoke: drag_ffd_openfoam",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/optimize.py",
+      "args": [
+        "--config",
+        "tests/smoke/drag_ffd_openfoam.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Reconstruct: feed_channel",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/reconstruct.py",
+      "args": [
+        "--config",
+        "experiments/reconstruction/feed_channel/config.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Reconstruct: rim",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/reconstruct.py",
+      "args": [
+        "--config",
+        "experiments/reconstruction/rim/config.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Reconstruct: shiba",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/reconstruct.py",
+      "args": [
+        "--config",
+        "experiments/reconstruction/shiba/config.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Reconstruct: ship_propeller",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/reconstruct.py",
+      "args": [
+        "--config",
+        "experiments/reconstruction/ship_propeller/config.json"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/env.sh"
+    }
+  ]
+}

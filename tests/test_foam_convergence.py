@@ -13,8 +13,10 @@ import textwrap
 import pytest
 from foamlib import FoamFile
 
-from deepshapeopt.foam_utils import (
+from deepshapeopt.solvers.openfoam.runtime import (
     _apply_solver_convergence,
+    configure_foam_runtime,
+    dict_layout,
     format_solver_iterations,
     parse_solver_iterations,
 )
@@ -172,3 +174,23 @@ def test_as_template_is_a_no_op(tmp_path):
     _apply_solver_convergence(FoamFile(case / "system" / "optimisationDict"),
                               {"mode": "as_template"}, case)
     assert (case / "system" / "optimisationDict").read_text() == before
+
+
+def test_dict_layout_and_runtime_configuration(tmp_path):
+    """Solver names come from the dictionary; only the metrics' solvers stay active."""
+    case = _dict_file(tmp_path)
+    opt = FoamFile(case / "system" / "optimisationDict")
+    assert dict_layout(opt) == ("p1", "am1", ["as1", "as2"])
+
+    times = configure_foam_runtime(case, active_solvers={"as2"})
+    assert times == {"as2": "450"}          # p1 150 + as2 300, as1 skipped
+    opt = FoamFile(case / "system" / "optimisationDict")
+    assert opt["adjointManagers", "am1", "adjointSolvers", "as1", "active"] is False
+    assert opt["adjointManagers", "am1", "adjointSolvers", "as2", "active"] is True
+    assert int(FoamFile(case / "system" / "controlDict")["purgeWrite"]) == 0
+
+    times = configure_foam_runtime(case, active_solvers={"as1", "as2"},
+                                   solver_convergence={"mode": "fixed", "solvers": {"as1": {"n_iters": 100}}})
+    assert times == {"as1": "250", "as2": "550"}
+    with pytest.raises(ValueError, match="missing"):
+        configure_foam_runtime(case, active_solvers={"adjS1"})

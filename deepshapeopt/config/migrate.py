@@ -334,6 +334,9 @@ def migrate(v1: dict, *, lock_layout: str | None = None, keep_paths: bool = Fals
         if oi.get("enabled", True):
             oi.pop("enabled", None)
             sdf_hex["outlet_interior"] = oi
+    if not sdf_hex:
+        remarks.append("no sdf_hex block in the source (a snappy config): the hex mesher defaults apply, "
+                       "add mesh.sdf_hex for this geometry")
     v2["mesh"] = {"sdf_hex": _strip_notes(sdf_hex)}
 
     # --- solver ------------------------------------------------------------------

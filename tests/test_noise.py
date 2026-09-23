@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from deepshapeopt.noise import H_TOO_LARGE, H_TOO_SMALL, NOISE_DETECTED, ecnoise, ecnoise_vector
+from deepshapeopt.diagnostics.noise import H_TOO_LARGE, H_TOO_SMALL, NOISE_DETECTED, ecnoise, ecnoise_vector
 
 T = np.arange(9) - 4.0  # offsets t_i of 9 equally spaced points
 H = 0.01

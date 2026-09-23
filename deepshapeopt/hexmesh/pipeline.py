@@ -16,7 +16,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
-import shutil
 import time
 from pathlib import Path
 
@@ -24,7 +23,6 @@ import numpy as np
 import torch
 
 from .constraints import volume_centroid_from_wall
-from .foamwriter import checkmesh_log_ok, write_polymesh
 from .lattice import CellSet, Lattice
 from .octree import (
     Castellation,
@@ -944,103 +942,3 @@ class SdfHexMeshPipeline:
             with torch.no_grad():
                 return volume_centroid_from_wall(points.detach(), tris)
         return volume_centroid_from_wall(points, tris)
-
-    # ------------------------------------------------------------------
-    # OpenFOAM coupling
-    # ------------------------------------------------------------------
-
-    def run_case(self, case_dir: Path, verbose: bool = False):
-        """Clean the case, write the polyMesh, run Allrun, gate on checkMesh."""
-        import contextlib
-        import io as _io
-
-        from foamlib import FoamCase
-
-        import deepshapeopt.foam_utils as foam_utils
-
-        if self._last_result is None:
-            raise RuntimeError("build() must be called before run_case()")
-
-        case_dir = Path(case_dir)
-        foam_case = FoamCase(case_dir)
-        if verbose:
-            foam_case.clean()
-        else:
-            with contextlib.redirect_stdout(_io.StringIO()), contextlib.redirect_stderr(
-                _io.StringIO()
-            ):
-                foam_case.clean()
-
-        write_polymesh(
-            self._last_result.mesh, case_dir, scale=float(self.cfg["write_scale"])
-        )
-        foam_utils.run_openfoam_case(case_dir, verbose=verbose, clean=False)
-
-        log_path = case_dir / "log.checkMesh"
-        if not log_path.exists():
-            raise RuntimeError(f"checkMesh log not found: {log_path}")
-        ok, failures = checkmesh_log_ok(log_path.read_text())
-        if not ok:
-            ignore = [str(s).lower() for s in self.cfg["checkmesh_ignore"]]
-            fatal = [
-                f for f in failures
-                if not any(pattern in f.lower() for pattern in ignore)
-            ]
-            soft = [f for f in failures if f not in fatal]
-            if soft:
-                logger.warning("checkMesh quality warnings (ignored): %s", soft)
-            if fatal or not failures:
-                archive = self.results_dir / "failed_mesh"
-                archive.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(
-                    case_dir / "constant" / "polyMesh", archive / "polyMesh", dirs_exist_ok=True
-                )
-                shutil.copy2(log_path, archive / "log.checkMesh")
-                raise RuntimeError(
-                    f"checkMesh failed: {failures}; mesh archived to {archive}"
-                )
-        return foam_case
-
-    def load_sensitivities(
-        self,
-        case_dir: Path,
-        foam_case,
-        field_name: str = "pointSensVecadjS1ESI",
-        objective_path: str = "optimisation/objective/0/dragadjS1",
-        time_index: int = -1,
-        time_value: str | None = None,
-    ) -> tuple[np.ndarray, float]:
-        """Read point sensitivities directly by index (no projection).
-
-        ``time_value`` overrides the time directory (the extrusion-die
-        driver passes the per-solver adjoint time, since as1 and as2 write
-        to different times); default is the case's ``time_index``-th time.
-        """
-        from foamlib import FoamFieldFile
-
-        import deepshapeopt.foam_utils as foam_utils
-
-        if self._last_result is None:
-            raise RuntimeError("build() must be called before load_sensitivities()")
-
-        if time_value is None:
-            time_value = Path(str(foam_case[time_index])).name
-        # The predicted adjoint time is wrong when a solver stopped early; take
-        # the directory that really holds the field (warns on a shift).
-        time_value = foam_utils.resolve_adjoint_time(Path(case_dir), field_name, time_value)
-        field_path = Path(case_dir) / time_value / field_name
-        sens_all = np.asarray(FoamFieldFile(field_path).internal_field, dtype=np.float64)
-
-        n_points = len(self._last_result.mesh.points)
-        if sens_all.shape[0] != n_points:
-            raise ValueError(
-                f"Sensitivity field has {sens_all.shape[0]} points but the "
-                f"written mesh has {n_points} - mesh/field mismatch."
-            )
-        sens = sens_all[self._last_result.surface_point_ids]
-        J = foam_utils.read_objective(Path(case_dir), objective_path=objective_path)
-        logger.debug(
-            "Loaded %d wall point sensitivities directly (|sens| max %.3e)",
-            len(sens), float(np.abs(sens).max()),
-        )
-        return sens, J

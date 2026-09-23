@@ -160,9 +160,10 @@ def configure_foam_runtime(
     FoamFile(ctrl_path)["purgeWrite"] = 0
 
     marker = "__ADJOINT_TIMES__"
-    text = allrun_path.read_text()
-    if marker in text:
-        allrun_path.write_text(text.replace(marker, "1:"))
+    if allrun_path.is_file():
+        text = allrun_path.read_text()
+        if marker in text:
+            allrun_path.write_text(text.replace(marker, "1:"))
     return adjoint_times
 
 
