@@ -12,6 +12,9 @@ The options file is written by ``deepshapeopt.dafoam_utils`` next to the case:
       "daOptions":     {...},            # DAFoam options (solverName, tolerances, ...)
       "functions":     {"name": {...}},  # DAFoam "function" dicts (type, patches, scale, ...)
       "outputs":       {"J": {"name": coef, ...}},  # linear combinations of functions
+      "output_corrections": {"J": [{"functions": ["m0", "m1", "m2"], "factor": c}]},
+                                         # optional: J -= c * sum(m_i^2); the adjoint uses the
+                                         # coefficients -2*c*m_i at the current primal
       "sensitivities": ["J", ...],       # outputs whose dJ/dXv is computed (reverse AD)
       "reference_fields": {"UData": {"patch": "outlet", "value": [ux, uy, uz]}},  # optional
       "perturb":       {"point": k, "coord": j, "delta": h},   # optional (serial FD checks)
@@ -239,8 +242,17 @@ def main():
     DASolver.evalFunctions(funcs)
     funcs = {k: float(v) for k, v in funcs.items()}
     outputs = {}
+    # Linearized terms of every output at this primal: the configured linear combination
+    # plus d/df of the quadratic corrections (-c * sum m_i^2  ->  -2*c*m_i per function).
+    adjoint_terms = {}
     for name, terms in (opts.get("outputs") or {}).items():
         outputs[name] = float(sum(coef * funcs[fn] for fn, coef in terms.items()))
+        adjoint_terms[name] = {fn: float(coef) for fn, coef in terms.items()}
+        for corr in (opts.get("output_corrections") or {}).get(name, []):
+            factor = float(corr["factor"])
+            for fn in corr["functions"]:
+                outputs[name] -= factor * funcs[fn] ** 2
+                adjoint_terms[name][fn] = adjoint_terms[name].get(fn, 0.0) - 2.0 * factor * funcs[fn]
     info(f"primal done in {t_primal:.1f} s, fail={primal_fail}; functions {funcs}; outputs {outputs}")
 
     result = {
@@ -307,7 +319,7 @@ def main():
 
     for name in sens_names:
         t_adj = time.time()
-        terms = opts["outputs"][name]
+        terms = adjoint_terms[name]
         dFdW = np.zeros(local_adj_size)
         dFdXv = np.zeros(len(xv))
         for fn, coef in terms.items():

@@ -463,6 +463,10 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
         ("wall_disp_max_mm",  "Wall displacement max |d| [mm]",          True),
         ("wall_disp_mean_mm", "Wall displacement mean d [mm] (+ wider)",  False),
         ("kkt_norm",        "KKT residual (scaled)",                     True),
+        ("path_rho_fwd",    "rho_fwd: realized / g_k.dx",                False),
+        ("path_rho_trap",   "rho_trap: realized / trapezoid",            False),
+        ("step_control_rho", "Step control rho (merit)",                 False),
+        ("max_step",        "Move limit max_step",                       True),
         ("vol_constraint",  "Volume constraint value",                   False),
         ("sens_norm",       "Sensitivity norm ||s||",                    True),
         ("sens_to_grad_ratio",         "||dJ/dp|| / ||s||",               True),
@@ -490,6 +494,11 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
         else:
             ax.plot(iters, vals, marker="o", markersize=3)
             ax.axhline(0, color="k", linewidth=0.5, linestyle="--")
+        if "rho" in key:
+            # Realized/predicted ratios: 1 is a perfect prediction; a ratio blows up when
+            # its prediction passes through zero, so keep the axis on the informative range.
+            ax.axhline(1, color="k", linewidth=0.5, linestyle=":")
+            ax.set_ylim(-2.0, 3.0)
 
         ax.set_ylabel(label)
         ax.grid(True, linestyle="--", alpha=0.4)

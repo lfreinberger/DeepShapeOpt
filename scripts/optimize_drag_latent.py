@@ -34,6 +34,8 @@ from deepshapeopt.plotting_utils import (
 from deepshapeopt.runtime import (
     configure_logging,
     has_converged,
+    is_feasible,
+    progress_gain,
     is_debug_enabled,
     log_iteration_summary,
     log_timing,
@@ -218,8 +220,14 @@ def optimize_shape(experiment_path: Path, specs):
         snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     logger = OptimizationLogger(paths.optimization, specs, total_iters=opt_cfg["num_iter"])
-    convergence_obj_tol = opt_cfg.get("convergence_obj_tol", opt_cfg.get("convergence_ch_tol"))
-    convergence_window = opt_cfg.get("convergence_window", 3)
+    # Progress-based stop (deepshapeopt.runtime.progress_gain / has_converged): gain of the
+    # best feasible objective over one MMA cycle below convergence_obj_tol (relative).
+    convergence_obj_tol = opt_cfg.get("convergence_obj_tol")
+    convergence_window = int(opt_cfg.get("convergence_window", 15))
+    convergence_min_iter = int(opt_cfg.get("convergence_min_iter", convergence_window + 5))
+    convergence_feas_tol = float(opt_cfg.get("convergence_feasibility_tol", 1e-3))
+    convergence_patience = int(opt_cfg.get("convergence_patience", 1))
+    history_feasible, history_gain = [], []
 
     history_constraint, history_objective = [], []
     history_grad_norm, history_obj_change, history_mma_ch = [], [], []
@@ -523,11 +531,19 @@ def optimize_shape(experiment_path: Path, specs):
             max_param=opt_setup.param.abs().max().item(),
         )
 
-        if has_converged(history_obj_change, convergence_obj_tol, convergence_window):
+        history_feasible.append(is_feasible([vol_constraint.item()], [float(init_volume.item())], convergence_feas_tol))
+        history_gain.append(
+            progress_gain(history_objective, convergence_window, history_feasible)
+            if len(history_objective) > convergence_min_iter else float("nan")
+        )
+        if history_gain[-1] == history_gain[-1]:
+            LOGGER.info("progress: best feasible objective gained %.3f %% over the last %d iterations",
+                        100.0 * history_gain[-1], convergence_window)
+        if has_converged(history_gain, convergence_obj_tol, convergence_patience):
             LOGGER.info(
-                "Converged: relative objective change < %s for %d consecutive iterations",
-                convergence_obj_tol,
-                convergence_window,
+                "Converged: gain of the best feasible objective over %d iterations below %s "
+                "for %d consecutive iteration(s); stopping.",
+                convergence_window, convergence_obj_tol, convergence_patience,
             )
             break
 

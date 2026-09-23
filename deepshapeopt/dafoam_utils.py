@@ -38,8 +38,22 @@ Config block (``optimization.dafoam``)::
 
 ``outputs`` are linear combinations of DAFoam functions; each gets one adjoint solve. A
 function's optional ``reference`` block asks for reference data (DAFoam ``variance``
-reads ``0/<field>``) equal to the area-weighted patch mean of a field at the FIRST
-evaluated design; it is computed once with an extra primal and then kept fixed.
+reads ``0/<field>``) equal to the area-weighted patch mean of a field. ``"at"`` selects the
+design that mean belongs to:
+
+``"current"`` (default)
+    the design being evaluated, i.e. the pure variance at every design, at no extra cost.
+    With area weights A_f and n components DAFoam computes
+    V(r) = scale/(n*A) * sum_c sum_f A_f (U_cf - r_c)^2, so V(mean) = V(0) - scale/n * |mean|^2.
+    The run therefore uses a zero reference and ``patchMean`` functions for the mean; the
+    run script subtracts the quadratic term and feeds its linearization (-2*scale/n*mean_c)
+    into the same single adjoint solve. dV/dr vanishes at r = mean, so this is also the
+    exact gradient of the pure variance. Needs ``mode: surface`` and ``useGeoWeight: 1``.
+``"first"`` (legacy)
+    the FIRST evaluated design; computed once with an extra primal and then kept fixed.
+    The function is then variance + scale/n * |mean - mean_0|^2, NOT the pure variance:
+    the offset was 0.2 % of J on the cylinder but ~15 % at the end of the die runs
+    (measured 2026-09-21: J/J0 0.0300 vs 0.0432 after 40 iterations on the die).
 """
 
 from __future__ import annotations
@@ -50,7 +64,7 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from pathlib import Path
 
 import numpy as np
@@ -246,11 +260,13 @@ def write_dafoam_options(
     reference_fields: dict | None = None,
     n_points: int | None = None,
     perturb: dict | None = None,
+    output_corrections: dict | None = None,
 ) -> Path:
     opts = {
         "daOptions": dcfg.da_options,
         "functions": _strip_private_keys(functions),
         "outputs": outputs,
+        "output_corrections": output_corrections or {},
         "sensitivities": list(sensitivities),
         "reference_fields": reference_fields or {},
         "n_points": int(n_points) if n_points else 0,
@@ -333,12 +349,59 @@ class DAFoamRunner:
         self.last_result: dict | None = None
 
     # -- reference data (variance-type functions) ----------------------------------
+    def _reference_specs(self, at: str) -> dict:
+        specs = {}
+        for fn, spec in self.dcfg.functions.items():
+            ref = spec.get("reference")
+            if ref is None:
+                continue
+            mode = ref.get("at", "current")
+            if mode not in ("first", "current"):
+                raise ValueError(f"dafoam.functions.{fn}.reference.at must be 'first' or 'current', got {mode!r}")
+            if mode == at:
+                specs[fn] = ref
+        return specs
+
+    def _current_mean_plan(self) -> tuple[dict, dict, dict]:
+        """Functions, zero reference fields and output corrections of the ``at: current``
+        references (pure variance at every design, see the module docstring)."""
+        functions, fields, corrections = {}, {}, {}
+        for fn, ref in self._reference_specs("current").items():
+            spec = self.dcfg.functions[fn]
+            if spec.get("type") != "variance" or spec.get("mode") != "surface" or not spec.get("useGeoWeight"):
+                raise ValueError(
+                    f"dafoam.functions.{fn}: reference.at 'current' needs type 'variance', "
+                    "mode 'surface' and useGeoWeight 1 (the identity uses DAFoam's area weights)"
+                )
+            fld, patch, var = ref["field"], ref["patch"], ref.get("patch_mean_of", "U")
+            vector = spec.get("varType", "vector") == "vector"
+            indices = list(spec["indices"]) if vector else [0]
+            names = []
+            for i in indices:
+                name = f"ref_{fld}_{i}"
+                functions[name] = {
+                    "type": "patchMean", "source": "patchToFace", "patches": [patch],
+                    "varName": var, "varType": spec.get("varType", "vector"), "index": i, "scale": 1.0,
+                }
+                names.append(name)
+            fields[fld] = {"patch": patch, "value": [0.0] * (3 if vector else 1)}
+            for out, terms in self.dcfg.outputs.items():
+                if fn in terms:
+                    corrections.setdefault(out, []).append({
+                        "functions": names,
+                        "factor": float(terms[fn]) * float(spec.get("scale", 1.0)) / len(indices),
+                    })
+        return functions, fields, corrections
+
     def _resolve_reference_fields(self, n_points: int) -> dict:
-        specs = {
-            fn: spec["reference"] for fn, spec in self.dcfg.functions.items() if "reference" in spec
-        }
+        specs = self._reference_specs("first")
         if not specs:
             return {}
+        logger.warning(
+            "DAFoam: reference of %s is frozen at the first evaluated design (reference.at "
+            "'first'): the function is the variance plus a mean-drift term, not the pure "
+            "variance. Set reference.at to 'current' for the pure variance.", sorted(specs),
+        )
         functions, wanted = {}, {}
         for fn, ref in specs.items():
             fld, patch, var = ref["field"], ref["patch"], ref.get("patch_mean_of", "U")
@@ -354,8 +417,16 @@ class DAFoamRunner:
                 }
                 names.append(fname)
             wanted[key] = names
+        # This extra primal runs with its OWN function set (the ref_* patch means), so a
+        # daOptions.primalFuncStdTol naming the evaluation's functions would abort with
+        # "functionName ... not found". Disable it here and let the reference primal use
+        # the plain residual criterion -- it runs once and sets UData for the whole run.
+        ref_dcfg = self.dcfg
+        if dict(self.dcfg.da_options).get("primalFuncStdTol", {}).get("stdTol", -1.0) > 0:
+            ref_opts = {k: v for k, v in self.dcfg.da_options.items() if k != "primalFuncStdTol"}
+            ref_dcfg = dc_replace(self.dcfg, da_options=ref_opts)
         write_dafoam_options(
-            self.case_dir, self.dcfg, functions, outputs={}, sensitivities=[], n_points=n_points,
+            self.case_dir, ref_dcfg, functions, outputs={}, sensitivities=[], n_points=n_points,
         )
         logger.info("DAFoam: extra primal for the reference patch means of %s", sorted(wanted))
         result = run_dafoam_case(self.case_dir, self.dcfg, log_name="log.dafoam_reference",
@@ -375,9 +446,11 @@ class DAFoamRunner:
                 raise KeyError(f"DAFoam output {name!r} not defined in dafoam.outputs")
         if self.reference_fields is None:
             self.reference_fields = self._resolve_reference_fields(n_points)
+        mean_functions, zero_fields, corrections = self._current_mean_plan()
         write_dafoam_options(
-            self.case_dir, self.dcfg, self.dcfg.functions, self.dcfg.outputs, sensitivities,
-            reference_fields=self.reference_fields, n_points=n_points, perturb=perturb,
+            self.case_dir, self.dcfg, {**self.dcfg.functions, **mean_functions}, self.dcfg.outputs,
+            sensitivities, reference_fields={**self.reference_fields, **zero_fields},
+            n_points=n_points, perturb=perturb, output_corrections=corrections,
         )
         self.last_result = run_dafoam_case(self.case_dir, self.dcfg, verbose=self.verbose)
         return self.last_result
