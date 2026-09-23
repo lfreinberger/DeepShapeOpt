@@ -82,7 +82,7 @@ class TriMeshSDF:
         Legacy single-axis mode (``drop_planes=None``): caps are the
         triangles whose centroid lies within ``cap_tol`` of the mesh's
         min/max plane along ``cap_axis`` (the inlet/outlet planes of an
-        extrusion channel).
+        channel).
 
         Explicit mode: ``drop_planes`` is a list of ``(axis, value, tol)``
         planes; a triangle is a cap iff its centroid lies within ``tol`` of

@@ -1,128 +1,0 @@
-Run results_smoke_drag_deepsdf: deepsdf parametrization, openfoam solver, objective drag, 2 constraint(s)
-Running reconstruction
-/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/sampling.py:514: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).
-  bounds = torch.tensor(bounds, dtype=dtype, device=device)
-Min/Max in PHYSICAL space:
-
-x: min=-0.998616, max=0.999585
-y: min=-0.533187, max=0.532901
-z: min=-0.533215, max=0.533181
-
-Min/Max in QUERY space:
-
-x: min=-0.998616, max=0.999585
-y: min=-0.533187, max=0.532901
-z: min=-0.533215, max=0.533181
-
-Max absolute SDF value: 0.701249
-Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.03181]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.03174]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.03140]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.03027]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02943]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.03018]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02999]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02895]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02913]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02720]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02619]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02593]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02439]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02386]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02183]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.02100]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01974]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01935]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01972]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01859]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01830]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01692]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01660]Reconstructing SDF from mesh:   0%|          | 0/3 [00:00<?, ?it/s, loss=0.01575]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01575]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01554]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01564]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01576]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01662]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01430]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01428]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01581]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01533]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01459]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01492]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01551]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01494]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01463]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01459]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01323]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01312]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01301]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01348]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01356]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01333]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01321]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01306]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01352]Reconstructing SDF from mesh:  33%|███▎      | 1/3 [00:00<00:00,  2.03it/s, loss=0.01232]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01232]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01265]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01241]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01186]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01196]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01168]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01219]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01189]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01177]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01197]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01097]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01148]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01134]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01047]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01086]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01083]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01118]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01059]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01119]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01088]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01091]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01064]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01098]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.01040]Reconstructing SDF from mesh:  67%|██████▋   | 2/3 [00:00<00:00,  3.02it/s, loss=0.00978]Reconstructing SDF from mesh: 100%|██████████| 3/3 [00:00<00:00,  3.58it/s, loss=0.00978]Reconstructing SDF from mesh: 100%|██████████| 3/3 [00:00<00:00,  3.23it/s, loss=0.00978]
-latest epoch is 3.0
-24 iters per epoch
-/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/torch_spline.py:257: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).
-  torch.tensor(scale_factors, dtype=dtype, device=device)
-/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/torch_spline.py:260: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).
-  torch.tensor(translation, dtype=dtype, device=device)
-/usr2/lfrei/ProjectsPhD/DeepSDFStruct/DeepSDFStruct/torch_spline.py:263: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).
-  "parametric_bounds", torch.tensor(bounds, dtype=dtype, device=device)
-SDF structured grid saved to /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/reconstruction/reconstructed_sdf_grid.vtk
-lock: no boxes configured; every control point is free to move
-Knot grid exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/reconstruction/knot_grid_paramspace.vtp
-Design volume (paramspace) exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/reconstruction/design_volume_paramspace.vts
-Control lattice exported to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/reconstruction/control_lattice_paramspace.vtp
-Static outer octree: 6416 cells (levels 0..2)
-OpenFOAM case /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf, adjoint write times {'adjS1': '2000'}
-SDF sign convention OK: phi([0. 0. 0.]) = -3.5708e-02 (solid)
-Inner castellation: 22935 fluid cells (levels 2..4), 4072 solid removed, 0 pocket cells removed
-polyMesh: 29351 cells, 34636 points, 93222 faces (90648 internal, wall 1574)
-Snap: 1576 points, residual |phi| median 1.810e-08 max 3.972e-03, lam<1 for 49 points
-Quality guard round 0: 14 bad faces, relaxing 40 points
-Hex mesh build: {'n_cells': 29351, 'n_points': 34636, 'n_wall_faces': 1574, 'n_wall_points': 1576, 'n_relaxed_points': 40, 'n_hanging_points': 4779, 'snap_residual_max': 0.003971717786043882, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 1574}, 'build_seconds': 0.9189403057098389}
-Initial volume 1.014423, centroid [0.0016391287790611386, 0.002784953685477376, -0.007195152807980776]
-=== Optimization iteration 0/1 ===
-Inner castellation: 22935 fluid cells (levels 2..4), 4072 solid removed, 0 pocket cells removed
-Castellation unchanged - reusing mesh connectivity
-Snap: 1576 points, residual |phi| median 1.810e-08 max 3.972e-03, lam<1 for 49 points
-Quality guard round 0: 14 bad faces, relaxing 40 points
-Hex mesh build: {'n_cells': 29351, 'n_points': 34636, 'n_wall_faces': 1574, 'n_wall_points': 1576, 'n_relaxed_points': 40, 'n_hanging_points': 4779, 'snap_residual_max': 0.003971717786043882, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 1574}, 'build_seconds': 0.48790788650512695}
-(foam_run_smoke_drag_deepsdf) Running Allclean... ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-Wrote polyMesh to /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf/constant/polyMesh
-Running OpenFOAM
-Running decomposePar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf
-Finished: decomposePar in 0 min 1 s
-==================================================
-Restore 0/ from 0.orig/  [processor dirs]
-Finished: restore0Dir in 0 min 0 s
-==================================================
-Running checkMesh (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: checkMesh in 0 min 1 s
-==================================================
-Running potentialFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: potentialFoam in 0 min 1 s
-==================================================
-Running adjointOptimisationFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: main solver (adjointOptimisationFoam) in 0 min 10 s
-==================================================
-Running reconstructPar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf
-Finished: reconstructPar in 0 min 1 s
-==================================================
-OpenFOAM finished in 14.16 seconds
-Solver iterations: op1 409 converged, adjS1 1000 max_iters
-Adjoint field pointSensVecadjS1ESI is not at the predicted time 2000; using 1409 (an adjoint solver stopped before nIters, e.g. via residualControl).
-Loaded 1576 wall point sensitivities (|s| max 5.897e-01)
-drag: J=3.159960e+01 |dJ/dx|=4.884e+00 |dJ/dp|=1.596e+02
-volume: initial 0.000000e+00, target 0.000000e+00
-volume (constraint): value=0.000000e+00 target=0.000000e+00 |grad|=1.109e+01 
-centroid: initial -2.500000e-03, target 0.000000e+00
-centroid (constraint): value=-2.500000e-03 target=0.000000e+00 |grad|=2.320e-08 
-Saved multiblock VTK for ParaView: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/vtk_series/iter_0000.vtm
-MMA scaling: objective / 3.160e+01, constraint rows / [1.0, 1.0]
-It.:    1 | J/J0: 1.000e+00 | G (scaled): [0.0, -0.0024999999441206455] | ch.: 5.586e-01 | KKT: 1.360e+00 | asy(upp/low, x max_step): 1.00/1.00 | asy_bind: 1.000
-(foam_run_smoke_drag_deepsdf) Running Allclean... ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-  objective=3.159960e+01 | volume=0.000000e+00 | volume_target=0.000000e+00 | centroid=-2.500000e-03 | centroid_target=0.000000e+00 | mma_ch=5.585980e-01 | step_ratio=8.999880e-01 | grad_norm=1.595937e+02 | kkt_norm=1.359951e+00 | lam=4.140964e-01 | wall_disp_max=1.065268e+01 | wall_disp_mean=8.068623e-01
-  time=18.97s | avg=18.97s | elapsed=0.33min | eta=0.32min
-/usr2/lfrei/ProjectsPhD/DeepShapeOpt/deepshapeopt/driver.py:323: UserWarning: Converting a tensor with requires_grad=True to a scalar may lead to unexpected behavior.
-Consider using tensor.detach() first. (Triggered internally at /pytorch/torch/csrc/autograd/generated/python_variable_methods.cpp:838.)
-  record.update(obj_change=obj_change, step_inf=step_inf, max_param=float(p.param.abs().max()),
-=== Optimization iteration 1/1 ===
-Inner castellation: 39764 fluid cells (levels 2..4), 431 solid removed, 0 pocket cells removed
-polyMesh: 46180 cells, 51991 points, 144216 faces (142644 internal, wall 572)
-Snap: 574 points, residual |phi| median 8.164e-09 max 1.400e-03, lam<1 for 32 points
-Quality guard round 0: 2 bad faces, relaxing 8 points
-Hex mesh build: {'n_cells': 46180, 'n_points': 51991, 'n_wall_faces': 572, 'n_wall_points': 574, 'n_relaxed_points': 8, 'n_hanging_points': 6129, 'snap_residual_max': 0.001399741042405367, 'patch_faces': {'inlet': 100, 'outlet': 100, 'sides': 800, 'dragObject': 572}, 'build_seconds': 1.2567353248596191}
-(foam_run_smoke_drag_deepsdf) Running Allclean... ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-Wrote polyMesh to /work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf/constant/polyMesh
-Running OpenFOAM
-Running decomposePar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf
-Finished: decomposePar in 0 min 1 s
-==================================================
-Restore 0/ from 0.orig/  [processor dirs]
-Finished: restore0Dir in 0 min 0 s
-==================================================
-Running checkMesh (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: checkMesh in 0 min 1 s
-==================================================
-Running potentialFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: potentialFoam in 0 min 1 s
-==================================================
-Running adjointOptimisationFoam (16 processes) on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf 
-Finished: main solver (adjointOptimisationFoam) in 0 min 21 s
-==================================================
-Running reconstructPar on /workdisk/work/lfrei/DeepShapeOpt/foam_run_smoke_drag_deepsdf
-Finished: reconstructPar in 0 min 1 s
-==================================================
-OpenFOAM finished in 25.65 seconds
-Solver iterations: op1 970 converged, adjS1 1000 max_iters
-Adjoint field pointSensVecadjS1ESI is not at the predicted time 2000; using 1970 (an adjoint solver stopped before nIters, e.g. via residualControl).
-Loaded 574 wall point sensitivities (|s| max 7.383e-01)
-drag: J=1.321860e+01 |dJ/dx|=6.095e+00 |dJ/dp|=1.637e+02
-volume (constraint): value=9.158025e-01 target=0.000000e+00 |grad|=2.353e+00 
-centroid (constraint): value=-1.765841e-03 target=0.000000e+00 |grad|=7.898e-02 
-Saved multiblock VTK for ParaView: /storage/lfrei/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf/vtk_series/iter_0001.vtm
-path consistency: predicted -6.103e-01 (end of step -1.067e+00) realized -5.817e-01 of |J0| -> rho_fwd +0.953 rho_trap +0.694 | constraint rho_fwd -1.736 rho_trap +41.484
-It.:    2 | J/J0: 4.183e-01 | G (scaled): [0.915802538394928, -0.001765840919688344] | ch.: 6.550e-01 | KKT: 5.828e+00 | asy(upp/low, x max_step): 1.00/1.00 | asy_bind: 1.000
-(foam_run_smoke_drag_deepsdf) Running Allclean... ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-  objective=1.321860e+01 | volume=9.158025e-01 | volume_target=0.000000e+00 | centroid=-1.765841e-03 | centroid_target=0.000000e+00 | mma_ch=6.549549e-01 | step_ratio=8.866995e-01 | grad_norm=1.637110e+02 | kkt_norm=5.828273e+00 | lam=4.714421e+00 | wall_disp_max=6.223183e+00 | wall_disp_mean=-6.949473e-01
-  time=31.68s | avg=25.32s | elapsed=0.86min | eta=0.00min
-(foam_run_smoke_drag_deepsdf) Running Allclean... ━━━━━━━━━━━━━━━━━ 100% 0:00:00
-Results written to: /usr2/lfrei/ProjectsPhD/DeepShapeOpt/tests/smoke/results_smoke_drag_deepsdf
-Final objective: 1.321860e+01

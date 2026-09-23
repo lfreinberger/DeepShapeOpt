@@ -1,6 +1,6 @@
 """Internal-flow tests for the SDF hex mesh pipeline (no OpenFOAM, no DeepSDF).
 
-Synthetic setup mirroring the extrusion-die layout: a straight square-channel
+Synthetic setup mirroring the internal-flow layout: a straight square-channel
 STL (fluid inside) whose outlet/inlet cap planes coincide with the domain
 x faces, and an analytic "DeepSDF" insert in the design domain that matches
 the channel at the design-domain faces (mimicking locked boundary control

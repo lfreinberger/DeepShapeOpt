@@ -1,0 +1,8 @@
+EXE_INC += \
+    -I$(WM_PROJECT_DIR)/src/transportModels/incompressible/lnInclude \
+    -I$(WM_PROJECT_DIR)/src/finiteVolume/lnInclude
+
+LIB_LIBS += \
+    -lincompressibleTransportModels \
+    -lfiniteVolume
+

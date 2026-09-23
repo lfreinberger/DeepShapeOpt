@@ -1,3 +1,0 @@
-2026-09-23 14:06:50 drag_ffd_openfoam rc=1 elapsed=9s
-2026-09-23 14:07:51 drag_deepsdf_openfoam rc=0 elapsed=61s
-2026-09-23 14:10:20 channel_deepsdf_openfoam rc=0 elapsed=149s

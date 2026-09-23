@@ -1,0 +1,3 @@
+adjointLaminarPowerLaw.C
+
+LIB = $(FOAM_USER_LIBBIN)/libcustomAdjointRAS

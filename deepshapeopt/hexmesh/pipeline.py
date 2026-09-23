@@ -59,7 +59,7 @@ _DEFAULTS = {
     "checkmesh_ignore": ["skew"],
     # --- internal flow ----------------------------------------------------
     # "external": fluid box around a solid object (drag); "internal": the
-    # fluid is a channel through fixed geometry (extrusion die).
+    # fluid is a channel through fixed geometry (internal flow).
     "flow": "external",
     "geometry_stl": None,  # path; None -> model_setup.mesh_orig
     "fluid_side": "outside",  # "inside" for channels

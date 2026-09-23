@@ -86,7 +86,7 @@ so `import dafoam` resolves to the patched package. No overlay is involved — f
 on NFS is fragile, and the build has to be on NFS for the cluster.
 
 Configs only carry the switch; the location comes from `$DAFOAM_BUILD_ROOT`
-(set in `tests/env.sh`), so they stay portable:
+(set in `env.sh`), so they stay portable:
 
 ```json
 "dafoam": { "pc_mode": "fvmatrix" }

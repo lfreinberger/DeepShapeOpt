@@ -38,8 +38,6 @@ flowRate/
 confidential/*
 tests/**/results*/
 tests/**/foam_run_*/
-tests/env.sh
-tests/env.csh
 **/analysis/*
 **/analysis/**
 experiments/reconstruction/analysis/*
@@ -106,3 +104,8 @@ env.csh
 # Local helper scripts and notes (not part of the library)
 tools/
 docs/
+
+# OpenFOAM user library build artifacts (sources stay tracked)
+openfoam/**/lnInclude/
+openfoam/**/Make/linux*/
+tests/smoke/logs/

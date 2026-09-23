@@ -43,5 +43,5 @@ echo
 echo "published to $DST"
 du -sh "$DST/sharedLibs" "$DST/dafoam"
 echo
-echo "point configs at it with DAFOAM_BUILD_ROOT=$DST (see tests/env.sh),"
+echo "point configs at it with DAFOAM_BUILD_ROOT=$DST (see env.sh),"
 echo "or optimization.dafoam.build_root in the config."

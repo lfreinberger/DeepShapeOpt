@@ -1,0 +1,31 @@
+#!/bin/sh
+# Build all custom user libraries for the powerLaw+Arrhenius thermal pipeline
+# into the user's OpenFOAM space ($FOAM_USER_LIBBIN). The shared OpenFOAM
+# installation is NOT modified.
+#
+# Requires the OpenFOAM environment to be sourced first, e.g.:
+#   source /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc
+#
+cd "${0%/*}" || exit 1                       # run from this directory
+
+if [ -z "$WM_PROJECT_DIR" ]; then
+    echo "Allwmake: OpenFOAM environment not sourced (\$WM_PROJECT_DIR unset)." 1>&2
+    echo "          source <OpenFOAM>/etc/bashrc and retry." 1>&2
+    exit 1
+fi
+
+set -e
+
+# Temperature-dependent shear-thinning viscosity model -> libpowerLawArrhenius
+wmake libso viscosityModels/powerLawArrhenius
+
+# SIMPLE + energy-equation primal solver        -> libcustomPrimalSolvers
+wmake libso primalSolvers/simpleHeatTransfer
+
+# Shear-rate-linearized adjoint RAS model        -> libcustomAdjointRAS
+wmake libso adjointRASModels/adjointLaminarPowerLaw
+
+# Directional uniformity adjoint objective        -> libcustomAdjointObjectives
+wmake libso adjointObjectives/objectiveUniformityPatchDirectional
+
+echo "Built all custom libraries into: $FOAM_USER_LIBBIN"

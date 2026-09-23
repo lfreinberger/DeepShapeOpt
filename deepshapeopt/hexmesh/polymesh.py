@@ -74,7 +74,7 @@ class PatchPlan:
     ``sensitivity_box`` move to the ``sensitivity_name`` patch (the design
     surface the adjoint differentiates).  ``face_subpatch`` carves a
     sub-patch out of ``subpatch_source`` by face centroid (the
-    outletInterior of the extrusion die); it runs on the final per-build
+    outletInterior of an internal-flow case); it runs on the final per-build
     face set, so membership follows refinement changes.  ``subpatch_source``
     may be a domain-face patch or a wall-carve patch.
 
