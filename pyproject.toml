@@ -13,6 +13,7 @@ dependencies = [
     "manifold3d>=3.3.2",
     "mlflow>=3.6.0",
     "numpy-stl>=3.2.0",
+    "pillow>=10",
     "shapely>=2.0",
     "torchmesh>=0.1.0",
     "trimesh>=4.0",

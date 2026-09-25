@@ -1,4 +1,4 @@
-"""Command line: ``deepshapeopt optimize|reconstruct|latent-gui|migrate-config``."""
+"""Command line: ``deepshapeopt optimize|reconstruct|latent-gui|paint-mask|migrate-config``."""
 
 from __future__ import annotations
 
@@ -45,6 +45,12 @@ def cmd_latent_gui(argv) -> int:
     return gui_main(argv) or 0
 
 
+def cmd_paint_mask(argv) -> int:
+    from .mask_painter.server import main as paint_main
+
+    return paint_main(argv)
+
+
 def cmd_migrate(argv) -> int:
     from .config.migrate import main as migrate_main
 
@@ -55,6 +61,7 @@ COMMANDS = {
     "optimize": cmd_optimize,
     "reconstruct": cmd_reconstruct,
     "latent-gui": cmd_latent_gui,
+    "paint-mask": cmd_paint_mask,
     "migrate-config": cmd_migrate,
 }
 

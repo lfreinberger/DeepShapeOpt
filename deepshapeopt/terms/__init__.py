@@ -8,6 +8,7 @@ from deepshapeopt.solvers.metrics import get_metric
 from .base import Budget, ConstraintTerm, PenaltyTerm, Row, State, Term, TermValue
 from .cfd import CfdConstraint, CfdObjective
 from .ffd_jacobian import FfdJacobianTerm
+from .no_thinning import NoThinningConstraint
 from .regularizers import LatticeSmoothnessPenalty, ProximityPenalty
 from .steg_length import MinStegLengthConstraint, MinStegLengthPenalty
 from .undercut import UndercutConstraint, UndercutPenalty
@@ -20,6 +21,7 @@ CONSTRAINT_TYPES = {
     "ffd_jacobian": FfdJacobianTerm,
     "undercut": UndercutConstraint,
     "min_steg_length": MinStegLengthConstraint,
+    "no_thinning": NoThinningConstraint,
 }
 PENALTY_TYPES = {
     "proximity": ProximityPenalty,

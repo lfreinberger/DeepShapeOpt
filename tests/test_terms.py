@@ -1,18 +1,22 @@
-"""Geometry terms without a solver: KS streaming, undercut margin, steg length.
+"""Geometry terms without a solver: KS streaming, undercut margin, steg length, no-thinning.
 
 The undercut gates use a synthetic frustum channel with an analytic drawability margin; the
 steg-length gates use an analytic box SDF standing in for the lattice, so both the
 "thicken" and the "lengthen" remedies have autograd paths.
 """
 
+import json
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
 from deepshapeopt.geometry.frame import DomainFrame
+from deepshapeopt.geometry.projected_mask import ProjectedMask
 from deepshapeopt.terms.ks import KSStream
+from deepshapeopt.terms.no_thinning import NoThinningConstraint
 from deepshapeopt.terms.steg_length import min_steg_length_penalty_sdf
 from deepshapeopt.terms.undercut import build_outlet_silhouette, undercut_penalty
 
@@ -261,3 +265,85 @@ def test_steg_length_gradient_matches_finite_difference(frame):
     fd = (vals[0] - vals[1]) / (2 * eps)
     assert fd < 0.0
     assert abs(g0[1].item() - fd) < 0.1 * abs(fd)
+
+
+# ---------------------------------------------------------------------------
+# Projected mask and no-thinning constraint
+# ---------------------------------------------------------------------------
+
+def _yz_mask(y_half=3.0, z_half=10.0, pixel=0.5, axis_range=None):
+    mask = ProjectedMask.empty([[-20.0, 20.0], [-20.0, 20.0]], pixel)
+    u, v = mask.pixel_centres()
+    mask.image = (np.abs(v)[:, None] <= z_half) & (np.abs(u)[None, :] <= y_half)
+    mask.axis_range_mm = axis_range
+    return mask
+
+
+def test_projected_mask_contains_and_roundtrip(tmp_path):
+    mask = _yz_mask(axis_range=(-5.0, 5.0))
+    pts = torch.tensor([[0.0, 1.0, 9.0], [0.0, 4.0, 0.0], [0.0, 0.0, 11.0], [6.0, 0.0, 0.0], [0.0, 30.0, 0.0]])
+    assert mask.contains(pts).tolist() == [True, False, False, False, False]
+    mask.save(tmp_path / "m.json")
+    back = ProjectedMask.load(tmp_path / "m.json")
+    assert np.array_equal(back.image, mask.image) and back.axis_range_mm == (-5.0, 5.0)
+
+
+def test_projected_mask_reads_coloured_rgba(tmp_path):
+    from PIL import Image
+
+    rgba = np.zeros((4, 6, 4), dtype=np.uint8)
+    rgba[1, 2] = (255, 60, 60, 255)    # opaque red: set
+    rgba[2, 3] = (255, 255, 255, 40)   # nearly transparent: not set
+    Image.fromarray(rgba).save(tmp_path / "m.png")
+    (tmp_path / "m.json").write_text(json.dumps({"image": "m.png", "extent_mm": [[0, 6], [0, 4]]}))
+    mask = ProjectedMask.load(tmp_path / "m.json")
+    assert mask.image.sum() == 1 and mask.image[1, 2]
+    assert mask.contains(torch.tensor([[0.0, 2.5, 2.5]])).item()   # column 2, row 1 (top = v_hi)
+
+
+def two_plates(param):
+    """A protected plate at y = 0 (half-thickness param[0]) and a free one at y = 10 (param[1])."""
+    def plate(t, yc):
+        return (torch.stack([torch.tensor(-8.0), yc - t, torch.tensor(-8.0)]),
+                torch.stack([torch.tensor(8.0), yc + t, torch.tensor(8.0)]))
+    return [plate(param[0], torch.tensor(0.0)), plate(param[1], torch.tensor(10.0))]
+
+
+def _no_thinning(tmp_path, ls, frame):
+    _yz_mask().save(tmp_path / "mask.json")
+    term = NoThinningConstraint({"type": "no_thinning", "mask": str(tmp_path / "mask.json"),
+                                 "grid_spacing": 0.5, "tolerance": 0.1, "cap": 1.0, "ks_rho": 50.0})
+    state = SimpleNamespace(param=ls.param, parametrization=SimpleNamespace(lattice_struct=ls, frame=frame))
+    return term, (lambda: term.evaluate(state))
+
+
+def test_no_thinning_semantics(tmp_path, frame):
+    ls = BoxesSDF(frame, two_plates, 1.0, 1.0)
+    term, evaluate = _no_thinning(tmp_path, ls, frame)
+    tv0 = evaluate()
+    n = tv0.debug["candidates"]
+    assert n > 0 and abs(tv0.value - math.log(n) / 50.0) < 1e-4 and tv0.value < term.ks_bound()
+    assert tv0.grad[0].item() < 0.0 and tv0.grad[1].item() == 0.0
+
+    ls.param.data[1] = 0.5                     # thinning the free plate is allowed
+    assert abs(evaluate().value - tv0.value) < 1e-5
+    ls.param.data[0] = 1.2                     # thickening the protected plate is allowed
+    assert evaluate().value <= tv0.value + 1e-6
+    ls.param.data[0] = 0.85                    # 0.15 mm retreat > tolerance 0.1 mm
+    assert evaluate().value > 1.0
+
+
+def test_no_thinning_gradient_matches_finite_difference(tmp_path, frame):
+    ls = BoxesSDF(frame, two_plates, 1.0, 1.0)
+    _, evaluate = _no_thinning(tmp_path, ls, frame)
+    evaluate()                                 # fixes the reference at t = 1.0
+    ls.param.data[0] = 0.92
+    g = evaluate().grad[0].item()
+    eps = 1e-3
+    vals = []
+    for s in (+eps, -eps):
+        ls.param.data[0] = 0.92 + s
+        vals.append(evaluate().value)
+    fd = (vals[0] - vals[1]) / (2 * eps)
+    assert fd < 0.0
+    assert abs(g - fd) < 0.02 * abs(fd)

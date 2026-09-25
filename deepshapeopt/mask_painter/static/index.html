@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mask painter — DeepShapeOpt</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #1a1d21; color: #e6e6e6; }
+  #app { display: flex; height: 100%; overflow: hidden; }
+  #view { flex: 1 1 0; min-width: 0; overflow: auto; position: relative; padding: 16px; }
+  #stage { position: relative; display: inline-block; cursor: none; }
+  #stage canvas { display: block; image-rendering: pixelated; }
+  #cursor { position: absolute; border: 1px solid #fff; border-radius: 50%; pointer-events: none;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.6); display: none; }
+  #panel { flex: 0 0 300px; width: 300px; background: #23262b; border-left: 1px solid #34383d;
+           display: flex; flex-direction: column; overflow-y: auto; }
+  #panel header { padding: 14px 16px; border-bottom: 1px solid #34383d; }
+  #panel header h1 { font-size: 15px; margin: 0 0 4px; }
+  #panel header p { font-size: 12px; margin: 0; color: #9aa0a6; line-height: 1.45; }
+  section { padding: 12px 16px; border-bottom: 1px solid #34383d; font-size: 12px; }
+  section h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #7cc7ff; }
+  .line { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .line label { color: #9aa0a6; flex: 0 0 72px; }
+  .line input[type=range] { flex: 1; }
+  .line .val { color: #7cc7ff; font-variant-numeric: tabular-nums; flex: 0 0 52px; text-align: right; }
+  input[type=number] { width: 72px; background: #14161a; color: #e6e6e6; border: 1px solid #34383d;
+                       border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+  button { background: #2f7de0; color: #fff; border: 0; border-radius: 6px; padding: 7px 11px;
+           font-size: 12px; cursor: pointer; }
+  button.secondary { background: #3a3f45; }
+  button.active { outline: 2px solid #7cc7ff; }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  .stat { color: #9aa0a6; font-variant-numeric: tabular-nums; line-height: 1.6; }
+  .stat b { color: #e6e6e6; font-weight: 600; }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  #status { color: #9aa0a6; min-height: 16px; }
+  #status.err { color: #ff8a80; }
+  #status.ok { color: #8fd694; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view"><div id="stage"><canvas id="canvas"></canvas><div id="cursor"></div></div></div>
+  <div id="panel">
+    <header>
+      <h1>Protected region</h1>
+      <p id="subtitle">Loading the start design…</p>
+    </header>
+    <section>
+      <h2>Brush</h2>
+      <div class="buttons" style="margin-bottom:10px">
+        <button id="brushBtn" class="active">Brush (B)</button>
+        <button id="eraseBtn" class="secondary">Eraser (E)</button>
+      </div>
+      <div class="line"><label>Radius</label><input id="radius" type="range" min="0.25" max="10" step="0.25" value="1.5" /><span class="val" id="radiusVal"></span></div>
+      <div class="line"><label>Zoom</label><input id="zoom" type="range" min="1" max="12" step="1" value="4" /><span class="val" id="zoomVal"></span></div>
+      <div class="line"><label>Overlay</label><input id="alpha" type="range" min="0.1" max="1" step="0.05" value="0.55" /><span class="val" id="alphaVal"></span></div>
+      <div class="buttons">
+        <button id="undoBtn" class="secondary">Undo (Ctrl+Z)</button>
+        <button id="clearBtn" class="secondary">Clear</button>
+      </div>
+    </section>
+    <section>
+      <h2 id="rangeTitle">Extrusion range</h2>
+      <div class="line"><label>from</label><input id="rangeLo" type="number" step="0.5" placeholder="full" /><span class="stat">mm</span></div>
+      <div class="line"><label>to</label><input id="rangeHi" type="number" step="0.5" placeholder="full" /><span class="stat">mm</span></div>
+      <div class="stat" id="domainNote"></div>
+    </section>
+    <section>
+      <h2>View</h2>
+      <div class="stat legend">
+        <div>grey: solid fraction along the axis</div>
+        <div><span style="background:#2f7de0"></span>section at the low end</div>
+        <div><span style="background:#e08c28"></span>section at the high end</div>
+        <div><span style="background:#e63c3c"></span>protected region</div>
+      </div>
+      <div class="stat" id="coords" style="margin-top:8px">&nbsp;</div>
+      <div class="stat" id="area"></div>
+    </section>
+    <section>
+      <div class="buttons" style="margin-bottom:8px"><button id="saveBtn">Save (Ctrl+S)</button></div>
+      <div id="status"></div>
+    </section>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+const maskCanvas = document.createElement("canvas"), maskCtx = maskCanvas.getContext("2d");
+let S = null, W = 0, H = 0, du = 1, dv = 1, bg = null;
+let mask = null, erasing = false, painting = false, last = null, dirty = false;
+const undo = [];
+
+function setStatus(text, cls = "") { $("status").textContent = text; $("status").className = cls; }
+
+function loadImage(url) {
+  return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+}
+
+async function init() {
+  S = await (await fetch("/api/state")).json();
+  if (S.error) { setStatus(S.error, "err"); return; }
+  W = S.width; H = S.height;
+  du = (S.extent_mm[0][1] - S.extent_mm[0][0]) / W;
+  dv = (S.extent_mm[1][1] - S.extent_mm[1][0]) / H;
+  maskCanvas.width = W; maskCanvas.height = H;
+  bg = await loadImage(S.background);
+  const mim = await loadImage(S.mask);
+  const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+  const tctx = tmp.getContext("2d"); tctx.drawImage(mim, 0, 0);
+  const d = tctx.getImageData(0, 0, W, H).data;
+  mask = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) mask[i] = d[4 * i + 3] >= 128 && Math.max(d[4 * i], d[4 * i + 1], d[4 * i + 2]) >= 128 ? 1 : 0;
+  const [a, b] = S.plane_axes;
+  $("subtitle").textContent = `View along ${S.axis}: ${a} to the right, ${b} up. ${W}×${H} px at ${du.toFixed(3)} mm. Saves to ${S.out}`;
+  $("rangeTitle").textContent = `Extrusion range in ${S.axis}`;
+  $("domainNote").textContent = `design domain ${S.axis} ∈ [${S.axis_domain_mm[0]}, ${S.axis_domain_mm[1]}] mm; empty = full depth`;
+  if (S.axis_range_mm) { $("rangeLo").value = S.axis_range_mm[0]; $("rangeHi").value = S.axis_range_mm[1]; }
+  const fit = Math.floor(Math.min(($("view").clientWidth - 32) / W, ($("view").clientHeight - 32) / H));
+  $("zoom").value = Math.max(1, Math.min(12, fit || 1));
+  refreshLabels(); renderMask(); resize();
+  setStatus("Ready.");
+}
+
+function zoom() { return +$("zoom").value; }
+function radiusPx() { return +$("radius").value / du; }
+
+function refreshLabels() {
+  $("radiusVal").textContent = (+$("radius").value).toFixed(2) + " mm";
+  $("zoomVal").textContent = zoom() + "×";
+  $("alphaVal").textContent = (+$("alpha").value).toFixed(2);
+}
+
+function resize() {
+  canvas.width = W * zoom(); canvas.height = H * zoom();
+  draw();
+}
+
+function renderMask() {
+  const img = maskCtx.createImageData(W, H);
+  let n = 0;
+  for (let i = 0; i < W * H; i++) {
+    if (mask[i]) { img.data[4 * i] = 230; img.data[4 * i + 1] = 60; img.data[4 * i + 2] = 60; img.data[4 * i + 3] = 255; n++; }
+  }
+  maskCtx.putImageData(img, 0, 0);
+  $("area").textContent = `protected: ${n} px = ${(n * du * dv).toFixed(1)} mm²`;
+}
+
+function draw() {
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
+  ctx.globalAlpha = +$("alpha").value;
+  ctx.drawImage(maskCanvas, 0, 0, canvas.width, canvas.height);
+  ctx.globalAlpha = 1;
+}
+
+function stamp(cx, cy) {
+  const r = radiusPx(), r2 = r * r, v = erasing ? 0 : 1;
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(W - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(H - 1, Math.ceil(cy + r));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+    if (dx * dx + dy * dy <= r2) mask[y * W + x] = v;
+  }
+}
+
+function strokeTo(p) {
+  if (!last) { stamp(p.x, p.y); last = p; return; }
+  const dist = Math.hypot(p.x - last.x, p.y - last.y), step = Math.max(0.5, radiusPx() / 3);
+  const n = Math.max(1, Math.ceil(dist / step));
+  for (let k = 1; k <= n; k++) stamp(last.x + (p.x - last.x) * k / n, last.y + (p.y - last.y) * k / n);
+  last = p;
+}
+
+function pixelAt(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) / zoom(), y: (ev.clientY - r.top) / zoom() };
+}
+
+function showCursor(ev, p) {
+  const c = $("cursor"), d = 2 * radiusPx() * zoom();
+  c.style.display = "block"; c.style.width = c.style.height = d + "px";
+  c.style.left = (p.x * zoom() - d / 2) + "px"; c.style.top = (p.y * zoom() - d / 2) + "px";
+  c.style.borderColor = erasing ? "#7cc7ff" : "#fff";
+  const u = S.extent_mm[0][0] + p.x * du, v = S.extent_mm[1][1] - p.y * dv;
+  $("coords").textContent = `${S.plane_axes[0]} = ${u.toFixed(2)} mm, ${S.plane_axes[1]} = ${v.toFixed(2)} mm`;
+}
+
+canvas.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0) return;
+  canvas.setPointerCapture(ev.pointerId);
+  undo.push(mask.slice()); if (undo.length > 50) undo.shift();
+  painting = true; last = null; dirty = true;
+  strokeTo(pixelAt(ev)); renderMask(); draw();
+});
+canvas.addEventListener("pointermove", (ev) => {
+  const p = pixelAt(ev); showCursor(ev, p);
+  if (!painting) return;
+  strokeTo(p); renderMask(); draw();
+});
+const endStroke = () => { painting = false; last = null; };
+canvas.addEventListener("pointerup", endStroke);
+canvas.addEventListener("pointercancel", endStroke);
+canvas.addEventListener("pointerleave", () => { $("cursor").style.display = "none"; });
+
+function setMode(erase) {
+  erasing = erase;
+  $("brushBtn").className = erase ? "secondary" : "active";
+  $("eraseBtn").className = erase ? "active" : "secondary";
+}
+function doUndo() { if (undo.length) { mask = undo.pop(); dirty = true; renderMask(); draw(); } }
+
+$("brushBtn").onclick = () => setMode(false);
+$("eraseBtn").onclick = () => setMode(true);
+$("undoBtn").onclick = doUndo;
+$("clearBtn").onclick = () => { undo.push(mask.slice()); mask.fill(0); dirty = true; renderMask(); draw(); };
+$("radius").oninput = refreshLabels;
+$("zoom").oninput = () => { refreshLabels(); resize(); };
+$("alpha").oninput = () => { refreshLabels(); draw(); };
+
+async function save() {
+  const lo = $("rangeLo").value, hi = $("rangeHi").value;
+  if ((lo === "") !== (hi === "")) { setStatus("Give both ends of the extrusion range or neither.", "err"); return; }
+  setStatus("Saving…");
+  const res = await fetch("/api/save", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mask: maskCanvas.toDataURL("image/png"), axis_range_mm: lo === "" ? null : [+lo, +hi] }),
+  });
+  const out = await res.json();
+  if (out.error) { setStatus(out.error, "err"); return; }
+  dirty = false;
+  setStatus(`Saved ${out.pixels} px (${out.area_mm2.toFixed(1)} mm²) to ${out.saved}`, "ok");
+}
+$("saveBtn").onclick = save;
+
+window.addEventListener("keydown", (ev) => {
+  if (ev.target.tagName === "INPUT") return;
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === "z") { ev.preventDefault(); doUndo(); }
+  else if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") { ev.preventDefault(); save(); }
+  else if (ev.key === "b") setMode(false);
+  else if (ev.key === "e") setMode(true);
+  else if (ev.key === "[" || ev.key === "]") {
+    const r = $("radius"); r.value = +r.value + (ev.key === "]" ? 0.25 : -0.25); refreshLabels();
+  }
+});
+window.addEventListener("beforeunload", (ev) => { if (dirty) { ev.preventDefault(); ev.returnValue = ""; } });
+
+init().catch((e) => setStatus(String(e), "err"));
+</script>
+</body>
+</html>

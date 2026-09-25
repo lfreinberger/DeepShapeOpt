@@ -26,9 +26,16 @@ The config sections mirror the building blocks of a run:
 | `mesh` | the `sdf_hex` mesher: octree castellation and differentiable snap onto the SDF | caps, patches, refinement |
 | `solver` | forward solver and adjoint | `openfoam` (continuous, ESI), `dafoam` (discrete) |
 | `objective` | CFD metric plus penalties | `drag`, `uniformity`, `uniformity_directional`, `losses`; proximity, lattice smoothness |
-| `constraints` | MMA rows with budgets | CFD metric, volume, centroid, FFD fold-over guard, undercut, minimum steg length |
+| `constraints` | MMA rows with budgets | CFD metric, volume, centroid, FFD fold-over guard, undercut, minimum steg length, no thinning in a painted region |
 | `optimizer` | MMA settings | move limit, bounds, GCMMA inner loop, feasibility restoration, step control, convergence stop |
 | `diagnostics` | run mode and exports | `optimize`, `noise_probe`, `jacobian_probe`; VTK / STL series |
+
+The `no_thinning` constraint protects a region in which the start design may only gain solid.
+The region is a 2-D mask extruded along one axis, painted on a projection of the start design:
+
+```sh
+uv run deepshapeopt paint-mask --config <config>.json --out data/masks/<name>.json
+```
 
 Older configs (two blocks `reconstruction` / `optimization`) convert with
 `uv run deepshapeopt migrate-config --write <config>`.
@@ -39,15 +46,16 @@ Older configs (two blocks `reconstruction` / `optimization`) convert with
 deepshapeopt/
   driver.py, problem.py, cli.py     the optimization loop, its assembly from a config, the command line
   config/                           schema v2, loader, run paths, v1 migration
-  geometry/                         domain frame, lattice reconstruction, reconstruction analysis
+  geometry/                         domain frame, lattice reconstruction, reconstruction analysis, projected masks
   parametrization/                  DeepSDF lattice, PCA basis, FFD, locked control points, design space
   hexmesh/                          sdf_hex: octree, snap, polyMesh writer, caps and outlet sub-patches
   mesher.py                         MeshResult and the mesher wrapper the loop uses
   solvers/                          metric registry; openfoam/ (runtime, sensitivities, export); dafoam/ (runner, in-container script)
-  terms/                            objective, penalties and constraint rows (CFD, volume, centroid, FFD jacobian, undercut, steg length)
+  terms/                            objective, penalties and constraint rows (CFD, volume, centroid, FFD jacobian, undercut, steg length, no thinning)
   optimizer/                        MMA wrapper (DeepSDFStruct.optimization.MMA), step control, convergence stop
   diagnostics/                      history CSV, plots, exports, probes, path consistency, noise estimate, latent metric
   latent_gui/                       web editor for the latent codes of a saved design
+  mask_painter/                     brush editor for the protected region of the no_thinning constraint
 openfoam/                           OpenFOAM user libraries (directional uniformity objective, powerLaw-Arrhenius material model)
 external/dafoam_patches/            DAFoam patch (fvMatrix preconditioner) and its build notes
 experiments/                        drag_cube/ (external flow), channel/ (internal flow), reconstruction/ (rim, shiba, propeller, channel)

@@ -152,6 +152,16 @@ def exclude_boxes(cfg_value):
     return cfg_value if hasattr(cfg_value[0][0], "__len__") else [cfg_value]
 
 
+def box_grid(lo: torch.Tensor, hi: torch.Tensor, spacing: float, inset: float) -> torch.Tensor:
+    """Fixed uniform ``(N, 3)`` grid over the box ``[lo, hi]`` pulled in by ``inset``."""
+    axes = []
+    for i in range(3):
+        n_i = max(2, int(round((hi[i].item() - lo[i].item() - 2 * inset) / spacing)) + 1)
+        axes.append(torch.linspace(lo[i].item() + inset, hi[i].item() - inset, n_i, device=lo.device))
+    gx, gy, gz = torch.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
+    return torch.stack([gx.reshape(-1), gy.reshape(-1), gz.reshape(-1)], dim=1).float()
+
+
 def known_keys(cfg: dict, allowed: set[str], name: str) -> None:
     unknown = sorted(k for k in cfg if not k.startswith("_") and k not in allowed)
     if unknown:
