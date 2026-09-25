@@ -369,7 +369,7 @@ def undercut_penalty_sdf(
         # exclude_region). Band points at |phi|=eps have delta_eps=0, so this hard
         # selection adds no discontinuity as points enter/leave the band.
         with torch.no_grad():
-            phi0 = _query(grid)
+            phi0 = torch.cat([_query(grid[i:i + 262144]) for i in range(0, grid.shape[0], 262144)])
         keep = phi0.abs() < eps
         if excl_boxes:
             inside = torch.zeros(grid.shape[0], dtype=torch.bool, device=device)
