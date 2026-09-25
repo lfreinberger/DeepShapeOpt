@@ -87,6 +87,20 @@ tests/smoke/run_all.sh drag_deepsdf_openfoam        # one end-to-end run, 2 iter
 tests/smoke/run_all.sh                              # all smoke cases (OpenFOAM, DAFoam, GPU)
 ```
 
+If `deepshapeopt` fails with `ModuleNotFoundError` (for `deepshapeopt` itself or for a
+dependency such as `torchfem.materials`) although `uv sync` reports no changes, the environment
+was installed with `UV_LINK_MODE=symlink`: every file in `.venv` is then a symlink into
+`~/.cache/uv/archive-v0`, and `uv cache clean` / `uv cache prune` leaves the whole environment
+dangling (`find .venv -xtype l | wc -l` shows the count). Repair with
+
+```sh
+uv sync --reinstall          # in every affected repository
+```
+
+and prefer the default link mode (hardlinks; `unset UV_LINK_MODE` or `UV_LINK_MODE=copy`) so a
+cache clean cannot break the environments again. Symlink mode only saves the disk space of one
+copy per package.
+
 ## 8. Running
 
 ```sh
