@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH --job-name=deepshapeopt-cpu
+#SBATCH --partition=cpu
+#SBATCH --nodelist=karen
+#SBATCH --time=96:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=32
+
+# One shape optimization on the cpu partition (no GPU). Submit from the repository root:
+#
+#     sbatch [-J name] ../DeepShapeOpt/slurm/optimize_cpu.slrm experiments/<case>/config.json
+#
+# The config needs run.device "cpu". The nodes have 2 hardware threads per core and Open MPI
+# counts physical cores, so --cpus-per-task must be twice the MPI rank count
+# (solver.dafoam.n_procs or numberOfSubdomains): 32 -> 16 ranks. karen is pinned because
+# DAFoam's Open MPI failed to bind on plankton when SLURM handed out cores 32-63.
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
+[ -f env.sh ] && source env.sh
+if [ -z "${WM_PROJECT_DIR:-}" ] && [ -f /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc ]; then
+    source /programs/shared/openfoam/OpenFOAM-v2506/etc/bashrc
+fi
+set -euo pipefail
+echo "### node=$(hostname) affinity=$(taskset -cp $$ 2>/dev/null | sed 's/.*: //') nproc=$(nproc) config=$1"
+uv run deepshapeopt optimize --config "$1"

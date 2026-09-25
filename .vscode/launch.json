@@ -86,62 +86,6 @@
       "justMyCode": false
     },
     {
-      "name": "Optimize: drag_cube/config_probe_dafoam_opt",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/scripts/optimize.py",
-      "args": [
-        "--config",
-        "experiments/drag_cube/config_probe_dafoam_opt.json"
-      ],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/env.sh",
-      "justMyCode": false
-    },
-    {
-      "name": "Optimize: drag_cube/config_probe_dafoam_start",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/scripts/optimize.py",
-      "args": [
-        "--config",
-        "experiments/drag_cube/config_probe_dafoam_start.json"
-      ],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/env.sh",
-      "justMyCode": false
-    },
-    {
-      "name": "Optimize: drag_cube/config_probe_openfoam_opt",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/scripts/optimize.py",
-      "args": [
-        "--config",
-        "experiments/drag_cube/config_probe_openfoam_opt.json"
-      ],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/env.sh",
-      "justMyCode": false
-    },
-    {
-      "name": "Optimize: drag_cube/config_probe_openfoam_start",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/scripts/optimize.py",
-      "args": [
-        "--config",
-        "experiments/drag_cube/config_probe_openfoam_start.json"
-      ],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/env.sh",
-      "justMyCode": false
-    },
-    {
       "name": "Optimize: channel/config",
       "type": "debugpy",
       "request": "launch",

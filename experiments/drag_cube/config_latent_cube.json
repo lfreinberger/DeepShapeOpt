@@ -1,12 +1,13 @@
 {
   "run": {
-    "name": "results_cube_sdf_hex",
+    "name": "results_cube",
     "device": "cuda",
     "debug": true,
     "num_iter": 60,
     "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}",
     "scratch_dir": "${DEEPSHAPEOPT_SCRATCH_DIR}"
   },
+
   "geometry": {
     "mesh_path": "${DEEPSHAPEOPT_DATA_DIR}/shapes/cube_l1.stl",
     "unit_to_metre": 1.0,
@@ -24,6 +25,7 @@
     ],
     "flow": "external"
   },
+
   "parametrization": {
     "type": "deepsdf",
     "deepsdf": {
@@ -50,14 +52,14 @@
         "code_reg_lambda": 0.0,
         "grad_clip": 1.0,
         "eikonal_lambda": 0.0,
-        "reuse": true,
+        "reuse": false,
         "export_samples_series": false,
         "export_samples_fine_until_epoch": 1,
         "export_samples_fine_every": 3,
         "export_resolution": 48
       },
       "pca": {
-        "enabled": true,
+        "enabled": false,
         "n_components": 32,
         "bounds": [
           -5,
@@ -67,6 +69,7 @@
       }
     }
   },
+
   "mesh": {
     "sdf_hex": {
       "domain": [
@@ -101,13 +104,16 @@
       "enable_fast_path": true
     }
   },
+
   "solver": {
     "type": "openfoam",
     "case": "foam_case"
   },
+
   "objective": {
     "metric": "drag"
   },
+
   "constraints": [
     {
       "type": "volume"
@@ -117,8 +123,9 @@
       "tol": 0.05
     }
   ],
+
   "optimizer": {
-    "max_step": 0.2,
+    "max_step": 0.02,
     "bounds": [
       -2.0,
       2.0

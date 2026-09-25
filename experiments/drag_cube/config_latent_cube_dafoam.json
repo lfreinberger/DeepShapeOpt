@@ -1,7 +1,7 @@
 {
   "run": {
-    "name": "results_cube_dafoam_nopca",
-    "device": "cuda",
+    "name": "results_cube_dafoam",
+    "device": "cpu",
     "debug": true,
     "num_iter": 60,
     "heavy_data_dir": "${DEEPSHAPEOPT_RESULTS_DIR}",
@@ -181,7 +181,7 @@
       2.0
     ],
     "convergence": {
-      "obj_tol": 0.03,
+      "obj_tol": 0.01,
       "window": 15
     }
   }
