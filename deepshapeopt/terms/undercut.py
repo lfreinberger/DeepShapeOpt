@@ -270,7 +270,7 @@ def undercut_penalty(verts, faces, draw_dir, threshold=0.0, exclude_axial_deg=30
 def undercut_penalty_sdf(
     lattice_struct, frame, param, draw_dir, threshold,
     exclude_axial_deg=30.0, grid_spacing=0.5, band_factor=1.5, exclude_region=None,
-    collect_debug=False, formulation="penalty", ks_rho=50.0, silhouette=None,
+    collect_debug=False, formulation="penalty", ks_rho=50.0, silhouette=None, normal_step=None,
 ):
     """SDF-level-set draft / undercut penalty -- smooth in the latent params.
 
@@ -328,6 +328,12 @@ def undercut_penalty_sdf(
     weight). Threshold ``viol > 0`` in ParaView to isolate the offending points; a clean
     iteration still yields a cloud (viol ~ 0 everywhere), so "clean" and "export broken"
     stay distinguishable.
+
+    ``normal_step`` (mm) is the half-width of the central differences for ``grad phi``;
+    the default ``grid_spacing / 4`` resolves the normal on the band scale. A step of the
+    order of a millimetre averages the slope over ``2 * normal_step`` and filters sub-0.1 mm
+    ripples of a fitted level set around sharp edges, which tilt the local normal by tens of
+    degrees without moving the wall.
     """
     from DeepSDFStruct.utils import with_float32_lattice
     import math as _math
@@ -337,7 +343,7 @@ def undercut_penalty_sdf(
     scale = float(frame.scale)
     sp = scale * float(grid_spacing)        # grid spacing in normalized units
     eps = band_factor * sp                  # band half-width (normalized SDF units)
-    fd = 0.25 * sp                          # central-difference step (normalized)
+    fd = scale * float(normal_step) if normal_step else 0.25 * sp   # central-difference step (normalized)
     lo = box_norm[0]
     hi = box_norm[1]
     inset = sp + fd                         # keep grid + finite-diff stencil inside box_norm
@@ -487,7 +493,7 @@ from .base import Budget, ConstraintTerm, PenaltyTerm, State, TermValue, exclude
 
 _UNDERCUT_KEYS = {"type", "weight", "budget", "method", "formulation", "draw_direction", "draft_angle_deg",
                   "exclude_axial_deg", "grid_spacing", "band_factor", "exclude_region", "ks_rho", "scope",
-                  "silhouette_margin", "outlet_patch"}
+                  "silhouette_margin", "outlet_patch", "normal_step"}
 
 
 class _UndercutEvaluator:
@@ -507,6 +513,9 @@ class _UndercutEvaluator:
         self.exclude_axial_deg = float(cfg.get("exclude_axial_deg", 30.0))
         self.grid_spacing = float(cfg.get("grid_spacing", 0.5))
         self.band_factor = float(cfg.get("band_factor", 1.5))
+        self.normal_step = cfg.get("normal_step")
+        if self.normal_step is not None and float(self.normal_step) <= 0.0:
+            raise ValueError("undercut.normal_step must be > 0 (mm)")
         self.exclude_region = exclude_boxes(cfg.get("exclude_region"))
         self.ks_rho = float(cfg.get("ks_rho", 50.0))
         self.scope = str(cfg.get("scope", "all"))
@@ -539,7 +548,7 @@ class _UndercutEvaluator:
                 exclude_axial_deg=self.exclude_axial_deg, grid_spacing=self.grid_spacing,
                 band_factor=self.band_factor, exclude_region=self.exclude_region,
                 collect_debug=state.debug, formulation=self.formulation, ks_rho=self.ks_rho,
-                silhouette=self.silhouette,
+                silhouette=self.silhouette, normal_step=self.normal_step,
             )
             debug = {"band_points": n_band, "undercut_points": n_uc}
             if pts is not None:

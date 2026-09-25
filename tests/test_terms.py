@@ -347,3 +347,16 @@ def test_no_thinning_gradient_matches_finite_difference(tmp_path, frame):
     fd = (vals[0] - vals[1]) / (2 * eps)
     assert fd < 0.0
     assert abs(g - fd) < 0.02 * abs(fd)
+
+
+def test_undercut_sdf_normal_step(frame):
+    """Walls parallel to the draw axis read n.d = 0 for the default and a coarse normal step."""
+    from deepshapeopt.terms.undercut import UndercutConstraint, undercut_penalty_sdf
+
+    ls = BoxesSDF(frame, lambda p: [_slab(p, -30.0, 30.0, 8.0)], 1.5, 0.0)
+    for step in (None, 1.0):
+        M, g, n_band, *_ = undercut_penalty_sdf(ls, frame, ls.param, [-1.0, 0.0, 0.0], 0.0, exclude_axial_deg=10.0,
+                                                grid_spacing=0.5, formulation="ks_margin", normal_step=step)
+        assert n_band > 0 and abs(M.item()) < 0.02
+    with pytest.raises(ValueError):
+        UndercutConstraint({"type": "undercut", "normal_step": 0.0})
