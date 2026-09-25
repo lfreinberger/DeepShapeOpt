@@ -186,6 +186,29 @@ def test_inner_castellation_sphere():
     assert np.all(cells.levels[near] == MAX_LEVEL)
 
 
+def test_physical_sdf_units_normalized_field():
+    """A field in normalized units (scale s) reads physical distances, so the castellation
+    bands (in physical cell sizes) match those of the unscaled field."""
+    s, r = 0.25, 0.8
+    scaled = PhysicalSDF(
+        sdf_norm_fn=lambda x: torch.linalg.norm(x, dim=1) - r * s,
+        norm_fn=lambda x: x * s,
+        design_domain=DESIGN_DOMAIN,
+        dist_scale=s,
+        device="cpu",
+    )
+    plain, _ = make_sphere_sdf(r)
+    x = torch.tensor([[1.2, 0.0, 0.0], [0.0, 0.3, 0.0], [2.0, 0.0, 0.0]])
+    assert torch.allclose(scaled.phi_ext(x), plain.phi_ext(x), atol=1e-6)
+    assert abs(float(scaled.phi(x[:1])) - 0.4) < 1e-6
+
+    lattice = make_lattice()
+    box = MeshBox.from_physical(lattice, MESH_BOX)
+    a = build_inner_castellation(lattice, box, IFACE, MAX_LEVEL, scaled.phi_ext_np).cells
+    b = build_inner_castellation(lattice, box, IFACE, MAX_LEVEL, plain.phi_ext_np).cells
+    assert np.array_equal(a.levels, b.levels) and np.array_equal(a.anchors, b.anchors)
+
+
 # ---------------------------------------------------------------------------
 # polyMesh assembly
 # ---------------------------------------------------------------------------

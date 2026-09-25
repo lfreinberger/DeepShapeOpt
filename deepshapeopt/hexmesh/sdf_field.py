@@ -36,8 +36,10 @@ class PhysicalSDF:
         Physical bounding box that contains the zero level set.  Queries
         outside are clamped to it (see :meth:`phi_ext`).
     dist_scale : float
-        Factor converting physical distances to SDF value units (the
-        normalization scale, ``2 / L``).  Used by the clamped extension.
+        Factor converting physical distances to the units of ``sdf_norm_fn``
+        (the normalization scale, ``2 / L``).  Values are divided by it, so
+        every query returns physical lengths like the fixed outer geometry of
+        :class:`CompositeSDF` and the cell sizes the castellation bands use.
     sign : float
         Multiplies the raw SDF values; ``-1`` flips the convention for
         shapes whose interior is the fluid (internal flow channels).
@@ -72,16 +74,16 @@ class PhysicalSDF:
     # ------------------------------------------------------------------
 
     def phi(self, x_phys: torch.Tensor) -> torch.Tensor:
-        """SDF at physical points [N, 3] -> [N].  Differentiable."""
+        """SDF at physical points [N, 3] -> [N] in physical units.  Differentiable."""
         x_norm = self._norm_fn(x_phys)
         out = self._fn(x_norm)
-        return self.sign * out.reshape(-1)
+        return (self.sign / self.dist_scale) * out.reshape(-1)
 
     def phi_ext(self, x_phys: torch.Tensor) -> torch.Tensor:
         """SDF extended outside the design domain.
 
         Queries are clamped to the design domain; the distance to the clamp
-        point (converted to SDF units) is added so values grow outward.
+        point is added so values grow outward.
         This keeps the zero level set strictly inside the design domain and
         marks the entire margin band as fluid.
         """
@@ -89,7 +91,7 @@ class PhysicalSDF:
         hi = self.design_domain[1][None, :]
         x_cl = torch.clamp(x_phys, min=lo, max=hi)
         dist = torch.linalg.norm(x_phys - x_cl, dim=1)
-        return self.phi(x_cl) + self.dist_scale * dist
+        return self.phi(x_cl) + dist
 
     def phi_and_grad(self, x_phys: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """SDF value and spatial gradient at physical points (no param graph)."""

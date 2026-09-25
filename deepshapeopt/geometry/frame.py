@@ -109,7 +109,7 @@ class DomainFrame:
         )
 
     def physical_sdf(self, lattice_struct, *, sign=1.0, device="cpu"):
-        """Wrap a normalized-space SDF as a physical-coordinate ``PhysicalSDF``."""
+        """Wrap a normalized-space SDF as a ``PhysicalSDF`` (physical coordinates and values)."""
         from deepshapeopt.hexmesh.sdf_field import PhysicalSDF
 
         return PhysicalSDF(
