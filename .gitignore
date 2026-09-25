@@ -103,6 +103,7 @@ env.csh
 
 # Local helper scripts and notes (not part of the library)
 tools/
+**/notes/
 docs/
 
 # OpenFOAM user library build artifacts (sources stay tracked)
