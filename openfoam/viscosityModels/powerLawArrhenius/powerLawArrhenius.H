@@ -60,17 +60,40 @@ class powerLawArrhenius
 :
     public viscosityModel
 {
+public:
+
+    //- Material coefficients of the law, read from powerLawArrheniusCoeffs.
+    //  Kept separate from the model so that callers without access to the
+    //  viscosityModel (the DAFoam residual, which re-evaluates nu inside the
+    //  AD tape) can evaluate exactly the same formula.
+    struct coeffs
+    {
+        dimensionedScalar k;
+        dimensionedScalar n;
+        dimensionedScalar nuMin;
+        dimensionedScalar nuMax;
+        dimensionedScalar Eactive;      // [J/mol]
+        dimensionedScalar Rconst;       // [J/(mol K)]
+
+        explicit coeffs(const dictionary& dict);
+    };
+
+    //- Unrelaxed viscosity nu(U, T) of the law
+    static tmp<volScalarField> calcNu
+    (
+        const coeffs& c,
+        const volVectorField& U,
+        const volScalarField& T
+    );
+
+
+private:
+
     // Private data
 
         dictionary powerLawArrheniusCoeffs_;
 
-        dimensionedScalar k_;
-        dimensionedScalar n_;
-        dimensionedScalar nuMin_;
-        dimensionedScalar nuMax_;
-        
-        dimensionedScalar Eactive_;
-        dimensionedScalar Rconst_;
+        coeffs coeffs_;
 
         //- Under-relaxation factor for the viscosity update (1 = none).
         //  Blends the newly computed nu with the previous value each

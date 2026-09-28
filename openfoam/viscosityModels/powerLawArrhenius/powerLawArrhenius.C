@@ -15,6 +15,7 @@ License
 #include "powerLawArrhenius.H"
 #include "addToRunTimeSelectionTable.H"
 #include "surfaceFields.H"
+#include "fvcGrad.H"
 
 namespace Foam
 {
@@ -29,36 +30,58 @@ namespace viscosityModels
         dictionary
     );
 
-// * * * * * * * * * * * * Protected Member Functions  * * * * * * * * * * * * //
+// * * * * * * * * * * * * * * * * Coefficients  * * * * * * * * * * * * * //
 
-Foam::tmp<Foam::volScalarField>
+powerLawArrhenius::coeffs::coeffs(const dictionary& dict)
+:
+    k("k", dimViscosity, dict),
+    n("n", dimless, dict),
+    nuMin("nuMin", dimViscosity, dict),
+    nuMax("nuMax", dimViscosity, dict),
+    Eactive("Eactive", dimEnergy/dimMoles, dict),
+    Rconst("Rconst", dimEnergy/(dimMoles*dimTemperature), dict)
+{}
 
-Foam::viscosityModels::powerLawArrhenius::calcNu() const
+
+// * * * * * * * * * * * * * * Static Member Functions * * * * * * * * * * * //
+
+tmp<volScalarField> powerLawArrhenius::calcNu
+(
+    const coeffs& c,
+    const volVectorField& U,
+    const volScalarField& T
+)
 {
-    const volScalarField& T=U_.mesh().lookupObject<volScalarField>("T");
+    // same strain rate as viscosityModel::strainRate()
+    const volScalarField strainRate(sqrt(2.0)*mag(symm(fvc::grad(U))));
+
     return max
     (
-        nuMin_,
+        c.nuMin,
         min
         (
-            nuMax_,
-            k_*pow 
+            c.nuMax,
+            c.k*pow
             (
                 max
                 (
-                    dimensionedScalar("one", dimTime, 1.0)*strainRate(),
+                    dimensionedScalar("one", dimTime, 1.0)*strainRate,
                     dimensionedScalar("SMALL", dimless, SMALL)
                 ),
-                n_.value() - scalar(1)
+                c.n.value() - scalar(1)
             )
-            * exp( Eactive_ / (Rconst_ * T) )
+            * exp(c.Eactive/(c.Rconst*T))
         )
     );
-
-
 }
 
 
+// * * * * * * * * * * * * Protected Member Functions  * * * * * * * * * * * //
+
+tmp<volScalarField> powerLawArrhenius::calcNu() const
+{
+    return calcNu(coeffs_, U_, U_.mesh().lookupObject<volScalarField>("T"));
+}
 
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
@@ -73,12 +96,7 @@ powerLawArrhenius::powerLawArrhenius
 :
     viscosityModel(name, viscosityProperties, U, phi),
     powerLawArrheniusCoeffs_(viscosityProperties.optionalSubDict(typeName + "Coeffs")),
-    k_("k", dimViscosity, powerLawArrheniusCoeffs_),
-    n_("n", dimless, powerLawArrheniusCoeffs_),
-    nuMin_("nuMin", dimViscosity, powerLawArrheniusCoeffs_),
-    nuMax_("nuMax", dimViscosity, powerLawArrheniusCoeffs_),
-    Eactive_("Eactive", dimEnergy/dimMoles, powerLawArrheniusCoeffs_),                             // [J/mol]
-    Rconst_("Rconst",  dimEnergy/(dimMoles*dimTemperature), powerLawArrheniusCoeffs_),            // [J/(mol K)]
+    coeffs_(powerLawArrheniusCoeffs_),
     viscosityRelaxation_
     (
         powerLawArrheniusCoeffs_.getOrDefault<scalar>("viscosityRelaxation", 1)
@@ -109,12 +127,7 @@ bool powerLawArrhenius::read
 
     powerLawArrheniusCoeffs_ = viscosityProperties.optionalSubDict(typeName + "Coeffs");
 
-    powerLawArrheniusCoeffs_.readEntry("k", k_);
-    powerLawArrheniusCoeffs_.readEntry("n", n_);
-    powerLawArrheniusCoeffs_.readEntry("nuMin", nuMin_);
-    powerLawArrheniusCoeffs_.readEntry("nuMax", nuMax_);
-    powerLawArrheniusCoeffs_.readEntry("Eactive", Eactive_);
-    powerLawArrheniusCoeffs_.readEntry("Rconst",  Rconst_);
+    coeffs_ = coeffs(powerLawArrheniusCoeffs_);
     viscosityRelaxation_ =
         powerLawArrheniusCoeffs_.getOrDefault<scalar>("viscosityRelaxation", 1);
 
