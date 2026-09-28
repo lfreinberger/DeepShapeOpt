@@ -81,6 +81,10 @@ OUTPUT_DIR = "dafoam_output"
 # that exists in the image and is not otherwise used.
 CONTAINER_LIBS = "/home/dafoamuser/dafoam/OpenFOAM/sharedLibs"
 CONTAINER_PATCH = "/opt/dafoam-patched"
+# Solvers that exist only in the patched build (external/dafoam_patches/), and the ones
+# whose residual class assembles the fvMatrix preconditioner.
+PATCHED_SOLVERS = {"DASimpleHeatTransferFoam"}
+FVMATRIX_SOLVERS = {"DASimpleFoam"}
 
 
 @dataclass
@@ -112,7 +116,7 @@ class DAFoamConfig:
         known = {
             "container", "n_procs", "binds", "template", "daOptions", "functions",
             "outputs", "load_script", "apptainer", "fail_on_mesh_check", "keep_coloring",
-            "pc_mode", "build_source", "build_overlay",
+            "pc_mode", "build_root", "build_source", "build_overlay",
         }
         unknown = set(cfg) - known
         if unknown:
@@ -132,10 +136,25 @@ class DAFoamConfig:
         pc_mode = str(cfg.get("pc_mode", "coloring"))
         if pc_mode not in ("coloring", "fvmatrix"):
             raise ValueError(f"dafoam.pc_mode {pc_mode!r} invalid; use 'coloring' or 'fvmatrix'")
+        solver_name = str(cfg.get("daOptions", {}).get("solverName", "DASimpleFoam"))
+        if pc_mode == "fvmatrix" and solver_name not in FVMATRIX_SOLVERS:
+            raise ValueError(
+                f"dafoam.pc_mode 'fvmatrix' is implemented for {sorted(FVMATRIX_SOLVERS)} only, "
+                f"not {solver_name}; use pc_mode 'coloring'"
+            )
         raw_root = cfg.get("build_root") or os.environ.get("DAFOAM_BUILD_ROOT")
         build_root = Path(raw_root).expanduser() if raw_root else None
         if pc_mode == "fvmatrix":
-            build_root = _check_build_root(build_root, from_config="build_root" in cfg)
+            build_root = _check_build_root(
+                build_root, from_config="build_root" in cfg,
+                need="pc_mode 'fvmatrix' needs the patched DAFoam build (the stock container "
+                     "has no initializePCMatFvMatrix)",
+            )
+        elif solver_name in PATCHED_SOLVERS:
+            build_root = _check_build_root(
+                build_root, from_config="build_root" in cfg,
+                need=f"solverName {solver_name} exists only in the patched DAFoam build",
+            )
         return cls(
             container=container,
             n_procs=int(cfg.get("n_procs", 1)),
@@ -153,19 +172,18 @@ class DAFoamConfig:
         )
 
 
-def _check_build_root(root: Path | None, from_config: bool) -> Path:
+def _check_build_root(root: Path | None, from_config: bool, need: str) -> Path:
     """Validate the published patched build, with a message that says what to do.
 
     Checked eagerly at config load, long before the reconstruction and the meshing, so a
     missing build costs a second rather than several minutes.
     """
     hint = (
-        "pc_mode 'fvmatrix' needs the patched DAFoam build (the stock container has no "
-        "initializePCMatFvMatrix). Either\n"
+        f"{need}. Either\n"
         "  - publish it:  DeepShapeOpt/scripts/publish_dafoam_build.sh   (see "
         "DeepShapeOpt/external/dafoam_patches/README.md), or\n"
-        "  - set pc_mode to 'coloring' to run on the stock container (~10x slower per "
-        "evaluation)."
+        "  - for DASimpleFoam, set pc_mode to 'coloring' to run on the stock container "
+        "(~10x slower per evaluation)."
     )
     if root is None:
         raise ValueError(
