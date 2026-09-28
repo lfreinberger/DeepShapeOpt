@@ -1,0 +1,123 @@
+diff --git a/src/adjoint/DAColoring/DAColoring.C b/src/adjoint/DAColoring/DAColoring.C
+index 1c3f371..5a9e1e0 100755
+--- a/src/adjoint/DAColoring/DAColoring.C
++++ b/src/adjoint/DAColoring/DAColoring.C
+@@ -928,6 +928,64 @@ void DAColoring::coloringComplete(
+     reduce(colorCounter, sumOp<label>());
+ }
+ 
++void DAColoring::petscD2Coloring(
++    const Mat conMat,
++    Vec colors,
++    label& nColors) const
++{
++    /*
++    Description:
++        Distance-2 column coloring of conMat with PETSc's MatColoring (greedy), the
++        coloring PETSc itself uses for finite-difference Jacobians: no two columns
++        with a nonzero in the same row share a color.
++
++        Same output as parallelD2Coloring: colors[i] = color of column i (as a
++        PetscScalar, in the column ownership of conMat), nColors = number of colors.
++    */
++
++    Info << "PETSc MatColoring (greedy, distance 2)..." << endl;
++
++    // Symmetric pattern B = A + A^T: two columns sharing a row r of A are both
++    // adjacent to r in B, i.e. within distance 2, so a distance-2 coloring of B is a
++    // valid column coloring of A (conservative). PETSc's greedy kernel crashed on the
++    // nonsymmetric A directly.
++    Mat At;
++    Mat B;
++    MatTranspose(conMat, MAT_INITIAL_MATRIX, &At);
++    MatDuplicate(conMat, MAT_COPY_VALUES, &B);
++    MatAXPY(B, 1.0, At, DIFFERENT_NONZERO_PATTERN);
++    MatDestroy(&At);
++
++    MatColoring mc;
++    ISColoring isColoring;
++    MatColoringCreate(B, &mc);
++    MatColoringSetDistance(mc, 2);
++    MatColoringSetType(mc, MATCOLORINGGREEDY);
++    MatColoringSetFromOptions(mc);
++    MatColoringApply(mc, &isColoring);
++
++    PetscInt nLocal;
++    PetscInt nc;
++    const ISColoringValue* localColors;
++    ISColoringGetColors(isColoring, &nLocal, &nc, &localColors);
++
++    PetscScalar* colorsArray;
++    VecGetArray(colors, &colorsArray);
++    for (PetscInt i = 0; i < nLocal; i++)
++    {
++        colorsArray[i] = localColors[i] * 1.0;
++    }
++    VecRestoreArray(colors, &colorsArray);
++
++    nColors = nc;
++
++    ISColoringDestroy(&isColoring);
++    MatColoringDestroy(&mc);
++    MatDestroy(&B);
++
++    Info << "PETSc MatColoring done: " << nColors << " colors" << endl;
++}
++
+ void DAColoring::validateColoring(
+     Mat conMat,
+     Vec colors) const
+diff --git a/src/adjoint/DAColoring/DAColoring.H b/src/adjoint/DAColoring/DAColoring.H
+index 0be976b..2984bc1 100644
+--- a/src/adjoint/DAColoring/DAColoring.H
++++ b/src/adjoint/DAColoring/DAColoring.H
+@@ -88,6 +88,12 @@ public:
+         Vec colors,
+         label& nColors) const;
+ 
++    /// distance-2 coloring with PETSc's MatColoring (greedy); same contract as parallelD2Coloring
++    void petscD2Coloring(
++        const Mat conMat,
++        Vec colors,
++        label& nColors) const;
++
+     /// validate if there is coloring conflict
+     void validateColoring(
+         Mat conMat,
+diff --git a/src/adjoint/DAJacCon/DAJacCon.C b/src/adjoint/DAJacCon/DAJacCon.C
+index c13e311..f950f27 100755
+--- a/src/adjoint/DAJacCon/DAJacCon.C
++++ b/src/adjoint/DAJacCon/DAJacCon.C
+@@ -1945,8 +1945,15 @@ void DAJacCon::calcJacConColoring(const word postFix)
+     VecZeroEntries(jacConColors_);
+     if (daOption_.getOption<label>("adjUseColoring"))
+     {
+-        // use parallelD2 coloring to compute colors
+-        daColoring_.parallelD2Coloring(jacCon_, jacConColors_, nJacConColors_);
++        if (daOption_.getOption<word>("adjColoringAlgorithm") == "petsc")
++        {
++            daColoring_.petscD2Coloring(jacCon_, jacConColors_, nJacConColors_);
++        }
++        else
++        {
++            // use parallelD2 coloring to compute colors
++            daColoring_.parallelD2Coloring(jacCon_, jacConColors_, nJacConColors_);
++        }
+     }
+     else
+     {
+diff --git a/dafoam/pyDAFoam.py b/dafoam/pyDAFoam.py
+--- a/dafoam/pyDAFoam.py
++++ b/dafoam/pyDAFoam.py
+@@ -516,6 +516,11 @@
+         ## debugging the accuracy of partial computation, always set it to True
+         self.adjUseColoring = True
+ 
++        ## The distance-2 coloring algorithm for adjUseColoring: "dafoam" (DAFoam's own parallel
++        ## heuristic) or "petsc" (PETSc MatColoring greedy, much faster on large meshes). Both
++        ## are validated with DAColoring::validateColoring.
++        self.adjColoringAlgorithm = "dafoam"
++
+         ## The Petsc options for solving the adjoint linear equation. These options should work for
+         ## most of the case. If the adjoint does not converge, try to increase pcFillLevel to 2, or
+         ## try "jacMatReOrdering": "nd"

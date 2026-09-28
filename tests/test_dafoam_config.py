@@ -51,3 +51,11 @@ def test_heat_transfer_solver_with_build_root(sif, build_root, monkeypatch):
 def test_stock_solver_with_coloring_needs_no_build(sif, monkeypatch):
     monkeypatch.delenv("DAFOAM_BUILD_ROOT", raising=False)
     assert DAFoamConfig.from_dict(_cfg(sif, "DASimpleFoam")).build_root is None
+
+
+def test_petsc_coloring_needs_patched_build(sif, monkeypatch):
+    monkeypatch.delenv("DAFOAM_BUILD_ROOT", raising=False)
+    cfg = _cfg(sif, "DASimpleFoam")
+    cfg["daOptions"]["adjColoringAlgorithm"] = "petsc"
+    with pytest.raises(ValueError, match="adjColoringAlgorithm"):
+        DAFoamConfig.from_dict(cfg)

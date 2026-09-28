@@ -3,9 +3,10 @@
 | patch | what |
 |---|---|
 | `0001-fvmatrix-preconditioner-for-DASimpleFoam.patch` | adjoint preconditioner from the fvMatrix coefficients (below) |
-| `0002-DASimpleHeatTransferFoam.patch` | new solver: generalized-Newtonian melt with energy equation, fully coupled adjoint (section at the end) |
+| `0002-DASimpleHeatTransferFoam.patch` | new solver: generalized-Newtonian melt with energy equation, fully coupled adjoint (section below) |
+| `0003-petsc-coloring.patch` | option `adjColoringAlgorithm: "petsc"`: the dRdW coloring from PETSc `MatColoring` instead of DAFoam's heuristic (section at the end) |
 
-Both apply in order to the same base. `build_dafoam.sh` builds plain, ADR and ADF;
+All three apply in order to the same base. `build_dafoam.sh` builds plain, ADR and ADF;
 `scripts/publish_dafoam_build.sh` publishes all three.
 
 # 0001: fvMatrix preconditioner for `DASimpleFoam`
@@ -154,3 +155,31 @@ Gate on the thermal semperit die, coarse mesh (86k cells, 16 procs, 2000 fixed p
 eps 1e-6 m, uniformity): FD/adjoint 0.99989 along the gradient, 0.99948 along a random wall
 direction; the fvmatrix preconditioner reproduces the coloring gradient to 3e-10 relative, with a
 PC set-up of 0.1 s instead of 503 s (coloring 448 s + assembly).
+
+# 0003: PETSc coloring (`adjColoringAlgorithm`)
+
+With `pc_mode: coloring` the preconditioner is the first-order Jacobian built by one AD sweep per
+color. That PC is strong (the fvMatrix PC is block-diagonal and needs ~5x the GMRES iterations),
+but DAFoam's own parallel distance-2 coloring (`DAColoring::parallelD2Coloring`) takes ~10 min
+on an 86k-cell mesh, and it has to be redone whenever the mesh topology changes, i.e. every
+design iteration of the sdf_hex pipeline.
+
+`daOptions.adjColoringAlgorithm: "petsc"` (default `"dafoam"`, stock behaviour) replaces it in
+`DAJacCon::calcJacConColoring` with `DAColoring::petscD2Coloring`: PETSc `MatColoring`, greedy,
+distance 2, on the symmetrized pattern A + A^T (two columns sharing a row of A are within distance
+2 there, so the coloring is valid for A, only a little conservative; the greedy kernel segfaults
+on the nonsymmetric A directly). `validateColoring` still checks every coloring.
+
+Any valid coloring gives the same PC matrix, so the gradient is unchanged: bit-identical wall
+sensitivities on the coarse thermal die, 2.6e-9 relative on the production mesh.
+
+| thermal semperit die, 16 procs | colors | coloring | PC total | GMRES its | evaluation |
+|---|---|---|---|---|---|
+| coarse (86k), DAFoam coloring | 2534 | ~590 s | 717 s | 87 / 86 | 793 s |
+| coarse (86k), PETSc coloring | 1214 | ~22 s | 92 s | 87 / 86 | 160 s |
+| coarse (86k), fvmatrix | - | - | 0.1 s | 433 / 437 | 235 s |
+| production (224k), fvmatrix | - | - | 0.3 s | 672 / 671 | 1130 s |
+| production (224k), PETSc coloring | 1794 | ~120 s | 370 s | 114 / 114 | 629 s |
+
+On the production mesh the PC assembly (coloring + one AD sweep per color) is now the largest
+share; GMRES is 5x cheaper than with the fvMatrix PC.

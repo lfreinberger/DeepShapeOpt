@@ -155,6 +155,11 @@ class DAFoamConfig:
                 build_root, from_config="build_root" in cfg,
                 need=f"solverName {solver_name} exists only in the patched DAFoam build",
             )
+        elif cfg.get("daOptions", {}).get("adjColoringAlgorithm", "dafoam") != "dafoam":
+            build_root = _check_build_root(
+                build_root, from_config="build_root" in cfg,
+                need="daOptions.adjColoringAlgorithm exists only in the patched DAFoam build",
+            )
         return cls(
             container=container,
             n_procs=int(cfg.get("n_procs", 1)),
