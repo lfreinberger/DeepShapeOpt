@@ -1,0 +1,41 @@
+=== single-voxel cube probe: claim verification ===
+
+C1 (constant latent => piecewise linear): PASS
+    axis-x     kinky      median_c=1.85e-11 frac=0.070 maxw=4 frac_ratio=0.52
+    axis-y     kinky      median_c=1.79e-11 frac=0.072 maxw=5 frac_ratio=0.51
+    axis-z     kinky      median_c=1.71e-11 frac=0.077 maxw=3 frac_ratio=0.52
+    diag-xyz   kinky      median_c=1.66e-11 frac=0.070 maxw=4 frac_ratio=0.52
+    diag-xy    kinky      median_c=1.71e-11 frac=0.073 maxw=6 frac_ratio=0.50
+    generic    kinky      median_c=1.82e-11 frac=0.066 maxw=4 frac_ratio=0.53
+C2 (degree-1 field => piecewise trilinear, fitted CPs): PASS
+    axis-x     kinky      median_c=8.57e-11 frac=0.198 maxw=8 frac_ratio=0.53
+    axis-y     kinky      median_c=8.57e-11 frac=0.181 maxw=8 frac_ratio=0.54
+    axis-z     kinky      median_c=8.57e-11 frac=0.163 maxw=6 frac_ratio=0.55
+    diag-xyz   curved     median_c=6.29e-02 frac=0.997 maxw=1169 frac_ratio=1.00
+    diag-xy    curved     median_c=7.28e-02 frac=0.984 maxw=836 frac_ratio=1.00
+    generic    curved     median_c=4.71e-02 frac=0.982 maxw=905 frac_ratio=1.00
+C2 (degree-1 field => piecewise trilinear, synthetic checkerboard CPs): PASS
+    axis-x     kinky      median_c=6.00e-11 frac=0.061 maxw=4 frac_ratio=0.52
+    axis-y     kinky      median_c=7.07e-11 frac=0.044 maxw=4 frac_ratio=0.51
+    axis-z     kinky      median_c=6.00e-11 frac=0.049 maxw=4 frac_ratio=0.50
+    diag-xyz   curved     median_c=2.50e-03 frac=0.227 maxw=302 frac_ratio=0.95
+    diag-xy    kinky      median_c=6.85e-11 frac=0.053 maxw=2 frac_ratio=0.51
+    generic    curved     median_c=1.46e-03 frac=0.254 maxw=323 frac_ratio=0.96
+C3 (genuine crease at the cube edge): PASS
+    arc scan: edge rotation 66.8 deg, concentration 0.45 (n=41) / 0.45 (n=81); control rotation 1.0 deg
+    interpretation: the dihedral is carried by ~2 dominant facet crease(s) inside a band of width ~0.12 -- a genuine, resolution-limited crease, not a smooth rounding
+    recentred eps sweep (edge): [41.1, 34.2, 34.0, 34.0, 27.1] deg; control at eps=0.002: 0.0 deg
+    edge points found: 9/9, crease offset from GT-edge ray 0.0153, max projection residual 7.426784881525705e-18
+C4 (creases move continuously with lambda): PASS
+    x0: span 0.300, max step 0.0437, monotone True, surface lost at 0 alphas; corner_r (crease of the level set) max step 0.0304; longest kink track 20/21 alphas (0 full-range)
+
+fit gates (mean |s| at GT face centres; claims C1/C2 are
+function-class statements and hold regardless):
+    A_main     loss=7.992e-03 faces=0.0004 corners=0.0060 fit_ok=True
+    A_small    loss=4.714e-03 faces=0.0011 corners=0.0108 fit_ok=True
+    A_big      loss=8.240e-03 faces=0.0019 corners=0.0094 fit_ok=True
+    B          loss=2.809e-03 faces=0.0025 corners=0.0162 fit_ok=True
+mesh: 14088 faces, dihedral p50/p95/max = 1.2/15.1/67.6 deg -> /usr2/lfrei/ProjectsPhD/revision/DeepShapeOpt/revision_artifacts/single_voxel_cube/one_latent_cube.obj
+
+note: constant latents are out-of-distribution for this decoder
+(training always used 729-CP degree-1 latent fields).
