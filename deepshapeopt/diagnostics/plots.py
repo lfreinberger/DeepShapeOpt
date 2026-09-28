@@ -399,7 +399,7 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
     ----------
     diagnostics : dict
         Keys: "obj_change", "grad_norm", "mma_ch", "step_inf", "step_ratio",
-        "wall_disp_max_mm", "wall_disp_mean_mm", "vol_constraint", "sens_norm", ...
+        "wall_disp_max", "wall_disp_mean", "vol_constraint", "sens_norm", ...
         Each value is a list of per-iteration scalars.
     output_dir : Path
         Directory where ``convergence_diagnostics.png`` is saved.
@@ -415,8 +415,8 @@ def plot_convergence_diagnostics(diagnostics: dict, output_dir: Path):
         ("mma_ch",          "MMA design change (ch)",                    True),
         ("step_inf",        "Design step ||dx||_inf",                    True),
         ("step_ratio",      "||dx||_inf / max_step (1 = move limit)",    False),
-        ("wall_disp_max_mm",  "Wall displacement max |d| [mm]",          True),
-        ("wall_disp_mean_mm", "Wall displacement mean d [mm] (+ wider)",  False),
+        ("wall_disp_max",  "Wall displacement max |d| [mm]",          True),
+        ("wall_disp_mean", "Wall displacement mean d [mm] (+ wider)",  False),
         ("kkt_norm",        "KKT residual (scaled)",                     True),
         ("path_rho_fwd",    "rho_fwd: realized / g_k.dx",                False),
         ("path_rho_trap",   "rho_trap: realized / trapezoid",            False),
