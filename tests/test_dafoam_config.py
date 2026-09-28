@@ -25,9 +25,14 @@ def _cfg(sif, solver, pc_mode="coloring", **extra):
     return {"container": str(sif), "pc_mode": pc_mode, "daOptions": {"solverName": solver}, **extra}
 
 
-def test_fvmatrix_rejected_for_heat_transfer_solver(sif, build_root):
+def test_fvmatrix_rejected_for_solver_without_it(sif, build_root):
     with pytest.raises(ValueError, match="fvmatrix"):
-        DAFoamConfig.from_dict(_cfg(sif, "DASimpleHeatTransferFoam", "fvmatrix", build_root=str(build_root)))
+        DAFoamConfig.from_dict(_cfg(sif, "DARhoSimpleFoam", "fvmatrix", build_root=str(build_root)))
+
+
+def test_fvmatrix_accepted_for_heat_transfer_solver(sif, build_root):
+    dcfg = DAFoamConfig.from_dict(_cfg(sif, "DASimpleHeatTransferFoam", "fvmatrix", build_root=str(build_root)))
+    assert dcfg.pc_mode == "fvmatrix"
 
 
 def test_heat_transfer_solver_needs_patched_build(sif, monkeypatch):

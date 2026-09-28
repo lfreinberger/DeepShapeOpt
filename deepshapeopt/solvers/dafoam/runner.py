@@ -84,7 +84,7 @@ CONTAINER_PATCH = "/opt/dafoam-patched"
 # Solvers that exist only in the patched build (external/dafoam_patches/), and the ones
 # whose residual class assembles the fvMatrix preconditioner.
 PATCHED_SOLVERS = {"DASimpleHeatTransferFoam"}
-FVMATRIX_SOLVERS = {"DASimpleFoam"}
+FVMATRIX_SOLVERS = {"DASimpleFoam", "DASimpleHeatTransferFoam"}
 
 
 @dataclass

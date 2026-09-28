@@ -13,10 +13,10 @@ index 14f3b1f..2443d6f 100755
          }
 diff --git a/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C
 new file mode 100644
-index 0000000..741825c
+index 0000000..ab030f6
 --- /dev/null
 +++ b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,220 @@
 +/*---------------------------------------------------------------------------*\
 +
 +    DAFoam  : Discrete Adjoint with OpenFOAM
@@ -150,9 +150,88 @@ index 0000000..741825c
 +
 +void DAResidualSimpleHeatTransferFoam::calcPCMatWithFvMatrix(Mat PCMat)
 +{
-+    FatalErrorIn("DAResidualSimpleHeatTransferFoam::calcPCMatWithFvMatrix")
-+        << "no fvMatrix preconditioner for the T block yet; use the coloring one"
-+        << abort(FatalError);
++    /*
++    Description:
++        Block-diagonal preconditioner from the fvMatrix coefficients: the U, p and
++        phi blocks of DASimpleFoam (with the current, unrelaxed nu) plus dR_T/dT of
++        the energy equation. The off-diagonal couplings (nu(U, T) in URes, the
++        dissipation in TRes, U and phi in TRes) are left to the Krylov solver, as
++        the U-p coupling already is.
++
++        Same conventions as DAResidualSimpleFoam::calcPCMatWithFvMatrix: the
++        TRANSPOSE is assembled (row/column swapped), only internal faces, and the
++        UNRELAXED matrix, because the AD differentiates through TEqn.relax() and
++        the relaxation cancels in the exact block.
++    */
++
++    DAResidualSimpleFoam::calcPCMatWithFvMatrix(PCMat);
++
++    const labelUList& owner = mesh_.owner();
++    const labelUList& neighbour = mesh_.neighbour();
++
++    PetscScalar val;
++
++    dictionary normStateDict = daOption_.getAllOptions().subDict("normalizeStates");
++    wordList normResDict = daOption_.getOption<wordList>("normalizeResiduals");
++
++    scalar TScaling = 1.0;
++    if (normStateDict.found("T"))
++    {
++        TScaling = normStateDict.getScalar("T");
++    }
++    scalar TResScaling = 1.0;
++
++    fvScalarMatrix TEqn(
++        fvm::div(phi_, T_)
++        - fvm::laplacian(DT_, T_));
++
++    // copy: D() returns a tmp, a reference to it would dangle
++    scalarField TEqnD(TEqn.D());
++
++    forAll(T_, cellI)
++    {
++        if (normResDict.found("TRes"))
++        {
++            TResScaling = mesh_.V()[cellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("T", cellI);
++        PetscInt colI = rowI;
++        scalar val1 = TEqnD[cellI] * TScaling / TResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &rowI, 1, &colI, &val, INSERT_VALUES);
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("TRes"))
++        {
++            TResScaling = mesh_.V()[neighbourCellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("T", neighbourCellI);
++        PetscInt colI = daIndex_.getGlobalAdjointStateIndex("T", ownerCellI);
++        scalar val1 = TEqn.lower()[faceI] * TScaling / TResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++    }
++
++    for (label faceI = 0; faceI < daIndex_.nLocalInternalFaces; faceI++)
++    {
++        label ownerCellI = owner[faceI];
++        label neighbourCellI = neighbour[faceI];
++
++        if (normResDict.found("TRes"))
++        {
++            TResScaling = mesh_.V()[ownerCellI];
++        }
++        PetscInt rowI = daIndex_.getGlobalAdjointStateIndex("T", ownerCellI);
++        PetscInt colI = daIndex_.getGlobalAdjointStateIndex("T", neighbourCellI);
++        scalar val1 = TEqn.upper()[faceI] * TScaling / TResScaling;
++        assignValueCheckAD(val, val1);
++        MatSetValues(PCMat, 1, &colI, 1, &rowI, &val, INSERT_VALUES);
++    }
 +}
 +
 +} // End namespace Foam
@@ -160,7 +239,7 @@ index 0000000..741825c
 +// ************************************************************************* //
 diff --git a/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H
 new file mode 100644
-index 0000000..cb4bc77
+index 0000000..9b1fe5d
 --- /dev/null
 +++ b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H
 @@ -0,0 +1,96 @@
@@ -247,7 +326,7 @@ index 0000000..cb4bc77
 +    /// update the boundary condition for all the states in the selected solver
 +    virtual void correctBoundaryConditions();
 +
-+    /// the inherited U/p/phi block would leave the T rows empty; refuse it
++    /// block-diagonal PC from the fvMatrix coefficients, T block included
 +    virtual void calcPCMatWithFvMatrix(Mat PCMat);
 +};
 +
