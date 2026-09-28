@@ -1,4 +1,14 @@
-# DAFoam patch: fvMatrix preconditioner for `DASimpleFoam`
+# DAFoam patches
+
+| patch | what |
+|---|---|
+| `0001-fvmatrix-preconditioner-for-DASimpleFoam.patch` | adjoint preconditioner from the fvMatrix coefficients (below) |
+| `0002-DASimpleHeatTransferFoam.patch` | new solver: generalized-Newtonian melt with energy equation, fully coupled adjoint (section at the end) |
+
+Both apply in order to the same base. `build_dafoam.sh` builds plain, ADR and ADF;
+`scripts/publish_dafoam_build.sh` publishes all three.
+
+# 0001: fvMatrix preconditioner for `DASimpleFoam`
 
 Builds the adjoint preconditioner directly from OpenFOAM's assembled fvMatrix
 coefficients instead of the dRdW graph colouring. That removes the colouring and the one
@@ -65,9 +75,10 @@ A change-and-rebuild cycle is ~21 s. After touching `pyDASolvers.pyx`, also run
 at the repo so `import dafoam` resolves to the patched package. `dafoam_utils` sets that
 up automatically when `build_source` is given.
 
-Only the **plain** build is patched. ADR/ADF are untouched, which is sound because neither
-new function is virtual and both are only ever called on `DASolver.solver`. Anyone who
-touches the ADR build has to rebuild both.
+0001 alone would only need the **plain** build (neither new function is virtual and both are
+only ever called on `DASolver.solver`). 0002 adds a solver that pyDAFoam instantiates in every
+mode, so all three are rebuilt now: `build_dafoam.sh [build-tree] [plain ADR ADF]` (~3 min per
+mode; the environment scripts return non-zero, so `set -e` only comes after sourcing them).
 
 ## Publish, then use
 
@@ -107,3 +118,34 @@ deliberately no silent fallback: it would make a run ~10x slower without anyone 
 - Raising `pcFillLevel` does nothing here (864 -> 862 -> 859 at levels 1/2/3): the missing
   coupling is absent from the matrix, and no factorisation can invent it. Only better
   values help, which is what the two corrections above did.
+
+# 0002: `DASimpleHeatTransferFoam`
+
+The discrete counterpart of the `simpleHeatTransfer` primal (`openfoam/primalSolvers/`):
+SIMPLE for U and p as in `DASimpleFoam`, plus
+
+    div(phi,T) - laplacian(DT,T) == (1/cp)*(tau && grad(U)),   tau = nu*(grad(U) + grad(U)^T)
+
+with `DT` and `cp` from `constant/transportProperties`, and `transportModel powerLawArrhenius`
+(or `Newtonian`). DAFoam's own T equation in `DASimpleFoam` is passive (no dissipation, nu
+never depends on T) and would not do.
+
+| file | role |
+|---|---|
+| `DASolver/DASimpleHeatTransferFoam/` | derives from `DASimpleFoam`; reads T **before** the transport model (the viscosity model looks T up in its constructor), `DT`, `cp`; primal loop U -> p -> T -> `laminarTransport.correct()`. The fixed-point adjoint is refused. |
+| `DAResidual/DAResidualSimpleHeatTransferFoam.{H,C}` | U/p/phi residuals of `DASimpleFoam`, plus TRes of the energy equation. `updateIntermediateVariables` overwrites the registered `nu` with `powerLawArrhenius::calcNu(coeffs, U, T)`, **unrelaxed**. DASolver calls it before every residual evaluation, also inside the AD tape, so dR/dW carries dnu/dU and dnu/dT and dR/dXv the grad(U) of nu. `calcPCMatWithFvMatrix` is refused (no T block yet). |
+| `DAStateInfo/DAStateInfoSimpleHeatTransferFoam.{H,C}` | states p, T, U, phi, nut; connectivity widened for nu(grad(U), T). It only shapes the coloring preconditioner. |
+| `Make/files`, `Make/options` | the three classes and `transportModels/powerLawArrhenius/powerLawArrhenius.C`, a symlink to `openfoam/viscosityModels/powerLawArrhenius` that `build_dafoam.sh` creates. The model is compiled into `libDASolver$(WM_AD_MODE)`, so each mode has its own AD-typed copy and no `libs` entry is needed. |
+| `dafoam/pyDAFoam.py` | `DASimpleHeatTransferFoam` in `solverRegistry["Incompressible"]`. |
+
+Why the residual cannot just call `laminarTransport.correct()`: the model under-relaxes
+(`viscosityRelaxation`), which would scale dnu/dW by the relaxation factor, and
+`singlePhaseTransportModel` gives no access to the model. Hence the static `calcNu`: one formula
+for the ESI library and the residual.
+
+Laminar flow is still modelled as Spalart-Allmaras with nuTilda = 0 (DASimpleFoam needs a
+registered `nut`); `Pr` and `Prt` stay in `transportProperties` because `DATurbulenceModel` and
+the `DASimpleFoam` residual read them. They have no effect.
+
+Unlike the ESI continuous adjoint (`adjointLaminarPowerLaw`, T frozen), this gives the gradient of
+the fully coupled U-p-T-nu system. `scripts/check_dafoam_gradient.py` is its FD gate.

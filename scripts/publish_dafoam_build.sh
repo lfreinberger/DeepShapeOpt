@@ -6,7 +6,7 @@
 # directory". This copies the two things a RUN needs onto NFS:
 #
 #   <root>/dafoam/      the patched python package (PYTHONPATH -> import dafoam)
-#   <root>/sharedLibs/  the container's shared libs with our patched libDASolver.so
+#   <root>/sharedLibs/  the container's shared libs with our patched libDASolver{,ADR,ADF}.so
 #
 # The full source tree with its object files stays on local scratch; only building needs
 # it, and building on NFS is slow.
@@ -28,11 +28,15 @@ echo "copying stock shared libs from the image ..."
 apptainer exec --cleanenv --bind "$DST:/publish" "$SIF" \
     bash -c "cp -a $CONTAINER_LIBS/. /publish/sharedLibs/"
 
-# 2. our patched libDASolver.so on top (written into the build overlay by wmake)
-PATCHED=$(find "$SRC/overlay" -name libDASolver.so -print -quit 2>/dev/null || true)
-[ -n "$PATCHED" ] || { echo "no patched libDASolver.so in $SRC/overlay -- build first"; exit 1; }
-cp -a "$PATCHED" "$DST/sharedLibs/libDASolver.so"
-echo "patched libDASolver.so: $PATCHED"
+# 2. our patched libDASolver{,ADR,ADF}.so on top (written into the build overlay by
+#    wmake, see external/dafoam_patches/build_dafoam.sh). All three modes carry the
+#    same solvers: the primal runs plain, the adjoint products ADR.
+for lib in libDASolver.so libDASolverADR.so libDASolverADF.so; do
+    PATCHED=$(find "$SRC/overlay" -name "$lib" -print -quit 2>/dev/null || true)
+    [ -n "$PATCHED" ] || { echo "no patched $lib in $SRC/overlay -- build first"; exit 1; }
+    cp -a "$PATCHED" "$DST/sharedLibs/$lib"
+    echo "patched $lib: $PATCHED"
+done
 
 # 3. the patched python package
 rm -rf "$DST/dafoam"

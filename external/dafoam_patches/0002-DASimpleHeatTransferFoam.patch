@@ -1,0 +1,864 @@
+diff --git a/dafoam/pyDAFoam.py b/dafoam/pyDAFoam.py
+index 14f3b1f..2443d6f 100755
+--- a/dafoam/pyDAFoam.py
++++ b/dafoam/pyDAFoam.py
+@@ -788,7 +788,7 @@ class PYDAFOAM(object):
+         """
+ 
+         self.solverRegistry = {
+-            "Incompressible": ["DASimpleFoam", "DAPimpleFoam", "DAPimpleDyMFoam", "DAInterFoam", "DATopoChtFoam"],
++            "Incompressible": ["DASimpleFoam", "DASimpleHeatTransferFoam", "DAPimpleFoam", "DAPimpleDyMFoam", "DAInterFoam", "DATopoChtFoam"],
+             "Compressible": ["DARhoSimpleFoam", "DARhoSimpleCFoam", "DATurboFoam", "DARhoPimpleFoam", "DAHisaFoam"],
+             "Solid": ["DASolidDisplacementFoam", "DAHeatTransferFoam", "DAScalarTransportFoam"],
+         }
+diff --git a/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C
+new file mode 100644
+index 0000000..741825c
+--- /dev/null
++++ b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.C
+@@ -0,0 +1,141 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++\*---------------------------------------------------------------------------*/
++
++#include "DAResidualSimpleHeatTransferFoam.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++defineTypeNameAndDebug(DAResidualSimpleHeatTransferFoam, 0);
++addToRunTimeSelectionTable(DAResidual, DAResidualSimpleHeatTransferFoam, dictionary);
++// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
++
++DAResidualSimpleHeatTransferFoam::DAResidualSimpleHeatTransferFoam(
++    const word modelType,
++    const fvMesh& mesh,
++    const DAOption& daOption,
++    const DAModel& daModel,
++    const DAIndex& daIndex)
++    : DAResidualSimpleFoam(modelType, mesh, daOption, daModel, daIndex),
++      T_(const_cast<volScalarField&>(
++          mesh_.thisDb().lookupObject<volScalarField>("T"))),
++      DT_("DT", dimViscosity, 0.0),
++      cp_("cp", dimensionSet(0, 2, -2, -1, 0, 0, 0), 0.0),
++      viscosityCoeffsPtr_(nullptr)
++{
++    // the base class has created TRes; its own (passive) T equation is
++    // switched off here, the energy equation below replaces it
++    hasTField_ = 0;
++
++    IOdictionary transportProperties(
++        IOobject(
++            "transportProperties",
++            mesh.time().constant(),
++            mesh,
++            IOobject::MUST_READ,
++            IOobject::NO_WRITE,
++            false));
++
++    DT_.read(transportProperties);
++    cp_.read(transportProperties);
++
++    const word transportModel(transportProperties.get<word>("transportModel"));
++    if (transportModel == viscosityModels::powerLawArrhenius::typeName)
++    {
++        viscosityCoeffsPtr_.reset(new viscosityModels::powerLawArrhenius::coeffs(
++            transportProperties.optionalSubDict(transportModel + "Coeffs")));
++    }
++    else if (transportModel != "Newtonian")
++    {
++        FatalErrorIn("DAResidualSimpleHeatTransferFoam")
++            << "transportModel " << transportModel << " is not differentiated; "
++            << "use Newtonian or powerLawArrhenius"
++            << abort(FatalError);
++    }
++}
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++void DAResidualSimpleHeatTransferFoam::clear()
++{
++    /*
++    Description:
++        Clear all members to avoid memory leak because we will initalize 
++        multiple objects of DAResidual. Here we need to delete all members
++        in the parent and child classes
++    */
++    DAResidualSimpleFoam::clear();
++    TResPtr_->clear();
++}
++
++void DAResidualSimpleHeatTransferFoam::calcResiduals(const dictionary& options)
++{
++    /*
++    Description:
++        U, p and phi residuals of DASimpleFoam, then the energy equation
++        (copied from TEqnSimpleHeatTransfer.H)
++    */
++
++    DAResidualSimpleFoam::calcResiduals(options);
++
++    // ******** T Residuals **************
++    volScalarField& TRes_ = TResPtr_();
++
++    const volTensorField gradU(fvc::grad(U_));
++    const volScalarField nu(daTurb_.nu());
++    const volTensorField tau(nu * (gradU + gradU.T()));
++
++    fvScalarMatrix TEqn(
++        fvm::div(phi_, T_)
++        - fvm::laplacian(DT_, T_)
++        == (1.0 / cp_) * (tau && gradU));
++
++    TEqn.relax();
++
++    TRes_ = TEqn & T_;
++    normalizeResiduals(TRes);
++}
++
++void DAResidualSimpleHeatTransferFoam::updateIntermediateVariables()
++{
++    /* 
++    Description:
++        Update the intermediate variables that depend on the state variables.
++        nu is written straight into the field the viscosity model registered,
++        which is the one DATurbulenceModel::nu() returns.
++    */
++    DAResidualSimpleFoam::updateIntermediateVariables();
++
++    if (viscosityCoeffsPtr_)
++    {
++        volScalarField& nu = const_cast<volScalarField&>(
++            mesh_.thisDb().lookupObject<volScalarField>("nu"));
++        nu = viscosityModels::powerLawArrhenius::calcNu(viscosityCoeffsPtr_(), U_, T_);
++    }
++}
++
++void DAResidualSimpleHeatTransferFoam::correctBoundaryConditions()
++{
++    /* 
++    Description:
++        Update the boundary condition for all the states in the selected solver
++    */
++    DAResidualSimpleFoam::correctBoundaryConditions();
++    T_.correctBoundaryConditions();
++}
++
++void DAResidualSimpleHeatTransferFoam::calcPCMatWithFvMatrix(Mat PCMat)
++{
++    FatalErrorIn("DAResidualSimpleHeatTransferFoam::calcPCMatWithFvMatrix")
++        << "no fvMatrix preconditioner for the T block yet; use the coloring one"
++        << abort(FatalError);
++}
++
++} // End namespace Foam
++
++// ************************************************************************* //
+diff --git a/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H
+new file mode 100644
+index 0000000..cb4bc77
+--- /dev/null
++++ b/src/adjoint/DAResidual/DAResidualSimpleHeatTransferFoam.H
+@@ -0,0 +1,96 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++    Description:
++        Child class for DASimpleHeatTransferFoam
++
++        U, p and phi residuals are DASimpleFoam's. The T residual is the energy
++        equation of DASimpleHeatTransferFoam including viscous dissipation.
++
++        For transportModel powerLawArrhenius, nu is re-evaluated from the
++        current U and T (unrelaxed) in updateIntermediateVariables, which
++        DASolver calls before every residual evaluation, also inside the AD
++        tape. dnu/dU and dnu/dT are therefore part of dR/dW, and the shape
++        derivative through grad(U) part of dR/dXv. For Newtonian, nu is a
++        constant and nothing is re-evaluated. Any other viscosity model would
++        give a frozen-viscosity adjoint and is rejected.
++
++\*---------------------------------------------------------------------------*/
++
++#ifndef DAResidualSimpleHeatTransferFoam_H
++#define DAResidualSimpleHeatTransferFoam_H
++
++#include "DAResidualSimpleFoam.H"
++#include "powerLawArrhenius.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++/*---------------------------------------------------------------------------*\
++      Class DAResidualSimpleHeatTransferFoam Declaration
++\*---------------------------------------------------------------------------*/
++
++class DAResidualSimpleHeatTransferFoam
++    : public DAResidualSimpleFoam
++{
++protected:
++    /// temperature state
++    volScalarField& T_;
++
++    /// thermal diffusivity [m2/s]
++    dimensionedScalar DT_;
++
++    /// specific heat capacity [m2/(s2 K)]
++    dimensionedScalar cp_;
++
++    /// coefficients of powerLawArrhenius; null for Newtonian
++    autoPtr<viscosityModels::powerLawArrhenius::coeffs> viscosityCoeffsPtr_;
++
++public:
++    TypeName("DASimpleHeatTransferFoam");
++    // Constructors
++
++    //- Construct from components
++    DAResidualSimpleHeatTransferFoam(
++        const word modelType,
++        const fvMesh& mesh,
++        const DAOption& daOption,
++        const DAModel& daModel,
++        const DAIndex& daIndex);
++
++    //- Destructor
++    virtual ~DAResidualSimpleHeatTransferFoam()
++    {
++    }
++
++    // Members
++
++    /// clear the members
++    virtual void clear();
++
++    /// compute residual
++    virtual void calcResiduals(const dictionary& options);
++
++    /// update nu(U, T) and the intermediate variables of DASimpleFoam
++    virtual void updateIntermediateVariables();
++
++    /// update the boundary condition for all the states in the selected solver
++    virtual void correctBoundaryConditions();
++
++    /// the inherited U/p/phi block would leave the T rows empty; refuse it
++    virtual void calcPCMatWithFvMatrix(Mat PCMat);
++};
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++} // End namespace Foam
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++#endif
++
++// ************************************************************************* //
+diff --git a/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.C b/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.C
+new file mode 100644
+index 0000000..9a24759
+--- /dev/null
++++ b/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.C
+@@ -0,0 +1,174 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++    This class is modified from DASimpleFoam (OpenFOAM's simpleFoam).
++
++    OpenFOAM: The Open Source CFD Toolbox
++
++    Copyright (C): 2011-2016 OpenFOAM Foundation
++
++    OpenFOAM License:
++
++        OpenFOAM is free software: you can redistribute it and/or modify it
++        under the terms of the GNU General Public License as published by
++        the Free Software Foundation, either version 3 of the License, or
++        (at your option) any later version.
++    
++        OpenFOAM is distributed in the hope that it will be useful, but WITHOUT
++        ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++        FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++        for more details.
++    
++        You should have received a copy of the GNU General Public License
++        along with OpenFOAM.  If not, see <http://www.gnu.org/licenses/>.
++
++\*---------------------------------------------------------------------------*/
++
++#include "DASimpleHeatTransferFoam.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++defineTypeNameAndDebug(DASimpleHeatTransferFoam, 0);
++addToRunTimeSelectionTable(DASolver, DASimpleHeatTransferFoam, dictionary);
++// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
++
++DASimpleHeatTransferFoam::DASimpleHeatTransferFoam(
++    char* argsAll,
++    PyObject* pyOptions)
++    : DASimpleFoam(argsAll, pyOptions),
++      DTPtr_(nullptr),
++      cpPtr_(nullptr)
++{
++    if (!hasTField_)
++    {
++        FatalErrorIn("DASimpleHeatTransferFoam")
++            << "DASimpleHeatTransferFoam needs a temperature field 0/T"
++            << abort(FatalError);
++    }
++}
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++void DASimpleHeatTransferFoam::initSolver()
++{
++    /*
++    Description:
++        Initialize variables for DASolver
++    */
++
++    Info << "Initializing fields for DASimpleHeatTransferFoam" << endl;
++    Time& runTime = runTimePtr_();
++    fvMesh& mesh = meshPtr_();
++#include "createSimpleControlPython.H"
++#include "createFieldsSimpleHeatTransfer.H"
++
++    // read the RAS model from constant/turbulenceProperties
++    const word turbModelName(
++        IOdictionary(
++            IOobject(
++                "turbulenceProperties",
++                mesh.time().constant(),
++                mesh,
++                IOobject::MUST_READ,
++                IOobject::NO_WRITE,
++                false))
++            .subDict("RAS")
++            .lookup("RASModel"));
++    daTurbulenceModelPtr_.reset(DATurbulenceModel::New(turbModelName, mesh, daOptionPtr_()));
++
++#include "createAdjoint.H"
++
++    // initialize fvSource and compute the source term
++    const dictionary& allOptions = daOptionPtr_->getAllOptions();
++    if (allOptions.subDict("fvSource").toc().size() != 0)
++    {
++        hasFvSource_ = 1;
++        Info << "Initializing DASource" << endl;
++        word sourceName = allOptions.subDict("fvSource").toc()[0];
++        word fvSourceType = allOptions.subDict("fvSource").subDict(sourceName).getWord("type");
++        daFvSourcePtr_.reset(DAFvSource::New(
++            fvSourceType, mesh, daOptionPtr_(), daModelPtr_(), daIndexPtr_()));
++    }
++}
++
++label DASimpleHeatTransferFoam::solvePrimal()
++{
++    /*
++    Description:
++        Call the primal solver to get converged state variables
++    */
++
++#include "createRefsSimple.H"
++#include "createFvOptions.H"
++
++    // call correctNut, this is equivalent to turbulence->validate();
++    daTurbulenceModelPtr_->updateIntermediateVariables();
++
++    Info << "\nStarting time loop\n"
++         << endl;
++
++    while (this->loop(runTime)) // using simple.loop() will have seg fault in parallel
++    {
++
++        if (printToScreen_)
++        {
++            Info << "Time = " << runTime.timeName() << nl << endl;
++        }
++
++        p.storePrevIter();
++
++        // --- Pressure-velocity SIMPLE corrector, then the energy equation
++        //     with the just-updated U (order of simpleHeatTransfer)
++        {
++#include "UEqnSimple.H"
++#include "pEqnSimple.H"
++#include "TEqnSimpleHeatTransfer.H"
++        }
++
++        // nu from the new T and strain rate (under-relaxed by the model)
++        laminarTransport.correct();
++        daTurbulenceModelPtr_->correct(printToScreen_);
++
++        // calculate all functions
++        this->calcAllFunctions(printToScreen_);
++        // calculate yPlus
++        daTurbulenceModelPtr_->printYPlus(printToScreen_);
++        // compute the regression model and print the feature
++        regModelFail_ = daRegressionPtr_->compute();
++        daRegressionPtr_->printInputInfo(printToScreen_);
++        // print run time
++        this->printElapsedTime(runTime, printToScreen_);
++
++        runTime.write();
++    }
++
++    // write the mesh to files
++    mesh.write();
++
++    // write associated fields such as URel
++    this->writeAssociatedFields();
++
++    Info << "End\n"
++         << endl;
++
++    return this->checkPrimalFailure();
++}
++
++label DASimpleHeatTransferFoam::runFPAdj(
++    Vec dFdW,
++    Vec psi)
++{
++    FatalErrorIn("DASimpleHeatTransferFoam::runFPAdj")
++        << "the fixed-point adjoint is not implemented for DASimpleHeatTransferFoam; "
++        << "use adjEqnSolMethod Krylov"
++        << abort(FatalError);
++    return 1;
++}
++
++} // End namespace Foam
++
++// ************************************************************************* //
+diff --git a/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.H b/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.H
+new file mode 100644
+index 0000000..c510c2e
+--- /dev/null
++++ b/src/adjoint/DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.H
+@@ -0,0 +1,84 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++    Description:
++        Steady incompressible flow of a generalized-Newtonian melt with an
++        energy equation, the discrete counterpart of DeepShapeOpt's
++        simpleHeatTransfer primal:
++
++            U, p:  SIMPLE as in DASimpleFoam, nu from constant/transportProperties
++            T:     div(phi,T) - laplacian(DT,T) == (1/cp)*(tau && grad(U)),
++                   tau = nu*(grad(U) + grad(U)^T)
++
++        DT [m2/s] and cp [m2/(s2 K)] are read from constant/transportProperties.
++        Any viscosity model may be selected there; for powerLawArrhenius the
++        residual re-evaluates nu(U, T) before every residual call, so the AD
++        differentiates the full U-T-nu coupling (DAResidualSimpleHeatTransferFoam).
++
++        Everything except the fields and the two equation loops is inherited
++        from DASimpleFoam; the fixed-point adjoint is not available.
++
++\*---------------------------------------------------------------------------*/
++
++#ifndef DASimpleHeatTransferFoam_H
++#define DASimpleHeatTransferFoam_H
++
++#include "DASimpleFoam.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++/*---------------------------------------------------------------------------*\
++      Class DASimpleHeatTransferFoam Declaration
++\*---------------------------------------------------------------------------*/
++
++class DASimpleHeatTransferFoam
++    : public DASimpleFoam
++{
++
++protected:
++    /// thermal diffusivity [m2/s]
++    autoPtr<dimensionedScalar> DTPtr_;
++
++    /// specific heat capacity [m2/(s2 K)]
++    autoPtr<dimensionedScalar> cpPtr_;
++
++public:
++    TypeName("DASimpleHeatTransferFoam");
++    // Constructors
++
++    //- Construct from components
++    DASimpleHeatTransferFoam(
++        char* argsAll,
++        PyObject* pyOptions);
++
++    //- Destructor
++    virtual ~DASimpleHeatTransferFoam()
++    {
++    }
++
++    /// initialize fields and variables
++    virtual void initSolver();
++
++    /// solve the primal equations
++    virtual label solvePrimal();
++
++    /// the fixed-point adjoint of DASimpleFoam does not know T; refuse it
++    virtual label runFPAdj(
++        Vec dFdW,
++        Vec psi);
++};
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++} // End namespace Foam
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++#endif
++
++// ************************************************************************* //
+diff --git a/src/adjoint/DASolver/DASimpleHeatTransferFoam/TEqnSimpleHeatTransfer.H b/src/adjoint/DASolver/DASimpleHeatTransferFoam/TEqnSimpleHeatTransfer.H
+new file mode 100644
+index 0000000..c72a878
+--- /dev/null
++++ b/src/adjoint/DASolver/DASimpleHeatTransferFoam/TEqnSimpleHeatTransfer.H
+@@ -0,0 +1,26 @@
++{
++    volScalarField& T = TPtr_();
++    const dimensionedScalar& DT = DTPtr_();
++    const dimensionedScalar& cp = cpPtr_();
++
++    // viscous dissipation, same as DeepShapeOpt's simpleHeatTransfer
++    const volTensorField gradU(fvc::grad(U));
++    const volScalarField nu(laminarTransport.nu());
++    const volTensorField tau(nu * (gradU + gradU.T()));
++
++    fvScalarMatrix TEqn(
++        fvm::div(phi, T)
++        - fvm::laplacian(DT, T)
++        == (1.0 / cp) * (tau && gradU));
++
++    TEqn.relax();
++
++    // get the solver performance info such as initial
++    // and final residuals
++    SolverPerformance<scalar> solverT = TEqn.solve();
++
++    DAUtility::primalResidualControl(solverT, printToScreen_, "T", daGlobalVarPtr_->primalMaxRes);
++
++    // bound T
++    DAUtility::boundVar(allOptions, T, printToScreen_);
++}
+diff --git a/src/adjoint/DASolver/DASimpleHeatTransferFoam/createFieldsSimpleHeatTransfer.H b/src/adjoint/DASolver/DASimpleHeatTransferFoam/createFieldsSimpleHeatTransfer.H
+new file mode 100644
+index 0000000..69340c9
+--- /dev/null
++++ b/src/adjoint/DASolver/DASimpleHeatTransferFoam/createFieldsSimpleHeatTransfer.H
+@@ -0,0 +1,87 @@
++Info << "Reading field p\n"
++     << endl;
++pPtr_.reset(
++    new volScalarField(
++        IOobject(
++            "p",
++            runTime.timeName(),
++            mesh,
++            IOobject::MUST_READ,
++            IOobject::AUTO_WRITE),
++        mesh));
++volScalarField& p = pPtr_();
++
++Info << "Reading field U\n"
++     << endl;
++UPtr_.reset(
++    new volVectorField(
++        IOobject(
++            "U",
++            runTime.timeName(),
++            mesh,
++            IOobject::MUST_READ,
++            IOobject::AUTO_WRITE),
++        mesh));
++volVectorField& U = UPtr_();
++
++// T before the transport model: a temperature-dependent viscosity model
++// looks T up in its constructor
++Info << "Reading field T\n"
++     << endl;
++TPtr_.reset(
++    new volScalarField(
++        IOobject(
++            "T",
++            runTime.timeName(),
++            mesh,
++            IOobject::MUST_READ,
++            IOobject::AUTO_WRITE),
++        mesh));
++
++#include "createPhiPython.H"
++
++// create alpha porosity term
++alphaPorosityPtr_.reset(
++    new volScalarField(
++        IOobject(
++            "alphaPorosity",
++            runTime.timeName(),
++            mesh,
++            IOobject::READ_IF_PRESENT,
++            IOobject::AUTO_WRITE),
++        mesh,
++        dimensionedScalar("alphaPorosity", dimensionSet(0, 0, -1, 0, 0, 0, 0), pTraits<scalar>::zero),
++        zeroGradientFvPatchField<scalar>::typeName));
++
++// actuator related stuff
++Info << "Creating source term. " << endl;
++fvSourcePtr_.reset(
++    new volVectorField(
++        IOobject(
++            "fvSource",
++            runTime.timeName(),
++            mesh,
++            IOobject::NO_READ,
++            IOobject::AUTO_WRITE),
++        mesh,
++        dimensionedVector("fvSource", dimensionSet(0, 1, -2, 0, 0, 0, 0), vector::zero),
++        zeroGradientFvPatchField<vector>::typeName));
++
++setRefCell(p, simple.dict(), pRefCell_, pRefValue_);
++mesh.setFluxRequired(p.name());
++
++laminarTransportPtr_.reset(
++    new singlePhaseTransportModel(U, phi));
++singlePhaseTransportModel& laminarTransport = laminarTransportPtr_();
++
++turbulencePtr_.reset(
++    incompressible::turbulenceModel::New(U, phi, laminarTransport));
++
++// create MRF
++MRFPtr_.reset(new IOMRFZoneListDF(mesh));
++
++DTPtr_.reset(
++    new dimensionedScalar("DT", dimViscosity, laminarTransport));
++
++cpPtr_.reset(
++    new dimensionedScalar("cp", dimensionSet(0, 2, -2, -1, 0, 0, 0), laminarTransport));
+diff --git a/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.C b/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.C
+new file mode 100644
+index 0000000..04df449
+--- /dev/null
++++ b/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.C
+@@ -0,0 +1,99 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++\*---------------------------------------------------------------------------*/
++
++#include "DAStateInfoSimpleHeatTransferFoam.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++defineTypeNameAndDebug(DAStateInfoSimpleHeatTransferFoam, 0);
++addToRunTimeSelectionTable(DAStateInfo, DAStateInfoSimpleHeatTransferFoam, dictionary);
++
++// * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
++
++DAStateInfoSimpleHeatTransferFoam::DAStateInfoSimpleHeatTransferFoam(
++    const word modelType,
++    const fvMesh& mesh,
++    const DAOption& daOption,
++    const DAModel& daModel)
++    : DAStateInfo(modelType, mesh, daOption, daModel)
++{
++    /*
++    Description:
++        Register the names of state variables, see DAStateInfoSimpleFoam.
++
++        Connectivity differs from DASimpleFoam through nu(grad(U), T), which is
++        evaluated in every cell: a face flux of U in cell i uses nu of i and its
++        neighbours (lv1), whose grad(U) reaches lv2. So T enters URes/pRes/phiRes
++        wherever nut does, and TRes (dissipation nu*grad(U):grad(U)) sees U up
++        to lv1 besides T. The connectivity only shapes the coloring
++        preconditioner; the Jacobian-vector products are exact AD either way.
++
++                     U      T      p     nut    phi
++        URes         2      1      1      1      0
++        TRes         1      2             1      0
++        pRes         3      2      2      2      1
++        phiRes       2      1      1      1      0
++    */
++
++    stateInfo_["volScalarStates"].append("p");
++    stateInfo_["volScalarStates"].append("T");
++    stateInfo_["modelStates"].append("nut");
++    stateInfo_["volVectorStates"].append("U");
++    stateInfo_["surfaceScalarStates"].append("phi");
++
++    // correct the names for model states based on the selected physical model at runtime
++    daModel.correctModelStates(stateInfo_["modelStates"]);
++
++    stateResConInfo_.set(
++        "URes",
++        {
++            {"U", "p", "T", "nut", "phi"}, // lv0
++            {"U", "p", "T", "nut"}, // lv1
++            {"U"} // lv2
++        });
++
++    stateResConInfo_.set(
++        "TRes",
++        {
++            {"T", "U", "nut", "phi"}, // lv0
++            {"T", "U", "nut"}, // lv1
++            {"T"} // lv2
++        });
++
++    stateResConInfo_.set(
++        "pRes",
++        {
++            {"U", "p", "T", "nut", "phi"}, // lv0
++            {"U", "p", "T", "nut", "phi"}, // lv1
++            {"U", "p", "T", "nut"}, // lv2
++            {"U"} // lv3
++        });
++
++    stateResConInfo_.set(
++        "phiRes",
++        {
++            {"U", "p", "T", "nut", "phi"}, // lv0
++            {"U", "p", "T", "nut"}, // lv1
++            {"U"}, // lv2
++        });
++
++    // need to correct connectivity for physical models for each residual
++    daModel.correctStateResidualModelCon(stateResConInfo_["URes"]);
++    daModel.correctStateResidualModelCon(stateResConInfo_["TRes"]);
++    daModel.correctStateResidualModelCon(stateResConInfo_["pRes"]);
++    daModel.correctStateResidualModelCon(stateResConInfo_["phiRes"]);
++
++    // add physical model residual connectivity
++    daModel.addModelResidualCon(stateResConInfo_);
++}
++
++} // End namespace Foam
++
++// ************************************************************************* //
+diff --git a/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.H b/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.H
+new file mode 100644
+index 0000000..0c644f2
+--- /dev/null
++++ b/src/adjoint/DAStateInfo/DAStateInfoSimpleHeatTransferFoam.H
+@@ -0,0 +1,55 @@
++/*---------------------------------------------------------------------------*\
++
++    DAFoam  : Discrete Adjoint with OpenFOAM
++    Version : v5
++
++    Description:
++        Child class for DASimpleHeatTransferFoam
++
++\*---------------------------------------------------------------------------*/
++
++#ifndef DAStateInfoSimpleHeatTransferFoam_H
++#define DAStateInfoSimpleHeatTransferFoam_H
++
++#include "DAStateInfo.H"
++#include "addToRunTimeSelectionTable.H"
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++namespace Foam
++{
++
++/*---------------------------------------------------------------------------*\
++      Class DAStateInfoSimpleHeatTransferFoam Declaration
++\*---------------------------------------------------------------------------*/
++
++class DAStateInfoSimpleHeatTransferFoam
++    : public DAStateInfo
++{
++
++public:
++    TypeName("DASimpleHeatTransferFoam");
++    // Constructors
++
++    //- Construct from components
++    DAStateInfoSimpleHeatTransferFoam(
++        const word modelType,
++        const fvMesh& mesh,
++        const DAOption& daOption,
++        const DAModel& daModel);
++
++    //- Destructor
++    virtual ~DAStateInfoSimpleHeatTransferFoam()
++    {
++    }
++};
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++} // End namespace Foam
++
++// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
++
++#endif
++
++// ************************************************************************* //
+diff --git a/src/adjoint/Make/files b/src/adjoint/Make/files
+index 87385b2..d0a7283 100755
+--- a/src/adjoint/Make/files
++++ b/src/adjoint/Make/files
+@@ -84,6 +84,7 @@ DAModel/DARadiationModel/DAP1.C
+ DAStateInfo/DAStateInfo.C
+ DAStateInfo/DAStateInfoScalarTransportFoam.C
+ DAStateInfo/DAStateInfoSimpleFoam.C
++DAStateInfo/DAStateInfoSimpleHeatTransferFoam.C
+ DAStateInfo/DAStateInfoPimpleFoam.C
+ DAStateInfo/DAStateInfoPimpleDyMFoam.C
+ DAStateInfo/DAStateInfoRhoPimpleFoam.C
+@@ -99,6 +100,7 @@ DAStateInfo/DAStateInfoHisaFoam.C
+ DAResidual/DAResidual.C
+ DAResidual/DAResidualScalarTransportFoam.C
+ DAResidual/DAResidualSimpleFoam.C
++DAResidual/DAResidualSimpleHeatTransferFoam.C
+ DAResidual/DAResidualPimpleFoam.C
+ DAResidual/DAResidualPimpleDyMFoam.C
+ DAResidual/DAResidualRhoPimpleFoam.C
+@@ -114,6 +116,8 @@ DAResidual/DAResidualHisaFoam.C
+ DASolver/DASolver.C
+ DASolver/DAScalarTransportFoam/DAScalarTransportFoam.C
+ DASolver/DASimpleFoam/DASimpleFoam.C
++DASolver/DASimpleHeatTransferFoam/DASimpleHeatTransferFoam.C
++transportModels/powerLawArrhenius/powerLawArrhenius.C
+ DASolver/DAPimpleFoam/DAPimpleFoam.C
+ DASolver/DAIrkPimpleFoam/DAIrkPimpleFoam.C
+ DASolver/DARhoPimpleFoam/DARhoPimpleFoam.C
+diff --git a/src/adjoint/Make/options b/src/adjoint/Make/options
+index a08f280..7709781 100755
+--- a/src/adjoint/Make/options
++++ b/src/adjoint/Make/options
+@@ -23,6 +23,7 @@ EXE_INC = \
+     -I$(LIB_SRC)/fileFormats/lnInclude \
+     -I$(LIB_SRC)/surfMesh/lnInclude \
+     -I./lnInclude \
++    -I./transportModels/powerLawArrhenius \
+     -I../include \
+     -I../include/VoF \
+     -I$(DAFOAM_ROOT_PATH)/OpenFOAM/Hisa4DAFoam/src/lnInclude \
