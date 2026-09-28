@@ -133,7 +133,7 @@ never depends on T) and would not do.
 | file | role |
 |---|---|
 | `DASolver/DASimpleHeatTransferFoam/` | derives from `DASimpleFoam`; reads T **before** the transport model (the viscosity model looks T up in its constructor), `DT`, `cp`; primal loop U -> p -> T -> `laminarTransport.correct()`. The fixed-point adjoint is refused. |
-| `DAResidual/DAResidualSimpleHeatTransferFoam.{H,C}` | U/p/phi residuals of `DASimpleFoam`, plus TRes of the energy equation. `updateIntermediateVariables` overwrites the registered `nu` with `powerLawArrhenius::calcNu(coeffs, U, T)`, **unrelaxed**. DASolver calls it before every residual evaluation, also inside the AD tape, so dR/dW carries dnu/dU and dnu/dT and dR/dXv the grad(U) of nu. `calcPCMatWithFvMatrix` is refused (no T block yet). |
+| `DAResidual/DAResidualSimpleHeatTransferFoam.{H,C}` | U/p/phi residuals of `DASimpleFoam`, plus TRes of the energy equation. `updateIntermediateVariables` overwrites the registered `nu` with `powerLawArrhenius::calcNu(coeffs, U, T)`, **unrelaxed**. DASolver calls it before every residual evaluation, also inside the AD tape, so dR/dW carries dnu/dU and dnu/dT and dR/dXv the grad(U) of nu. `calcPCMatWithFvMatrix`: the U/p/phi blocks of `DASimpleFoam` plus the unrelaxed dR_T/dT block (the nu and dissipation couplings are left to GMRES). |
 | `DAStateInfo/DAStateInfoSimpleHeatTransferFoam.{H,C}` | states p, T, U, phi, nut; connectivity widened for nu(grad(U), T). It only shapes the coloring preconditioner. |
 | `Make/files`, `Make/options` | the three classes and `transportModels/powerLawArrhenius/powerLawArrhenius.C`, a symlink to `openfoam/viscosityModels/powerLawArrhenius` that `build_dafoam.sh` creates. The model is compiled into `libDASolver$(WM_AD_MODE)`, so each mode has its own AD-typed copy and no `libs` entry is needed. |
 | `dafoam/pyDAFoam.py` | `DASimpleHeatTransferFoam` in `solverRegistry["Incompressible"]`. |
@@ -149,3 +149,8 @@ the `DASimpleFoam` residual read them. They have no effect.
 
 Unlike the ESI continuous adjoint (`adjointLaminarPowerLaw`, T frozen), this gives the gradient of
 the fully coupled U-p-T-nu system. `scripts/check_dafoam_gradient.py` is its FD gate.
+
+Gate on the thermal semperit die, coarse mesh (86k cells, 16 procs, 2000 fixed primal iterations,
+eps 1e-6 m, uniformity): FD/adjoint 0.99989 along the gradient, 0.99948 along a random wall
+direction; the fvmatrix preconditioner reproduces the coloring gradient to 3e-10 relative, with a
+PC set-up of 0.1 s instead of 503 s (coloring 448 s + assembly).
