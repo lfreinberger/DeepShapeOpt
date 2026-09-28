@@ -18,6 +18,7 @@ The options file is written by ``deepshapeopt.solvers.dafoam.runner`` next to th
       "sensitivities": ["J", ...],       # outputs whose dJ/dXv is computed (reverse AD)
       "reference_fields": {"UData": {"patch": "outlet", "value": [ux, uy, uz]}},  # optional
       "perturb":       {"point": k, "coord": j, "delta": h},   # optional (serial FD checks)
+                       or {"displacement": "d.npy", "scale": h}  # (N, 3) global field, any N procs
       "n_points":      N,                # global point count of constant/polyMesh (optional)
       "output_dir":    "dafoam_output"
     }
@@ -215,9 +216,19 @@ def main():
     DASolver.solver.getOFMeshPoints(xv)
 
     perturb = opts.get("perturb")
-    if perturb:
+    if perturb and "displacement" in perturb:
+        # global (n_global, 3) displacement field, scaled; works in parallel through the
+        # same pointProcAddressing map the sensitivities are assembled with
+        disp = np.load(perturb["displacement"]).reshape(-1, 3)
+        l2g = local_to_global_index(comm)
+        local = disp if l2g is None else disp[l2g]
+        h = float(perturb.get("scale", 1.0))
+        xv += h * local.ravel()
+        DASolver.setVolCoords(xv)
+        info(f"perturbed all points by {h:+.3e} * {perturb['displacement']}")
+    elif perturb:
         if comm.size != 1:
-            raise RuntimeError("perturb (FD check) is only supported in serial runs")
+            raise RuntimeError("single-point perturb (FD check) is only supported in serial runs")
         k, j, h = int(perturb["point"]), int(perturb["coord"]), float(perturb["delta"])
         xv[3 * k + j] += h
         DASolver.setVolCoords(xv)
