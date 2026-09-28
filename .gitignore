@@ -102,3 +102,7 @@ m_cube
 
 run_optimization.slrm
 run_optimization_ffd.slrm
+
+# revision run outputs (like results*/)
+experiments/drag_cube/revision_*/
+experiments/drag_cube/f64probe/
