@@ -19,6 +19,7 @@ import torch
 if TYPE_CHECKING:
     from deepshapeopt.config import Config
     from deepshapeopt.config.schema import ReconstructionConfig
+    from deepshapeopt.parametrization.symmetry import MirrorSymmetry
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ def fit_lattice_to_sdf(
     save_vtp: bool = True,
     box_constrained: bool = True,
     samples_series_dir: Path | None = None,
+    symmetry: "MirrorSymmetry | None" = None,
+    symmetry_tolerance: float = 0.05,
+    dist_to_phys: float = 1.0,
 ):
     """Sample the ground-truth SDF of ``mesh`` and fit ``lattice_struct`` to it.
 
@@ -49,6 +53,11 @@ def fit_lattice_to_sdf(
     ``recon.export_samples_series`` and ``samples_series_dir`` a per-epoch series of the
     reconstructed samples is written (fine per-batch frames for the first
     ``export_samples_fine_until_epoch`` epochs).
+
+    With ``symmetry`` the target is first checked for mirror symmetry about the lattice-box
+    centre (p95 mismatch at most ``symmetry_tolerance``; ``dist_to_phys`` converts normalized
+    lengths to physical ones), the start codes are symmetrized and every gradient is averaged
+    over the mirror orbit, so the fitted codes satisfy ``c = P c`` exactly.
     """
     from DeepSDFStruct.geom_reconstruction import LocalShapesReconstructor, sample_gt_sdf
     from DeepSDFStruct.SDF import SDFfromMesh
@@ -62,6 +71,9 @@ def fit_lattice_to_sdf(
         save_points_to_vtp(path, torch.hstack((samples_ps, rec_dist.detach())))
 
     gt_sdf = SDFfromMesh(mesh, scale=False)
+    if symmetry:
+        symmetry.check_ground_truth(gt_sdf, mesh, bounds, dist_to_phys=dist_to_phys,
+                                    tolerance=symmetry_tolerance)
     sdf_samples = sample_gt_sdf(
         gt_sdf, mesh, bounds,
         n_uniform=int(recon.n_uniform_samples), n_surface=int(recon.n_surface_samples),
@@ -72,6 +84,12 @@ def fit_lattice_to_sdf(
             output_dir / "gt_sdf_samples.vtp",
             torch.hstack((sdf_samples.samples.detach(), sdf_samples.distances.detach())),
         )
+
+    param = next(lattice_struct.parametrization.parameters())
+    hook = None
+    if symmetry:
+        symmetry.symmetrize_(param)
+        hook = param.register_hook(symmetry.symmetrize)
 
     step_callback = None
     if recon.export_samples_series and samples_series_dir is not None:
@@ -95,16 +113,25 @@ def fit_lattice_to_sdf(
             if (e < fine_until and (batch_idx % fine_every == 0 or end)) or (e >= fine_until and end):
                 write_frame()
 
-    result = LocalShapesReconstructor.fit_samples(
-        lattice_struct, sdf_samples,
-        lr=float(recon.lr), num_iterations=int(recon.num_iterations), batch_size=int(recon.batch_size),
-        code_reg_lambda=float(recon.code_reg_lambda), code_bound=recon.code_bound,
-        grad_clip=recon.grad_clip, eikonal_lambda=float(recon.eikonal_lambda),
-        loss_fn=recon.loss_fn, clamp_val=float(recon.clamp_val),
-        loss_plot_path=lightweight_output_dir / "loss_plot.png",
-        loss_csv_path=lightweight_output_dir / "loss_history.csv",
-        step_callback=step_callback,
-    )
+    try:
+        result = LocalShapesReconstructor.fit_samples(
+            lattice_struct, sdf_samples,
+            lr=float(recon.lr), num_iterations=int(recon.num_iterations), batch_size=int(recon.batch_size),
+            code_reg_lambda=float(recon.code_reg_lambda), code_bound=recon.code_bound,
+            grad_clip=recon.grad_clip, eikonal_lambda=float(recon.eikonal_lambda),
+            loss_fn=recon.loss_fn, clamp_val=float(recon.clamp_val),
+            loss_plot_path=lightweight_output_dir / "loss_plot.png",
+            loss_csv_path=lightweight_output_dir / "loss_history.csv",
+            step_callback=step_callback,
+        )
+    finally:
+        if hook is not None:
+            hook.remove()
+    if symmetry:
+        residual = symmetry.residual(param)
+        symmetry.symmetrize_(param)
+        logger.info("symmetry: fitted codes mirror residual %.1e in %s", residual, symmetry.axes)
+        result["symmetry_residual"] = residual
     if save_vtp:
         export_samples(sdf_samples.samples.detach(), output_dir / "rec_sdf_samples.vtp")
     return result
@@ -218,9 +245,17 @@ def reconstruct_shape(cfg: "Config", experiment_dir: Path, case_name: str | None
         export_control_lattice_paramspace(built["param_spline_sp"],
                                           filename=str(heavy_dir / "control_lattice_paramspace.vtp"), order="F")
 
+    symmetry = None
+    if ds.symmetry.axes:
+        from deepshapeopt.parametrization.symmetry import MirrorSymmetry
+
+        symmetry = MirrorSymmetry.from_spline(built["param_spline_sp"], ds.symmetry.axes, device=device)
+        symmetry.check_lattice_equivariance(lattice_struct, next(lattice_struct.parametrization.parameters()))
+
     result = fit_lattice_to_sdf(
         lattice_struct, mesh, bounds, recon, device, output_dir=heavy_dir, lightweight_output_dir=local_dir,
         save_vtp=save_vtp, box_constrained=False, samples_series_dir=heavy_dir / "rec_sdf_samples_series",
+        symmetry=symmetry, symmetry_tolerance=ds.symmetry.tolerance, dist_to_phys=float(built["scale"]),
     )
     lattice_struct.parametrization.set_param(result["params"][0])
     torch.save(result["params"], heavy_dir / "rec_parameters.pt")
@@ -242,7 +277,8 @@ def reconstruct_shape(cfg: "Config", experiment_dir: Path, case_name: str | None
         _write_json(local_dir / "error_metrics.json", {"sdf_sample_error": metrics, "mesh_vertex_error": mesh_metrics})
 
     run_info.update(status="finished", mesh_bounds=bounds.tolist(), final_loss=result["final_loss"],
-                    num_steps=result["num_steps"], reconstructed_mesh_path=str(reconstructed_mesh_path))
+                    num_steps=result["num_steps"], reconstructed_mesh_path=str(reconstructed_mesh_path),
+                    symmetry_residual=result.get("symmetry_residual"))
     _write_json(local_dir / "run_summary.json", run_info)
     logger.info("Reconstruction done: %s", local_dir)
     return {"case_name": case_name, "results_dir": str(local_dir), "heavy_data_dir": str(heavy_dir),

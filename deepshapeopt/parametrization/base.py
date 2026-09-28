@@ -12,6 +12,7 @@ import torch
 from deepshapeopt.config.schema import LockConfig, OptimizerConfig, PCAConfig
 
 from .locking import lock_boxes_from_config, locked_indices_from_bboxes, make_locked_masks, mask_locked_gradient
+from .symmetry import SymmetryError
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,15 @@ class DesignSpace:
     Locked control points (from ``parametrization.lock``) keep their values and get zero
     gradient. With PCA enabled the optimizer moves whitened coefficients of deltas around the
     reconstruction (``z = z0 + (c * scale) @ V_k.T``); otherwise it moves the control points.
+    With ``symmetry`` every gradient is averaged over the mirror orbit of the control points and
+    the design is projected onto the symmetric subspace after each step.
     """
 
     def __init__(self, param: torch.nn.Parameter, spline_sp, frame, lock_cfg: LockConfig,
                  opt_cfg: OptimizerConfig, pca_cfg: PCAConfig | None = None,
-                 model_path: str | None = None, checkpoint: str = "latest"):
+                 model_path: str | None = None, checkpoint: str = "latest", symmetry=None):
         self.param = param
+        self.symmetry = symmetry if symmetry else None
         device = param.device
         boxes = lock_boxes_from_config(lock_cfg, frame)
         locked_idx = locked_indices_from_bboxes(spline_sp, boxes, device=device, order="F")
@@ -68,6 +72,13 @@ class DesignSpace:
         self.locked_idx = locked_idx
         self.mask_locked_cp, self.mask_locked_flat, self.locked_values = make_locked_masks(param, locked_idx)
         self.n_free = int((~self.mask_locked_flat.reshape(-1).bool()).sum().item())
+        if self.symmetry is not None:
+            self.symmetry.check_index_set(locked_idx, param.shape[0])
+            residual = self.symmetry.residual(param)
+            if residual > 1e-6:
+                raise SymmetryError(f"symmetry enforced in {self.symmetry.axes}, but the start design has mirror "
+                                 f"residual {residual:.2e}")
+            logger.info("Symmetry enforced in %s: gradients averaged over mirror pairs", self.symmetry.axes)
 
         self.pca = None
         self.coeffs = None
@@ -102,12 +113,16 @@ class DesignSpace:
 
     def grad_to_vector(self, grad_param: torch.Tensor) -> torch.Tensor:
         """Parameter-shaped gradient -> masked flat gradient of the optimizer vector, (n, 1)."""
+        if self.symmetry is not None:
+            grad_param = self.symmetry.symmetrize(grad_param)
         if self.pca is not None:
             return mask_locked_gradient(self.pca.project_grad(grad_param), self.mask_locked_coeff)
         return mask_locked_gradient(grad_param, self.mask_locked_flat)
 
     def sync_param(self) -> None:
         """After an optimizer step: rebuild the control points from the PCA coefficients."""
+        if self.symmetry is not None:
+            self.symmetry.symmetrize_(self.vector)
         if self.pca is None:
             return
         with torch.no_grad():
@@ -128,6 +143,8 @@ class DesignSpace:
             else:
                 self.param.copy_(torch.as_tensor(np.asarray(x_np).reshape(self.param.shape),
                                                  dtype=self.param.dtype, device=self.param.device))
+            if self.symmetry is not None:
+                self.symmetry.symmetrize_(self.param)
 
     def free_direction(self, seed: int) -> torch.Tensor:
         """Random direction of the free control points, max-norm 1 (noise probe)."""

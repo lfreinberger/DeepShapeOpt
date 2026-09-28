@@ -21,6 +21,7 @@ from deepshapeopt.geometry.reconstruction import fit_lattice_to_sdf, init_spline
 from deepshapeopt.hexmesh.design import LatticeDesignSDF
 
 from .base import load_parameter_file
+from .symmetry import MirrorSymmetry, SymmetryError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,10 @@ class DeepSDFLattice:
             bounds=box_norm, tiling_map=ds.tiling_map,
         )
         self.extend_bounds = cfg.geometry.flow == "external"
+        self.symmetry = None
+        if ds.symmetry.axes:
+            self.symmetry = MirrorSymmetry.from_spline(self.spline_sp, ds.symmetry.axes, device=device)
+            self.symmetry.check_lattice_equivariance(self.lattice_struct, self.param)
 
     @property
     def param(self) -> torch.nn.Parameter:
@@ -76,6 +81,12 @@ class DeepSDFLattice:
         if rec_file.exists() and recon.reuse:
             logger.info("Reusing reconstruction parameters from %s", rec_file)
             params = torch.load(rec_file, map_location=self.device, weights_only=False)
+            if self.symmetry and self.symmetry.residual(params[0]) > 1e-6:
+                raise SymmetryError(
+                    f"{rec_file} is not mirror-symmetric in {self.symmetry.axes} (residual "
+                    f"{self.symmetry.residual(params[0]):.2e}); set reconstruction.reuse to false or use "
+                    "another run.name to fit a symmetric reconstruction"
+                )
         else:
             logger.info("Running reconstruction")
             saved_bounds = self.lattice_struct.bounds.data
@@ -85,6 +96,8 @@ class DeepSDFLattice:
                 output_dir=paths.reconstruction, save_vtp=debug, box_constrained=True,
                 samples_series_dir=(paths.heavy_data / "reconstruction" / "rec_sdf_samples_series"
                                     if paths.heavy_data is not None else None),
+                symmetry=self.symmetry, symmetry_tolerance=self.cfg.symmetry.tolerance,
+                dist_to_phys=float(self.frame.dist_norm_to_phys),
             )
             params = result["params"]
             self.lattice_struct.bounds.data = saved_bounds

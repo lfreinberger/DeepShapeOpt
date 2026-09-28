@@ -69,8 +69,11 @@ def build_problem(cfg: Config, experiment_dir: Path) -> Problem:
         parametrization = FFDParametrization(cfg, paths)
         model_path, checkpoint, pca_cfg = None, "latest", None
 
+    symmetry = None
+    if cfg.parametrization.type == "deepsdf" and cfg.parametrization.deepsdf.symmetry.enforce_in_optimization:
+        symmetry = parametrization.symmetry
     space = DesignSpace(parametrization.param, parametrization.spline_sp, parametrization.frame,
-                        cfg.parametrization.lock, cfg.optimizer, pca_cfg, model_path, checkpoint)
+                        cfg.parametrization.lock, cfg.optimizer, pca_cfg, model_path, checkpoint, symmetry=symmetry)
     if cfg.parametrization.type == "ffd":
         parametrization.check_locked_faces(space.mask_locked_cp)
     if debug:
