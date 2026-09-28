@@ -269,6 +269,8 @@ class OptimizationLoop:
             self.path.record_step(dx, J_total, dJ_vec, G_raw, dG_vec)
             self.step_control.predict(self.optimizer, J_total)
             p.parametrization.save(self.out / "parameters.pt")
+            if getattr(p.parametrization, "symmetry", None):
+                logger.info("Mirror residual of the control points: %.2e", p.parametrization.symmetry.residual(p.space.param))
 
             # convergence diagnostics
             step_inf = float(np.abs(dx).max())

@@ -168,6 +168,24 @@ class PCAConfig:
 
 
 @dataclass
+class SymmetryConfig:
+    axes: list[str] = field(default_factory=list)
+    tolerance: float = 0.05
+    enforce_in_optimization: bool = False
+
+    @classmethod
+    def from_dict(cls, raw):
+        cfg = _dataclass_from_dict(cls, "parametrization.deepsdf.symmetry", raw)
+        cfg.axes = [str(a) for a in cfg.axes]
+        if any(a not in ("x", "y", "z") for a in cfg.axes) or len(set(cfg.axes)) != len(cfg.axes):
+            raise ConfigError(f"parametrization.deepsdf.symmetry.axes must be distinct 'x', 'y', 'z', got {cfg.axes!r}")
+        cfg.tolerance = float(cfg.tolerance)
+        if cfg.enforce_in_optimization and not cfg.axes:
+            raise ConfigError("parametrization.deepsdf.symmetry.enforce_in_optimization needs at least one axis")
+        return cfg
+
+
+@dataclass
 class DeepSDFConfig:
     model_path: str
     tiling: list[int]
@@ -176,6 +194,7 @@ class DeepSDFConfig:
     tiling_map: str = "hat"
     reconstruction: ReconstructionConfig = field(default_factory=ReconstructionConfig)
     pca: PCAConfig = field(default_factory=PCAConfig)
+    symmetry: SymmetryConfig = field(default_factory=SymmetryConfig)
 
     @classmethod
     def from_dict(cls, raw):
@@ -185,6 +204,7 @@ class DeepSDFConfig:
             _require("parametrization.deepsdf", raw, key)
         raw["reconstruction"] = ReconstructionConfig.from_dict(raw.get("reconstruction"))
         raw["pca"] = PCAConfig.from_dict(raw.get("pca"))
+        raw["symmetry"] = SymmetryConfig.from_dict(raw.get("symmetry"))
         cfg = cls(**{k: v for k, v in raw.items() if not k.startswith("_")})
         cfg.tiling = [int(t) for t in cfg.tiling]
         cfg.spline_degree = [int(p) for p in cfg.spline_degree]
@@ -192,6 +212,14 @@ class DeepSDFConfig:
             raise ConfigError("parametrization.deepsdf.tiling and spline_degree need three entries")
         if cfg.tiling_map not in ("hat", "cosine"):
             raise ConfigError(f"parametrization.deepsdf.tiling_map must be 'hat' or 'cosine', got {cfg.tiling_map!r}")
+        for axis in cfg.symmetry.axes:
+            t = cfg.tiling["xyz".index(axis)]
+            if t % 2:
+                raise ConfigError(
+                    f"parametrization.deepsdf.symmetry: mirror symmetry in {axis} needs an even tile count, "
+                    f"got tiling {t}; the tiling map satisfies u(1 - x) = (-1)^t u(x), so an odd count "
+                    "maps each tile onto a tile of flipped orientation"
+                )
         return cfg
 
 
